@@ -541,6 +541,17 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     val rangeLabel = label ?: formatRangeLabel(startDate, endDate, startHour, endHour)
     val selection = CustomRangeSelection(startDate, endDate, startHour, endHour, rangeLabel)
     val key = rangeKey(startDate, endDate, startHour, endHour)
+    // Send the local window's absolute instants alongside the day labels: the Hub
+    // aggregates history on the labels but filters the event ledger on the instants, and
+    // without them it would derive them from its own clock (see `windowInstants`).
+    val instants = runCatching {
+      com.igng.tokenmonitor.android.ui.core.DateRanges.windowInstants(
+        java.time.LocalDate.parse(startDate),
+        java.time.LocalDate.parse(endDate),
+        startHour,
+        endHour
+      )
+    }.getOrNull()
     val sequence = ++rangeSequence
     rangeJob?.cancel()
     val generation = connectionGeneration
@@ -556,7 +567,7 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     )
     rangeJob = viewModelScope.launch {
       if (!isCurrent(generation)) return@launch
-      when (val result = repository.usageRange(startDate, endDate, startHour, endHour)) {
+      when (val result = repository.usageRange(startDate, endDate, startHour, endHour, instants?.from, instants?.to)) {
         is HubResult.Success -> if (isCurrent(generation) && sequence == rangeSequence) {
           _state.value = _state.value.copy(
             customRangeResult = result.value,

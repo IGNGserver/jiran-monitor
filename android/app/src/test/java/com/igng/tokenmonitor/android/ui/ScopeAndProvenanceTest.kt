@@ -244,6 +244,20 @@ class ScopeAndProvenanceTest {
   )
 
   @Test
+  fun windowInstantsBoundTheWindowInTheRequestingZone() {
+    // The Hub filters its event ledger on these instants; deriving them from the Hub's
+    // clock would shift the window by the zone difference the day labels exist to avoid.
+    val zone = java.time.ZoneId.of("Asia/Shanghai")
+    val instants = DateRanges.windowInstants(
+      LocalDate.of(2026, 10, 4), LocalDate.of(2026, 10, 4), 0, 23, zone
+    )
+    // 2026-10-04 00:00 +08 == 2026-10-03T16:00:00Z
+    assertEquals("2026-10-03T16:00:00Z", instants.from)
+    // The whole final hour is included: 23:59:59.999 +08 == 15:59:59.999Z.
+    assertEquals("2026-10-04T15:59:59.999Z", instants.to)
+  }
+
+  @Test
   fun creditsOnlyClientsStillProduceAShareRow() {
     // Qoder reports credits and zero tokens.  Ranking on tokens alone used to drop the
     // row entirely, which rendered as "Qoder used nothing".

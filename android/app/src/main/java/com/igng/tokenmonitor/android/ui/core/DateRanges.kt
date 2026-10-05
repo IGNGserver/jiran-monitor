@@ -3,6 +3,7 @@ package com.igng.tokenmonitor.android.ui.core
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
@@ -88,7 +89,32 @@ object DateRanges {
 
   fun isPresetRangePeriod(period: String?): Boolean =
     period?.lowercase() in PRESET_RANGE_PERIODS
+
+  /**
+   * The absolute instants a local calendar window names, for the Hub's event-ledger
+   * fallback.
+   *
+   * The Hub is told both the day keys (which it aggregates `history_daily` on) and these
+   * instants (which filter `usage_events`). Without the instants the Hub would derive
+   * them from its *own* clock, shifting the ledger window by the zone difference — the
+   * same class of bug the day labels exist to prevent. The end instant is the last
+   * millisecond of [endHour] so the whole final hour is included.
+   */
+  fun windowInstants(
+    startDate: LocalDate,
+    endDate: LocalDate,
+    startHour: Int = 0,
+    endHour: Int = 23,
+    zone: ZoneId = ZoneId.systemDefault()
+  ): WindowInstants {
+    val from = startDate.atTime(startHour.coerceIn(0, 23), 0).atZone(zone).toInstant()
+    val to = endDate.atTime(endHour.coerceIn(0, 23), 59, 59, 999_000_000).atZone(zone).toInstant()
+    return WindowInstants(from.toString(), to.toString())
+  }
 }
+
+/** Inclusive local window expressed as ISO-8601 instants. */
+data class WindowInstants(val from: String, val to: String)
 
 data class PresetRangeWindow(
   val period: String,

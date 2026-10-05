@@ -65,7 +65,9 @@ interface HubApi {
     @Query("startDate") startDate: String,
     @Query("endDate") endDate: String,
     @Query("startHour") startHour: Int = 0,
-    @Query("endHour") endHour: Int = 23
+    @Query("endHour") endHour: Int = 23,
+    @Query("from") from: String? = null,
+    @Query("to") to: String? = null
   ): UsageRangeDto
   @GET("api/pricing") suspend fun pricing(): PricingListDto
   @PUT("api/pricing/{model}") suspend fun putPricing(@Path("model") model: String, @Body request: PricingRequestDto): PricingResponseDto
