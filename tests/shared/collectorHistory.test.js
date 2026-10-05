@@ -138,8 +138,69 @@ test('collectHistoryOnce preserves a lazy archive ownership guard until write ti
   assert.equal(history.daily[0].tokens, 30);
 });
 
-test('collectHistoryOnce merges Proma history with tokscale graph history', async () => {
-  const promaGraph = {
+// WSL homes are dropped from the host tokscale graph, so before this their past
+// days survived only in the local daily-history archive. A per-home graph on
+// history ticks makes WSL history re-derivable exactly like the host's.
+test('collectHistoryOnce merges a per-home WSL graph into history', async () => {
+  const hostGraph = { contributions: [{ date: '2026-06-07', clients: [
+    { client: 'claude', modelId: 'opus', tokens: { input: 10 }, cost: 1, messages: 1 }
+  ] }] };
+  const wslGraph = { contributions: [{ date: '2026-06-07', clients: [
+    { client: 'codex', modelId: 'gpt-5', tokens: { input: 40 }, cost: 2, messages: 2 }
+  ] }] };
+  const seenHomes = [];
+  const history = await collectHistoryOnce({
+    clients: 'claude,codex',
+    todayKey: '2026-06-07',
+    platform: 'win32',
+    wslScanEnabled: true,
+    discoverWslHomes: () => ['\\\\wsl$\\Ubuntu\\home\\dev'],
+    runGraph: async () => hostGraph,
+    runWslGraph: async ({ home }) => { seenHomes.push(home); return wslGraph; }
+  });
+  assert.deepEqual(seenHomes, ['\\\\wsl$\\Ubuntu\\home\\dev']);
+  assert.equal(history.summary.totalTokens, 50);
+  assert.equal(history.daily[0].perClient.codex.tokens, 40);
+});
+
+test('collectHistoryOnce keeps host history when a WSL graph fails', async () => {
+  const messages = [];
+  const history = await collectHistoryOnce({
+    clients: 'claude',
+    todayKey: '2026-06-07',
+    platform: 'win32',
+    discoverWslHomes: () => ['\\\\wsl$\\Ubuntu\\home\\dev'],
+    runWslGraph: async () => { throw new Error('9p down'); },
+    runGraph: async () => SAMPLE_GRAPH,
+    logger: (message) => messages.push(message)
+  });
+  assert.equal(history.summary.totalTokens, 30);
+  assert.ok(messages.some((message) => /9p down/.test(message)));
+});
+
+test('collectHistoryOnce does not scan WSL graphs when WSL is off or not Windows', async () => {
+  let discovered = false;
+  await collectHistoryOnce({
+    clients: 'claude',
+    todayKey: '2026-06-07',
+    platform: 'win32',
+    wslScanEnabled: false,
+    discoverWslHomes: () => { discovered = true; return ['\\\\wsl$\\Ubuntu\\home\\dev']; },
+    runGraph: async () => SAMPLE_GRAPH
+  });
+  assert.equal(discovered, false);
+
+  await collectHistoryOnce({
+    clients: 'claude',
+    todayKey: '2026-06-07',
+    platform: 'linux',
+    discoverWslHomes: () => { discovered = true; return ['\\\\wsl$\\Ubuntu\\home\\dev']; },
+    runGraph: async () => SAMPLE_GRAPH
+  });
+  assert.equal(discovered, false);
+});
+
+test('collectHistoryOnce merges Proma history with tokscale graph history', async () => {  const promaGraph = {
     contributions: [{ date: '2026-06-07', clients: [
       { client: 'proma', modelId: 'gpt-5', tokens: { input: 5, output: 5 }, cost: 0, messages: 1 }
     ] }]
