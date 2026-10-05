@@ -633,10 +633,6 @@ function createHub({
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   }
 
-  function localMonthKey(date = new Date()) {
-    return localDayKey(date).slice(0, 7);
-  }
-
   function periodToUsageRangePayload(period) {
     return {
       totalTokens: Math.round(number(period?.totalTokens)),
@@ -659,29 +655,80 @@ function createHub({
     };
   }
 
+  // The Hub's own clock is the *Hub host's*, not the caller's. A browser on the
+  // other side of the world asked for its local `from`/`to`, so a legacy request
+  // that names only instants may carry its IANA zone (`tz=`) and have the day
+  // keys derived in that zone. An absent/invalid zone falls back to the host
+  // clock, which is the historical behaviour for same-zone callers.
+  function normalizeRangeTimeZone(value) {
+    const zone = String(value || '').trim().slice(0, 128);
+    if (!zone) return '';
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: zone }).format(0);
+      return zone;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function calendarDayKeyInZone(date, timeZone) {
+    if (!timeZone) return localDayKey(date);
+    const parts = new Intl.DateTimeFormat('en', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(date);
+    const read = (type) => parts.find((part) => part.type === type)?.value || '';
+    const year = read('year');
+    const month = read('month');
+    const day = read('day');
+    return /^\d{4}$/.test(year) && /^\d{2}$/.test(month) && /^\d{2}$/.test(day)
+      ? `${year}-${month}-${day}`
+      : localDayKey(date);
+  }
+
+  // The live fallback is for a cold fleet (history empty, no ledger rows). Which
+  // live window it may answer with is decided by the *producers'* own
+  // periodWindows keys, never by this host's clock: the aggregate `today`/`month`
+  // is the sum of each device's own local window, so consulting the server's
+  // calendar would refuse a perfectly good window whenever the caller or a
+  // device sits in another zone.
   async function liveUsageRangeFromDevices(range) {
     const empty = { ...emptyUsageRangePayload(), source: 'live_periods' };
     if (!range?.ok) return empty;
-    const todayKey = localDayKey();
-    const monthKey = localMonthKey();
+    const stats = await getStats();
+    const devices = Array.isArray(stats?.devices) ? stats.devices : [];
+    const producerToday = new Set();
+    const producerMonth = new Set();
+    for (const device of devices) {
+      const day = String(device?.periodWindows?.today?.key || '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) producerToday.add(day);
+      const month = String(device?.periodWindows?.month?.key || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(month)) producerMonth.add(month);
+    }
+    const startDate = String(range.startDate || '');
+    const endDate = String(range.endDate || '');
+    // A pre-periodWindows fleet has no producer windows to key on; keep the
+    // historical best-effort host-clock behaviour rather than refusing a live
+    // window the old contract used to answer.
+    if (producerToday.size === 0) producerToday.add(localDayKey());
+    if (producerMonth.size === 0) producerMonth.add(localDayKey().slice(0, 7));
     let periodName = null;
     let source = 'live_periods';
-    if (range.isSameDay && range.startDate === todayKey) {
+    if (range.isSameDay && producerToday.has(startDate)) {
       periodName = 'today';
       source = 'live_today';
     } else if (
       range.coversFullDays
-      && String(range.startDate || '').startsWith(`${monthKey}-`)
-      && String(range.endDate || '').startsWith(`${monthKey}-`)
-      && String(range.startDate || '').slice(8) === '01'
-      && String(range.endDate || '') === todayKey
+      && startDate.slice(8) === '01'
+      && startDate.slice(0, 7) === endDate.slice(0, 7)
+      && producerMonth.has(startDate.slice(0, 7))
+      && producerToday.has(endDate)
     ) {
-      // Full-day span from the first of this month through today ≈ live month window.
+      // Full-day span from the first of a producer-reported month through a
+      // producer-reported today ≈ the live month window.
       periodName = 'month';
       source = 'live_month';
     }
     if (!periodName) return empty;
-    const stats = await getStats();
     const period = stats?.periods?.[periodName];
     if (!period || number(period.totalTokens) <= 0) return empty;
     return { ...periodToUsageRangePayload(period), source };
@@ -707,8 +754,22 @@ function createHub({
         error.code = 'invalid_range';
         throw error;
       }
-      from = new Date(range.startMs);
-      to = new Date(range.endMs + 1);
+      // A caller that sends both the labels and the instants is stating its own
+      // absolute window; use it for the event ledger and head-fill so those
+      // sources are not re-derived against the Hub host's clock. `range` still
+      // carries the labels, which is what `history_daily` aggregates on.
+      if (params.from && params.to) {
+        from = parseRangeBound(params.from, 'from');
+        to = parseRangeBound(params.to, 'to');
+        if (!(from.getTime() < to.getTime())) {
+          const error = new Error('from_must_be_before_to');
+          error.code = 'invalid_range';
+          throw error;
+        }
+      } else {
+        from = new Date(range.startMs);
+        to = new Date(range.endMs + 1);
+      }
     } else {
       from = parseRangeBound(params.from, 'from');
       to = parseRangeBound(params.to, 'to');
@@ -717,11 +778,10 @@ function createHub({
         error.code = 'invalid_range';
         throw error;
       }
-      const pad = (n) => String(n).padStart(2, '0');
-      const keyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      const startDate = keyOf(from);
+      const timeZone = normalizeRangeTimeZone(params.tz);
+      const startDate = calendarDayKeyInZone(from, timeZone);
       const lastInclusive = new Date(Math.max(from.getTime(), to.getTime() - 1));
-      const endDate = keyOf(lastInclusive);
+      const endDate = calendarDayKeyInZone(lastInclusive, timeZone);
       range = normalizeCustomRange({
         startDate,
         endDate,
@@ -1571,7 +1631,8 @@ function createHub({
           startDate: url.searchParams.get('startDate') || url.searchParams.get('since'),
           endDate: url.searchParams.get('endDate') || url.searchParams.get('until'),
           startHour: url.searchParams.get('startHour'),
-          endHour: url.searchParams.get('endHour')
+          endHour: url.searchParams.get('endHour'),
+          tz: url.searchParams.get('tz')
         }));
       } catch (error) {
         const status = error.code === 'invalid_range' ? 400 : 500;
