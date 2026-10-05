@@ -1189,7 +1189,7 @@ async function collectHistoryOnce(options) {
   // live. Scanning the same graph per discovered home on history ticks makes WSL
   // history as re-derivable as the host's. `--home` is hermetic upstream, so this
   // cannot read Windows-home data by mistake.
-  if (options.wslScanEnabled !== false && (options.platform || process.platform) === 'win32') {
+  if (clients && options.wslScanEnabled !== false && (options.platform || process.platform) === 'win32') {
     const discoverHomes = options.discoverWslHomes || wslUsageHomes;
     const runWslGraph = options.runWslGraph || runTokscaleGraphForHome;
     let homes = [];
