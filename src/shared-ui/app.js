@@ -2916,7 +2916,10 @@ async function applyCustomRange() {
       from,
       to,
       startDate: localDayKey(from),
-      endDate: localDayKey(to),
+      // `to` is an exclusive instant in the range dialog, so the last included
+      // calendar day is the day of `to - 1ms` — the same rule the Hub applied to
+      // a raw `from`/`to` pair before the labels existed.
+      endDate: localDayKey(new Date(to.getTime() - 1)),
       startHour: from.getHours(),
       endHour: to.getHours()
     });
