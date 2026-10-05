@@ -61,3 +61,16 @@ test('collectUsageOnce stamps updatedAt and periodWindows from one injected cloc
   assert.equal(summary.updatedAt, now.toISOString());
   assert.deepEqual(summary.periodWindows, computePeriodWindows(now));
 });
+
+// The wire's `key` is a device-local day but was never accompanied by the zone
+// that produced it, even though normalizePeriodWindows() already validates a
+// `timeZone`. Stamp it so a consumer can tell which calendar the key belongs to.
+test('computePeriodWindows carries the device time zone when one is resolvable', () => {
+  const windows = computePeriodWindows(new Date(2026, 5, 27, 14, 30, 0));
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (zone) {
+    assert.equal(windows.timeZone, zone);
+  } else {
+    assert.equal(Object.hasOwn(windows, 'timeZone'), false);
+  }
+});

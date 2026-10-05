@@ -218,6 +218,26 @@ class HubRepositoryTest {
     assertTrue(thrown)
   }
 
+  @Test fun usageRangeSendsTheCallerWindowInstants() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(200).setBody("""{"startDate":"2026-10-04","endDate":"2026-10-04","totalTokens":50}"""))
+
+    val result = repository.usageRange(
+      startDate = "2026-10-04",
+      endDate = "2026-10-04",
+      startHour = 0,
+      endHour = 23,
+      from = "2026-10-03T16:00:00Z",
+      to = "2026-10-04T15:59:59.999Z"
+    )
+
+    assertTrue(result is HubResult.Success)
+    assertEquals(50L, (result as HubResult.Success).value.totalTokens)
+    val path = server.takeRequest().path ?: ""
+    assertTrue(path, path.contains("startDate=2026-10-04"))
+    assertTrue(path, path.contains("from="))
+    assertTrue(path, path.contains("to="))
+  }
+
   private class FakeConnectionStorage(private var config: ConnectionConfig) : ConnectionStorage {
     override fun read(): ConnectionConfig = config
     override fun save(config: ConnectionConfig) { this.config = config }

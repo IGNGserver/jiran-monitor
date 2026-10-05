@@ -27,6 +27,19 @@ const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120 * 1000;
 const DEFAULT_SYNC_UPLOAD_TIMEOUT_MS = 15 * 1000;
 const DEFAULT_ALL_TIME_SINCE = '2024-01-01';
+// WSL is not file-watched (a 9P watch is unreliable and heavy), so an active
+// watch session refreshes it at most this often. Kept well below the collection
+// interval so WSL-only work is not minutes behind the host's seconds-level
+// refresh, and well above the watch debounce so it is not a per-event scan.
+const DEFAULT_WSL_REFRESH_INTERVAL_MS = 60 * 1000;
+
+function normalizeWslRefreshIntervalMs(value, fallback = DEFAULT_WSL_REFRESH_INTERVAL_MS) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return fallback;
+  // 0 disables the watch-tick refresh (interval/full ticks still scan WSL).
+  if (ms === 0) return 0;
+  return Math.max(1000, Math.trunc(ms));
+}
 
 function usageConfigFromSource(source = {}, context = {}) {
   return {
@@ -52,6 +65,7 @@ function usageConfigFromSource(source = {}, context = {}) {
     intervalRequiresActivity: false,
     watchDebounceMs: context.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS,
     wslScanEnabled: true,
+    wslRefreshIntervalMs: normalizeWslRefreshIntervalMs(context.wslRefreshIntervalMs),
     syncUploadIntervalMs: normalizeSyncUploadIntervalMs(context.syncUploadIntervalMs),
     uploadTimeoutMs: Number(context.uploadTimeoutMs ?? DEFAULT_SYNC_UPLOAD_TIMEOUT_MS),
     onError: context.onError,
@@ -66,5 +80,7 @@ module.exports = {
   DEFAULT_COMMAND_TIMEOUT_MS,
   DEFAULT_SYNC_UPLOAD_TIMEOUT_MS,
   DEFAULT_WATCH_DEBOUNCE_MS,
+  DEFAULT_WSL_REFRESH_INTERVAL_MS,
+  normalizeWslRefreshIntervalMs,
   usageConfigFromSource
 };

@@ -147,9 +147,11 @@ class HubRepository @Inject constructor(
     startDate: String,
     endDate: String,
     startHour: Int = 0,
-    endHour: Int = 23
+    endHour: Int = 23,
+    from: String? = null,
+    to: String? = null
   ): HubResult<UsageRangeDto> =
-    withConnection { apiFactory.create(it).usageRange(startDate, endDate, startHour, endHour) }
+    withConnection { apiFactory.create(it).usageRange(startDate, endDate, startHour, endHour, from, to) }
   suspend fun pricing(): HubResult<PricingListDto> = withConnection { apiFactory.create(it).pricing() }
   suspend fun putPricing(model: String, request: PricingRequestDto): HubResult<PricingResponseDto> = withConnection { apiFactory.create(it).putPricing(model, request) }
   suspend fun fetchUpstream(model: String): HubResult<PricingResponseDto> = withConnection { apiFactory.create(it).fetchUpstream(model) }

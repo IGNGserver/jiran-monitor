@@ -25,6 +25,7 @@ import {
 import { applyI18n, resolveLocale, t } from './core/i18n.js';
 import {
   isPresetRangePeriod,
+  localDayKey,
   presetRangeWindow,
   presetRangeWindowMatches,
   resolveScopePeriod
@@ -2874,9 +2875,25 @@ function customPeriodFromRangePayload(payload) {
   };
 }
 
-async function requestUsageRange(from, to) {
-  const query = `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
-  return fetchJson(`/api/usage/range?${query}`, { secret: state.secret });
+// The range is sent as both the caller's own calendar-day labels and the
+// absolute instants they name. The Hub needs the day keys because its own clock
+// is the *Hub host's*: re-deriving `from`/`to` there shifted the window by a day
+// whenever the browser and the server sat in different zones, so the "yesterday"
+// label could answer with two days of data (and echo wrong `startDate`/`endDate`
+// back). The instants stay in the request so the event-ledger fallback can filter
+// by the caller's real window instead of the server's.
+async function requestUsageRange({ from, to, startDate, endDate, startHour, endHour }) {
+  const query = new URLSearchParams({
+    from: from.toISOString(),
+    to: to.toISOString()
+  });
+  if (startDate && endDate) {
+    query.set('startDate', startDate);
+    query.set('endDate', endDate);
+    query.set('startHour', String(startHour));
+    query.set('endHour', String(endHour));
+  }
+  return fetchJson(`/api/usage/range?${query.toString()}`, { secret: state.secret });
 }
 
 async function applyCustomRange() {
@@ -2895,7 +2912,17 @@ async function applyCustomRange() {
     return;
   }
   try {
-    const payload = await requestUsageRange(from, to);
+    const payload = await requestUsageRange({
+      from,
+      to,
+      startDate: localDayKey(from),
+      // `to` is an exclusive instant in the range dialog, so the last included
+      // calendar day is the day of `to - 1ms` — the same rule the Hub applied to
+      // a raw `from`/`to` pair before the labels existed.
+      endDate: localDayKey(new Date(to.getTime() - 1)),
+      startHour: from.getHours(),
+      endHour: to.getHours()
+    });
     state.customRange = { kind: 'custom', from: from.toISOString(), to: to.toISOString() };
     state.customPeriod = customPeriodFromRangePayload(payload);
     openRange(false);
@@ -2957,7 +2984,14 @@ function loadPresetRange(rangeWindow, { notify = false } = {}) {
   state.presetRangeRequestKey = key;
   const request = (async () => {
     try {
-      const payload = await requestUsageRange(rangeWindow.from, rangeWindow.to);
+      const payload = await requestUsageRange({
+        from: rangeWindow.from,
+        to: rangeWindow.to,
+        startDate: rangeWindow.startDate,
+        endDate: rangeWindow.endDate,
+        startHour: 0,
+        endHour: 23
+      });
       if (sequence !== state.presetRangeSequence) return;
       state.customRange = {
         kind: rangeWindow.period,

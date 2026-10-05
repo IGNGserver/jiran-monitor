@@ -24,7 +24,8 @@ const {
   collectWslUsage: collectWslUsageImpl,
   collectWslRangeUsage: collectWslRangeUsageImpl,
   emptyWslBundle,
-  probeWslState: probeWslStateImpl
+  probeWslState: probeWslStateImpl,
+  wslUsageHomes
 } = require('./wslUsage');
 const { hermesProfileWatchDirs, resolveHermesHome } = require('./hermesProfiles');
 const { mergeHistories, parseGraphResult, normalizeHistory } = require('./history');
@@ -328,6 +329,13 @@ function runTokscale({ clients, flags, commandTimeoutMs }) {
 
 function runTokscaleGraph({ clients, commandTimeoutMs }) {
   return spawnTokscaleJson(['graph', '--client', tokscaleClientFilter(clients), '--no-spinner'], commandTimeoutMs);
+}
+
+// The history graph for one WSL home. `--home` disables env roots upstream, so
+// this reads the distro's data and nothing of the host's — the same isolation
+// the period scan relies on. Used only on history ticks (see collectHistoryOnce).
+function runTokscaleGraphForHome({ clients, home, commandTimeoutMs }) {
+  return spawnTokscaleJson(['graph', '--client', tokscaleClientFilter(clients), '--no-spinner', '--home', home], commandTimeoutMs);
 }
 
 function lookupModelPricing(modelId, commandTimeoutMs = 15000) {
@@ -653,6 +661,20 @@ function localTodayKey(date = new Date()) {
   return `${y}-${m}-${d}`;
 }
 
+// The IANA zone this device buckets days into. Stamped onto periodWindows so the
+// wire is self-describing: the `key` is a device-local day, and a consumer that
+// needs to know *which* zone produced it no longer has to guess. Optional — a
+// host without Intl or with an unresolved zone simply omits it, and
+// normalizePeriodWindows() drops anything that is not a valid zone.
+function localTimeZoneName() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === 'string' ? zone.trim().slice(0, 128) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 // Stamp each posted snapshot with the UTC instant its today/month windows end
 // (next local midnight / next month start, in this device's timezone). The hub
 // uses these to expire a frozen snapshot once it goes offline past a day/month
@@ -661,9 +683,11 @@ function computePeriodWindows(now = new Date()) {
   const startOfNextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
   const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const timeZone = localTimeZoneName();
   return {
     today: { key: localTodayKey(now), endsAt: startOfNextDay.toISOString() },
-    month: { key: monthKey, endsAt: startOfNextMonth.toISOString() }
+    month: { key: monthKey, endsAt: startOfNextMonth.toISOString() },
+    ...(timeZone ? { timeZone } : {})
   };
 }
 
@@ -1157,6 +1181,42 @@ async function collectHistoryOnce(options) {
   if (options.deepseekHarnessGraph) {
     rawGraphs.push(options.deepseekHarnessGraph);
     histories.push(normalizeHistory(parseGraphResult(options.deepseekHarnessGraph), { capDays, todayKey }));
+  }
+  // WSL homes are folded into the periods by collectUsageOnce, but the host
+  // tokscale graph has no idea they exist: without a per-home graph their past
+  // days survive only in the local daily-history archive's liveDays overlay and
+  // are lost the moment that archive is unavailable or a day was never captured
+  // live. Scanning the same graph per discovered home on history ticks makes WSL
+  // history as re-derivable as the host's. `--home` is hermetic upstream, so this
+  // cannot read Windows-home data by mistake.
+  if (clients && options.wslScanEnabled !== false && (options.platform || process.platform) === 'win32') {
+    const discoverHomes = options.discoverWslHomes || wslUsageHomes;
+    const runWslGraph = options.runWslGraph || runTokscaleGraphForHome;
+    let homes = [];
+    try {
+      homes = discoverHomes() || [];
+    } catch (error) {
+      failureCode = failureCode || 'history-wsl-discover-failed';
+      if (typeof options.logger === 'function') options.logger(`wsl home discovery failed: ${error.message}`);
+    }
+    for (const home of homes) {
+      if (!home) continue;
+      try {
+        // Serial, like every other tokscale scan: concurrent scans triple peak
+        // CPU/IO for no wall-clock win.
+        const graphJson = await runWslGraph({
+          clients,
+          home,
+          commandTimeoutMs: options.commandTimeoutMs || HISTORY_TIMEOUT_MS
+        });
+        const normalizedGraph = normalizeGraphClientIds(graphJson);
+        rawGraphs.push(normalizedGraph);
+        histories.push(normalizeHistory(parseGraphResult(normalizedGraph), { capDays, todayKey }));
+      } catch (error) {
+        failureCode = failureCode || 'history-wsl-graph-failed';
+        if (typeof options.logger === 'function') options.logger(`tokscale wsl graph failed for ${home}: ${error.message}`);
+      }
+    }
   }
   if (options.dailyHistoryArchiveEnabled) {
     try {
@@ -1936,6 +1996,12 @@ async function collectUsageOnce(options) {
       capDays: options.historyCapDays,
       todayKey: localTodayKey(collectedAt),
       runGraph: options.runGraph,
+      // WSL history: per-home graph on history ticks, keyed off the same switch
+      // and platform the period scan uses. Injectable for tests.
+      platform: platformValue,
+      wslScanEnabled: options.wslScanEnabled,
+      discoverWslHomes: options.discoverWslHomes,
+      runWslGraph: options.runWslGraph,
       dailyHistoryArchiveEnabled: options.dailyHistoryArchiveEnabled,
       dailyHistoryArchiveWriteEnabled: options.dailyHistoryArchiveWriteEnabled,
       dailyHistoryArchiveOptions: options.dailyHistoryArchiveOptions,
@@ -3254,6 +3320,7 @@ function startCollector(options) {
     clients, allTimeSince, commandTimeoutMs, deviceId, agentVersion, agentRuntime,
     historyIntervalMs = 15 * 60 * 1000, historyEnabled = true, watchEnabled,
     watchTriggersCollection = true, intervalRequiresActivity = false,
+    wslRefreshIntervalMs = 60 * 1000,
     onUpdate, onPreview, onError, onDiagnosticEvent, logger
   } = options;
   // Normalized once, at the edge. These arrive straight from CLI flags and env
@@ -3319,11 +3386,15 @@ function startCollector(options) {
   let rolloverHistoryRetryTimer = null;
   // Last full-scan snapshot; lets watch ticks scan only --today and derive
   // month/allTime exactly (applyPeriodDelta). Reset by every full tick.
-  // anchor holds Windows-only periods; wslAnchor is the WSL contribution frozen
-  // between full ticks (WSL is not scanned on watch ticks).
+  // anchor holds Windows-only periods; wslAnchor is the WSL contribution. WSL is
+  // not watched (a 9P watch is unreliable and heavy), so it is refreshed on the
+  // interval tick and, at most once per wslRefreshIntervalMs, on an anchored
+  // watch tick — otherwise WSL-only work would sit up to a full interval behind
+  // the seconds-level host refresh.
   let anchor = null;
   let wslAnchor = null;
   let wslStatusAnchor = null;
+  let lastWslScanAt = 0;
   // Keep the highest complete live day in this collector even when another
   // process owns the shared archive. A watch tick can then hand its value to a
   // later full/history tick instead of losing it at the tick boundary.
@@ -3508,7 +3579,15 @@ function startCollector(options) {
     const requestedTargetClients = [...new Set(normalizeClientsCsv(tickOptions.targetClients).split(',').filter(Boolean))];
     const targetAnchorReady = canTargetTodayPartitions(anchor, requestedTargetClients);
     const anchored = Boolean(tickOptions.todayOnly && anchor && anchor.dateKey === todayKey);
-    const refreshWsl = Boolean(tickOptions.refreshWsl);
+    const wslPlatform = (options.platform || process.platform) === 'win32';
+    // WSL has no watcher, so a watch tick may refresh it once the throttle has
+    // elapsed; the interval tick asks for it explicitly. Full ticks scan it
+    // unconditionally (see collectUsageOnce's !anchorUsed branch).
+    const wslRefreshDue = wslPlatform
+      && anchored
+      && wslRefreshIntervalMs > 0
+      && tickStartedAt - lastWslScanAt >= wslRefreshIntervalMs;
+    const refreshWsl = Boolean(tickOptions.refreshWsl) || wslRefreshDue;
     const hadPreviousFailure = tickHadFailure;
     lastTickAttemptAt = tickStartedAt;
     lastTickReasonCode = tickReasonCode(reason);
@@ -3633,6 +3712,11 @@ function startCollector(options) {
         }
       });
       if (stopped) return;
+      // Record when WSL was actually scanned so the next watch tick respects the
+      // refresh throttle. A full tick scans it; an anchored tick only when asked.
+      if (wslPlatform && options.wslScanEnabled !== false && (!anchored || refreshWsl)) {
+        lastWslScanAt = Date.now();
+      }
       // Any Qoder client that could not be read leaves this tick's month/allTime
       // partial, so the result must not be frozen as a full-scan anchor and the
       // next watch tick has to be a full one.
