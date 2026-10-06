@@ -20,6 +20,7 @@ const {
 } = require('./reasonixFileIo');
 const { canonicalProjectKey, deterministicProjectLabel } = require('./projectKey');
 const { normalizeModelNameForClient } = require('./usage');
+const { dayKeyOf, monthKeyOf, normalizeTimeZone } = require('./fleetTimeZone');
 const {
   readReasonixEventLog,
   countReasonixProviderMessages,
@@ -393,12 +394,12 @@ function readReasonixNativeSession(metaPath, telemetryPath, options = {}) {
   };
 }
 
-function localDayKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+function localDayKey(date, timeZone = '') {
+  return dayKeyOf(date, normalizeTimeZone(timeZone));
 }
 
-function localMonthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+function localMonthKey(date, timeZone = '') {
+  return monthKeyOf(date, normalizeTimeZone(timeZone));
 }
 
 function localDateBoundary(value) {
@@ -416,7 +417,7 @@ function localDateBoundary(value) {
   return Number.isNaN(date.getTime()) ? null : date.getTime();
 }
 
-function sessionPeriodKeys(session, now, allTimeSince) {
+function sessionPeriodKeys(session, now, allTimeSince, timeZone = '') {
   const createdAt = session?.createdAt ? new Date(session.createdAt) : null;
   if (!createdAt || Number.isNaN(createdAt.getTime())) return { day: '', month: '', allTime: false };
   // A resumed branch keeps its original BranchMeta.created_at. When the
@@ -425,18 +426,18 @@ function sessionPeriodKeys(session, now, allTimeSince) {
   // rename and must not turn an old session into a new day's activity.
   const activityAt = session?.lastMessageAt ? new Date(session.lastMessageAt) : createdAt;
   const activityDate = Number.isNaN(activityAt.getTime()) ? createdAt : activityAt;
-  const day = localDayKey(activityDate);
-  const month = localMonthKey(activityDate);
-  const createdDay = localDayKey(createdAt);
-  const createdMonth = localMonthKey(createdAt);
+  const day = localDayKey(activityDate, timeZone);
+  const month = localMonthKey(activityDate, timeZone);
+  const createdDay = localDayKey(createdAt, timeZone);
+  const createdMonth = localMonthKey(createdAt, timeZone);
   const since = localDateBoundary(allTimeSince);
   const allTime = since !== null && createdAt.getTime() >= since;
   return {
-    day: day === localDayKey(now) ? day : '',
-    month: month === localMonthKey(now) ? month : '',
+    day: day === localDayKey(now, timeZone) ? day : '',
+    month: month === localMonthKey(now, timeZone) ? month : '',
     allTime,
-    dayTokensReliable: day === localDayKey(now) && createdDay === day,
-    monthTokensReliable: month === localMonthKey(now) && createdMonth === month,
+    dayTokensReliable: day === localDayKey(now, timeZone) && createdDay === day,
+    monthTokensReliable: month === localMonthKey(now, timeZone) && createdMonth === month,
     allTimeTokensReliable: allTime
   };
 }
@@ -492,9 +493,10 @@ function sessionViewForPeriod(session, periodName, periodKeys) {
 
 function buildNativeView(entries, options = {}) {
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const timeZone = normalizeTimeZone(options.timeZone);
   const view = emptyNativeView();
-  const day = localDayKey(now);
-  const month = localMonthKey(now);
+  const day = localDayKey(now, timeZone);
+  const month = localMonthKey(now, timeZone);
   const allTimeSince = options.allTimeSince;
   const projectsEnabled = options.projectsEnabled !== false;
 
@@ -513,7 +515,7 @@ function buildNativeView(entries, options = {}) {
 
   for (const entry of sessionsById.values()) {
     const session = projectsEnabled ? entry : { ...entry, projectId: '', projectLabel: '' };
-    const periodKeys = sessionPeriodKeys(session, now, allTimeSince);
+    const periodKeys = sessionPeriodKeys(session, now, allTimeSince, timeZone);
     if (periodKeys.allTime) view.sessions.allTime[session.sessionId] = sessionViewForPeriod(session, 'allTime', periodKeys);
     if (periodKeys.month === month) view.sessions.month[session.sessionId] = sessionViewForPeriod(session, 'month', periodKeys);
     if (periodKeys.day === day) view.sessions.today[session.sessionId] = sessionViewForPeriod(session, 'today', periodKeys);
@@ -602,7 +604,8 @@ function createReasonixNativeSessionCache(options = {}) {
     const allTimeSince = Object.prototype.hasOwnProperty.call(viewOptions, 'allTimeSince')
       ? viewOptions.allTimeSince
       : resolvedOptions.allTimeSince;
-    const viewKey = `${localDayKey(now)}|${localMonthKey(now)}|${projectsEnabled ? 'projects' : 'no-projects'}|${String(allTimeSince ?? '')}`;
+    const timeZone = normalizeTimeZone(viewOptions.timeZone);
+    const viewKey = `${localDayKey(now, timeZone)}|${localMonthKey(now, timeZone)}|${timeZone}|${projectsEnabled ? 'projects' : 'no-projects'}|${String(allTimeSince ?? '')}`;
     const sessionDirectories = reasonixSessionDirectories(resolvedOptions);
     const rootSignature = sessionRootSignature(sessionDirectories);
     if (rootSignature !== scannedRootSignature) {
@@ -628,7 +631,7 @@ function createReasonixNativeSessionCache(options = {}) {
       cachedViewKey = '';
     }
     if (!cachedView || cachedViewKey !== viewKey) {
-      cachedView = buildNativeView([...entries.values()].map((entry) => entry.session), { now, projectsEnabled, allTimeSince });
+      cachedView = buildNativeView([...entries.values()].map((entry) => entry.session), { now, projectsEnabled, allTimeSince, timeZone });
       cachedViewKey = viewKey;
     }
     return cachedView;

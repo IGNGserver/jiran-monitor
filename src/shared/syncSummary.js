@@ -9,6 +9,7 @@ const {
   writeSessionUsageArchive
 } = require('./sessionUsageArchive');
 const { applyProjectRollups } = require('./usage');
+const { normalizeTimeZone } = require('./fleetTimeZone');
 
 function resolveOption(value, ...args) {
   return typeof value === 'function' ? value(...args) : value;
@@ -23,7 +24,7 @@ function applySyncSummaryTransform(summary, options = {}) {
     visibleSummary = applySessionUsageArchive(
       visibleSummary,
       options.sessionUsageArchive || {},
-      { now }
+      { now, timeZone: normalizeTimeZone(options.timeZone) }
     );
   }
   if (options.projectsEnabled !== false) applyProjectRollups(visibleSummary);
@@ -36,10 +37,16 @@ function applySyncSummaryTransform(summary, options = {}) {
  * deliberately shared so an entry point cannot accidentally omit an archive.
  */
 function createSyncSummaryTransformer(options = {}) {
+  const initialTimeZone = normalizeTimeZone(options.timeZone);
   let sessionArchive = options.initialSessionUsageArchive === undefined
     ? null
-    : normalizeSessionUsageArchive(options.initialSessionUsageArchive);
+    : normalizeSessionUsageArchive(options.initialSessionUsageArchive, { timeZone: initialTimeZone });
   let sessionArchiveLoaded = sessionArchive !== null;
+  // The last calendar this transformer keyed entries in. A change means the
+  // in-memory copy describes the old day boundaries (the collector's re-key
+  // clears the file, but this copy would otherwise be written back on the next
+  // capture), so drop it and reload from disk.
+  let lastTimeZone = initialTimeZone;
 
   function loadSessionArchive() {
     if (sessionArchiveLoaded) return sessionArchive;
@@ -47,10 +54,13 @@ function createSyncSummaryTransformer(options = {}) {
     try {
       const loaded = typeof options.readSessionUsageArchive === 'function'
         ? options.readSessionUsageArchive()
-        : readSessionUsageArchive(options.archivePath ? { path: options.archivePath } : {});
-      sessionArchive = normalizeSessionUsageArchive(loaded);
+        : readSessionUsageArchive({
+          ...(options.archivePath ? { path: options.archivePath } : {}),
+          timeZone: lastTimeZone
+        });
+      sessionArchive = normalizeSessionUsageArchive(loaded, { timeZone: lastTimeZone });
     } catch (error) {
-      sessionArchive = normalizeSessionUsageArchive({});
+      sessionArchive = normalizeSessionUsageArchive({}, { timeZone: lastTimeZone });
       try { options.onArchiveError?.(error, 'read'); } catch (_) {}
     }
     return sessionArchive;
@@ -59,10 +69,16 @@ function createSyncSummaryTransformer(options = {}) {
   function transform(summary, reason = 'usage', meta = {}) {
     if (!summary || typeof summary !== 'object') return summary;
     const now = sessionUsageArchiveDate(summary);
+    const timeZone = normalizeTimeZone(resolveOption(options.timeZone, summary, reason, meta));
+    if (timeZone !== lastTimeZone) {
+      lastTimeZone = timeZone;
+      sessionArchive = null;
+      sessionArchiveLoaded = false;
+    }
     let nextArchive = loadSessionArchive();
     const archiveEnabled = resolveOption(options.sessionUsageArchiveEnabled, summary, reason, meta) !== false;
     if (archiveEnabled) {
-      nextArchive = captureSessionUsageArchive(nextArchive, summary, now);
+      nextArchive = captureSessionUsageArchive(nextArchive, summary, now, { timeZone });
       const changed = JSON.stringify(nextArchive) !== JSON.stringify(sessionArchive);
       sessionArchive = nextArchive;
       const writeAllowed = resolveOption(options.canWriteSessionUsageArchive, summary, reason, meta) !== false;
@@ -71,7 +87,10 @@ function createSyncSummaryTransformer(options = {}) {
           if (typeof options.writeSessionUsageArchive === 'function') {
             options.writeSessionUsageArchive(nextArchive);
           } else {
-            writeSessionUsageArchive(nextArchive, options.archivePath ? { path: options.archivePath } : {});
+            writeSessionUsageArchive(nextArchive, {
+              ...(options.archivePath ? { path: options.archivePath } : {}),
+              timeZone
+            });
           }
         } catch (error) {
           try { options.onArchiveError?.(error, 'write'); } catch (_) {}
@@ -83,14 +102,15 @@ function createSyncSummaryTransformer(options = {}) {
       sessionUsageArchiveEnabled: archiveEnabled,
       sessionUsageArchive: nextArchive,
       projectsEnabled: resolveOption(options.projectsEnabled, summary, reason, meta),
-      now
+      now,
+      timeZone
     });
   }
 
   return {
     getSessionUsageArchive: () => sessionArchive,
     resetSessionUsageArchive(value = {}) {
-      sessionArchive = normalizeSessionUsageArchive(value);
+      sessionArchive = normalizeSessionUsageArchive(value, { timeZone: lastTimeZone });
       sessionArchiveLoaded = true;
     },
     reloadSessionUsageArchive() {

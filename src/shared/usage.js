@@ -7,6 +7,10 @@ const { REASONIX_CLIENT } = require('./reasonixPaths');
 const { filterReasonixSyntheticSessions, isReasonixSyntheticSession } = require('./reasonixSessionGuard');
 const { canonicalProjectKey, deterministicProjectLabel } = require('./projectKey');
 const { normalizeSyncUploadIntervalMs, staleAfterMsForSyncUpload } = require('./syncUploadInterval');
+// One validator for the wire's timeZone field: named IANA zones only, the same
+// rule the collector's fleet calendar and tokscale's bucket pin use. A fixed
+// offset is deliberately dropped rather than stored as if it were a zone.
+const { normalizeTimeZone } = require('./fleetTimeZone');
 // Only for the client-id allowlist on the per-client Qoder diagnostics map: a
 // device record must not be able to invent arbitrary keys there.
 const { QODER_CLIENT_IDS } = require('./qoderCnUsage');
@@ -428,13 +432,8 @@ function normalizePeriodWindows(value) {
     if (window.key) result[periodName].key = String(window.key);
   }
   if (!Object.keys(result).length) return null;
-  const timeZone = String(value.timeZone || '').trim().slice(0, 128);
-  if (timeZone) {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone }).format(0);
-      result.timeZone = timeZone;
-    } catch (_) { /* omit invalid IANA zones */ }
-  }
+  const timeZone = normalizeTimeZone(value.timeZone);
+  if (timeZone) result.timeZone = timeZone;
   return result;
 }
 
@@ -1541,7 +1540,10 @@ function aggregateHistory(devices, options = {}) {
   // plausibility tests it is meant to back up.
   const now = new Date();
   const nowMs = now.getTime();
-  const clockToday = localDayKey(now);
+  // When no producer on the wire describes today, the caller may name the
+  // calendar to fall back to (the Hub's fleet zone). Absent that, this machine's
+  // own day is all there is.
+  const clockToday = calendarDayKey(options.fallbackTodayKey) || localDayKey(now);
   const histories = [];
   let reportedToday = '';
   for (const record of devices) {

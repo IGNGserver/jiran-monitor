@@ -32,6 +32,13 @@ services:
       TOKEN_MONITOR_SECRET: ${TOKEN_MONITOR_SECRET:-${JIRAN_SECRET:-}}
       TOKEN_MONITOR_ALLOW_INSECURE_HTTP: ${TOKEN_MONITOR_ALLOW_INSECURE_HTTP:-${JIRAN_ALLOW_INSECURE_HTTP:-0}}
       TOKEN_MONITOR_STALE_AFTER_MS: ${TOKEN_MONITOR_STALE_AFTER_MS:-${JIRAN_STALE_AFTER_MS:-600000}}
+      # The one calendar every syncing device buckets its today/month windows
+      # into (IANA name, e.g. Asia/Shanghai). Unset keeps each device on its own
+      # OS zone; when set, the Hub advertises it and devices align, so the fleet
+      # aggregate only steps at this zone's midnight instead of dropping one
+      # device at a time at its own. Setting it also changes day boundaries on
+      # each device's tokscale bucketing (a one-time history re-key).
+      TOKEN_MONITOR_FLEET_TIMEZONE: ${TOKEN_MONITOR_FLEET_TIMEZONE:-${JIRAN_FLEET_TIMEZONE:-}}
       # Proxy-aware client IPs for the auth-failure limiter. Leave unset unless a
       # trusted reverse proxy sets X-Forwarded-For; Cloudflare's
       # cf-connecting-ip header is only honoured when this is enabled.

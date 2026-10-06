@@ -127,9 +127,10 @@ used by a Hub-side provider probe remain environment configuration. **`.env.exam
 is the authoritative operator-facing list** — start from it rather than copying keys
 by hand, since it stays in sync with the code. It deliberately does not carry the
 lower-level Hub runtime knobs (bind host and port, TLS paths, staleness window,
-stats TTL, account concurrency, probe deadline, trusted-proxy) that the supported
-deployment passes in `docker-compose.yml`, nor per-provider CLI/timeout overrides;
-those are read from the environment but are not meant to be configured by hand.
+fleet timezone, stats TTL, account concurrency, probe deadline, trusted-proxy) that
+the supported deployment passes in `docker-compose.yml`, nor per-provider
+CLI/timeout overrides; those are read from the environment but are not meant to be
+configured by hand.
 
 `qoder` quota accounts are manual Hub accounts. The `qoder` and `qodercn` local
 usage integrations are separate from them, and separate from each other: the

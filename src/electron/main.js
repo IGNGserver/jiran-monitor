@@ -70,6 +70,7 @@ const { renameDeviceOnHub, readDeviceIdentity, writeDeviceIdentity } = require('
 // Collection cadence is no longer configurable — see src/shared/collectorConfig.js.
 const { createSyncUploadSink } = require('../shared/syncUploadSink');
 const { createSyncSummaryTransformer } = require('../shared/syncSummary');
+const { learnFleetTimeZone, normalizeTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
 const { mergedLocalAllTimeSessions } = require('../shared/localSessions');
 const { historyPreview, historyRevision } = require('../shared/history');
 const { readSessionDetail } = require('../shared/sessionDetail');
@@ -850,6 +851,10 @@ function ensureDeviceIdentityLoaded() {
 
 const syncSummaryTransformer = createSyncSummaryTransformer({
   canWriteSessionUsageArchive: () => !isExternalAgentActive(),
+  // The archive is keyed by the active fleet calendar; the transformer resolves
+  // it per transform so a zone learned from the Hub takes effect without a
+  // restart (a change also drops its in-memory copy).
+  timeZone: () => resolveFleetTimeZone(),
   onArchiveError: (error, operation) => console.log(`[session-archive] ${operation} failed: ${error.message}`)
 });
 
@@ -1056,10 +1061,7 @@ function cacheLocalSnapshot({ history = null } = {}) {
   const capturedAt = new Date().toISOString();
   desktopSnapshotCache.local = {
     capturedAt,
-    stats: cacheableDesktopSnapshot(localStats || withHistoryPreview(
-      aggregateDevices(lastCollectedDevice ? [lastCollectedDevice] : [], 0),
-      lastCollectedDevice ? [lastCollectedDevice] : []
-    )),
+    stats: cacheableDesktopSnapshot(localStats || localDeviceStats(lastCollectedDevice)),
     device: cacheableDesktopSnapshot(lastCollectedDevice || localDevice),
     history: cacheableDesktopSnapshot(history)
   };
@@ -1079,15 +1081,28 @@ function cacheHubSnapshot({ history = null } = {}) {
   queueDesktopSnapshotCacheWrite();
 }
 
+// Local-mode stats for one device (or none). The device's own periodWindows
+// names the calendar its today/month are keyed in — the fleet zone once this
+// device has aligned — so the renderer computes preset windows in the same one.
+function localDeviceStats(device) {
+  const stats = withHistoryPreview(
+    aggregateDevices(device ? [device] : [], 0),
+    device ? [device] : []
+  );
+  const zone = normalizeTimeZone(device?.periodWindows?.timeZone);
+  if (zone) stats.fleetTimeZone = zone;
+  return stats;
+}
+
 function emptyDesktopStats() {
-  return withHistoryPreview(aggregateDevices([], 0), []);
+  return localDeviceStats(null);
 }
 
 function localFallbackStats() {
   if (localStats) return localStats;
   if (lastCollectedDevice) {
     return reattachLocalNativeView(
-      withHistoryPreview(aggregateDevices([lastCollectedDevice], 0), [lastCollectedDevice]),
+      localDeviceStats(lastCollectedDevice),
       lastCollectedDevice
     );
   }
@@ -1340,7 +1355,16 @@ async function postToHub(summary, context = {}) {
     saveSettings();
   }
   try {
-    return await response.json();
+    const payload = await response.json();
+    // The Hub is the one place the fleet calendar is configured; remember what
+    // it advertised so the next collector tick buckets in it. A local state-write
+    // failure must not turn an accepted upload into a reported sync failure.
+    try {
+      if (payload && typeof payload === 'object') learnFleetTimeZone(payload.fleetTimeZone);
+    } catch (error) {
+      console.log(`[fleet-timezone] could not record the Hub calendar: ${error.message}`);
+    }
+    return payload;
   } catch (error) {
     const invalid = new Error('Hub returned an invalid ingest response');
     invalid.code = 'hub_invalid_response';
@@ -1423,7 +1447,7 @@ function startSyncCollector(options) {
       }
       lastCollectedDevice = { ...visibleSummary, receivedAt: new Date().toISOString() };
       localStats = reattachLocalNativeView(
-        withHistoryPreview(aggregateDevices([lastCollectedDevice], 0), [lastCollectedDevice]),
+        localDeviceStats(lastCollectedDevice),
         lastCollectedDevice
       );
       localStatsLive = true;
@@ -1681,7 +1705,7 @@ function startLocalCollector() {
       // whitelist), so reattach it here — otherwise local mode, the default, has
       // no Reasonix sessions or projects at all while sync mode does.
       localStats = reattachLocalNativeView(
-        withHistoryPreview(aggregateDevices([localDevice], 0), [localDevice]),
+        localDeviceStats(localDevice),
         localDevice
       );
       localStatsLive = true;

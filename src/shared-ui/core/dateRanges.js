@@ -53,6 +53,101 @@ function endOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 }
 
+// --- Fleet calendar -------------------------------------------------------
+//
+// When the Hub reports a fleet timezone, the reported day/month totals are keyed
+// by *that* calendar, not the viewer's. The preset windows must therefore be
+// computed in it too, or 昨日/本周 ask for a different window than the numbers
+// answer. The renderer cannot import the Node-side fleetTimeZone module
+// (CommonJS + node:fs), so this is the browser host's one copy of the zone math.
+//
+// Keys are calendar strings, so weekday arithmetic is zone-independent; only the
+// instant bounds need the zone's UTC offset, computed through Intl (browsers do
+// not expose the offset directly) with an iterative correction that lands on the
+// real wall time for every zone whose transitions do not straddle midnight.
+
+function addDaysToKey(key, days) {
+  const ms = Date.parse(`${String(key || '').slice(0, 10)}T00:00:00.000Z`);
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isValidTimeZone(value) {
+  const zone = String(value || '').trim();
+  if (!zone) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function zonedDayKey(date, timeZone) {
+  if (!timeZone) return localDayKey(date);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const read = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${read('year')}-${read('month')}-${read('day')}`;
+}
+
+function zoneOffsetMs(ms, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(new Date(ms));
+  const read = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
+  const asUtc = Date.UTC(read('year'), read('month') - 1, read('day'), read('hour'), read('minute'), read('second'));
+  return asUtc - Math.floor(ms / 1000) * 1000;
+}
+
+function zonedWallTimeMs(dayKey, hour, minute, second, millisecond, timeZone) {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  let guess = wall;
+  for (let index = 0; index < 3; index += 1) {
+    const next = wall - zoneOffsetMs(guess, timeZone);
+    if (next === guess) break;
+    guess = next;
+  }
+  return guess;
+}
+
+export function zonedDayStartMs(dayKey, timeZone) {
+  if (!timeZone) {
+    const [year, month, day] = String(dayKey).split('-').map(Number);
+    return new Date(year, month - 1, day, 0, 0, 0, 0).getTime();
+  }
+  return zonedWallTimeMs(dayKey, 0, 0, 0, 0, timeZone);
+}
+
+function zonedDayEndMs(dayKey, timeZone) {
+  if (!timeZone) {
+    const [year, month, day] = String(dayKey).split('-').map(Number);
+    return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  }
+  return zonedWallTimeMs(addDaysToKey(dayKey, 1), 0, 0, 0, 0, timeZone) - 1;
+}
+
+function weekdayOfKey(key) {
+  return new Date(`${String(key).slice(0, 10)}T00:00:00.000Z`).getUTCDay();
+}
+
+function weekStartKey(dayKey, firstDayIndex = SCOPE_WEEK_FIRST_DAY_INDEX) {
+  const back = (weekdayOfKey(dayKey) - firstDayIndex + 7) % 7;
+  return addDaysToKey(dayKey, -back);
+}
+
 /**
  * The day the scope bar's 本周 window starts on.
  *
@@ -75,10 +170,28 @@ export function weekStart(date = new Date(), firstDayIndex = SCOPE_WEEK_FIRST_DA
  * @returns {{period: string, startDate: string, endDate: string, from: Date, to: Date}|null}
  *   the inclusive calendar days plus the request bounds, or null for a period that
  *   is not a preset range (those come from the snapshot's `periods`).
+ *
+ * `timeZone` is the Hub's fleet calendar when one is configured. An empty zone
+ * keeps the viewer's own calendar, which is the local-mode behaviour.
  */
-export function presetRangeWindow(period, now = new Date()) {
+export function presetRangeWindow(period, now = new Date(), timeZone = '') {
   const name = String(period || '');
   if (!isPresetRangePeriod(name)) return null;
+  // A malformed zone (a legacy caller passing a locale, a corrupted stats field)
+  // must degrade to the viewer's calendar, never throw the renderer down.
+  const zone = isValidTimeZone(timeZone) ? String(timeZone).trim() : '';
+  if (zone) {
+    const todayKey = zonedDayKey(now, zone);
+    const first = name === 'yesterday' ? addDaysToKey(todayKey, -1) : weekStartKey(todayKey);
+    const last = name === 'yesterday' ? first : todayKey;
+    return {
+      period: name,
+      startDate: first,
+      endDate: last,
+      from: new Date(zonedDayStartMs(first, zone)),
+      to: new Date(zonedDayEndMs(last, zone))
+    };
+  }
   const today = startOfDay(now);
   // Yesterday is a closed window; the current week always runs up to today.
   const first = name === 'yesterday' ? addDays(today, -1) : weekStart(today);

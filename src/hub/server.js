@@ -31,6 +31,7 @@ const {
 const { HUB_API_VERSION, hubCapabilities } = require('../shared/hubCapabilities');
 const { createFixedWindowRateLimiter } = require('../shared/hubRateLimit');
 const { validateDeviceRecordPayload } = require('../shared/wireValidation');
+const { dayKeyOf, normalizeTimeZone } = require('../shared/fleetTimeZone');
 const { loadDotEnv, parseArgs } = require('../shared/config');
 const { tryServeStatic } = require('./static');
 const { lookupModelPricing, normalizePromaPricing } = require('../shared/collector');
@@ -174,12 +175,12 @@ function aggregateHistoryRange(history, from, to, options = {}) {
   let startDate = String(options.startDate || '').slice(0, 10);
   let endDate = String(options.endDate || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
-    // Legacy from/to Instant bounds: map to inclusive local calendar days on the hub host.
+    // Legacy from/to Instant bounds: map to inclusive calendar days in the
+    // caller's zone when one is supplied, else the Hub's calendar.
     const fromDate = from instanceof Date ? from : new Date(from);
     const toDate = to instanceof Date ? to : new Date(to);
     if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) return result;
-    const pad = (n) => String(n).padStart(2, '0');
-    const keyOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const keyOf = (d) => dayKeyOf(d, normalizeTimeZone(options.timeZone));
     startDate = keyOf(fromDate);
     // `to` is exclusive in the ISO API; the last included local day is the calendar
     // day of (to - 1ms), so a full-day [00:00, next-day 00:00) keeps one day key.
@@ -338,12 +339,19 @@ function createHub({
   accountConcurrency = 4,
   accountProbe,
   oauthFetch: injectedOAuthFetch = null,
+  // The one calendar the fleet buckets usage days into (IANA name). Unset keeps
+  // every device on its own OS zone, which is the pre-fleet behaviour; when set,
+  // the Hub advertises it to devices and uses it for its own clock fallbacks.
+  fleetTimeZone = '',
   logger = console
 } = {}) {
   const ownedPool = !repository && !pool;
   const activePool = pool || (repository ? null : createMySqlPool());
   const store = repository || createRepository(activePool);
   const ownerSecret = String(secret || adminSecret || '').trim();
+  const resolvedFleetTimeZone = normalizeTimeZone(
+    fleetTimeZone || process.env.TOKEN_MONITOR_FLEET_TIMEZONE || ''
+  );
   let auth = authPolicy || createHubAuthPolicy({
     ownerSecret,
     viewerSecret,
@@ -496,7 +504,7 @@ function createHub({
     const inFlight = (async () => {
       const rawRecords = await store.listDeviceRecords();
       const records = rawRecords.map((record) => normalizeDeviceRecord(record));
-      const history = aggregateHistory(records, { normalized: true });
+      const history = aggregateHistory(records, { normalized: true, fallbackTodayKey: hubDayKey() });
       const bundle = { rawRecords, records, history };
       if (generation === statsCacheGeneration) recordsBundle = bundle;
       return bundle;
@@ -527,6 +535,10 @@ function createHub({
     stats.subscriptionsUpdatedAt = (await getSubscriptions()).updatedAt || '';
     stats.apiVersion = HUB_API_VERSION;
     stats.capabilities = capabilities;
+    // The fleet calendar is part of the read contract: clients compute their
+    // preset range labels from it so a browser/phone in another zone asks the
+    // same question the devices answered.
+    if (resolvedFleetTimeZone) stats.fleetTimeZone = resolvedFleetTimeZone;
     return stats;
   }
 
@@ -589,7 +601,7 @@ function createHub({
   function aggregateHistoryRangeFromRecords(rawRecords, fleetHistory, deviceId) {
     const scoped = rawRecords.filter((record) => String(record?.deviceId || record?.id || '') === deviceId);
     if (scoped.length === rawRecords.length) return fleetHistory;
-    return aggregateHistory(scoped.map((record) => normalizeDeviceRecord(record)));
+    return aggregateHistory(scoped.map((record) => normalizeDeviceRecord(record)), { fallbackTodayKey: hubDayKey() });
   }
 
   async function setSubscriptions(subscriptions, baseUpdatedAt) {
@@ -628,9 +640,14 @@ function createHub({
     return subscriptionsCache;
   }
 
-  function localDayKey(date = new Date()) {
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  // The Hub's calendar: the configured fleet zone when one is set, otherwise
+  // this host's own zone (the historical behaviour).
+  function hubDayKey(date = new Date()) {
+    return dayKeyOf(date, resolvedFleetTimeZone);
+  }
+
+  function hubMonthKey(date = new Date()) {
+    return hubDayKey(date).slice(0, 7);
   }
 
   function periodToUsageRangePayload(period) {
@@ -658,31 +675,15 @@ function createHub({
   // The Hub's own clock is the *Hub host's*, not the caller's. A browser on the
   // other side of the world asked for its local `from`/`to`, so a legacy request
   // that names only instants may carry its IANA zone (`tz=`) and have the day
-  // keys derived in that zone. An absent/invalid zone falls back to the host
-  // clock, which is the historical behaviour for same-zone callers.
+  // keys derived in that zone. An absent/invalid zone falls back to the Hub's
+  // calendar (the fleet zone when configured), which is the historical behaviour
+  // for same-zone callers.
   function normalizeRangeTimeZone(value) {
-    const zone = String(value || '').trim().slice(0, 128);
-    if (!zone) return '';
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: zone }).format(0);
-      return zone;
-    } catch (_) {
-      return '';
-    }
+    return normalizeTimeZone(value);
   }
 
   function calendarDayKeyInZone(date, timeZone) {
-    if (!timeZone) return localDayKey(date);
-    const parts = new Intl.DateTimeFormat('en', {
-      timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
-    }).formatToParts(date);
-    const read = (type) => parts.find((part) => part.type === type)?.value || '';
-    const year = read('year');
-    const month = read('month');
-    const day = read('day');
-    return /^\d{4}$/.test(year) && /^\d{2}$/.test(month) && /^\d{2}$/.test(day)
-      ? `${year}-${month}-${day}`
-      : localDayKey(date);
+    return dayKeyOf(date, normalizeRangeTimeZone(timeZone) || resolvedFleetTimeZone);
   }
 
   // The live fallback is for a cold fleet (history empty, no ledger rows). Which
@@ -707,10 +708,11 @@ function createHub({
     const startDate = String(range.startDate || '');
     const endDate = String(range.endDate || '');
     // A pre-periodWindows fleet has no producer windows to key on; keep the
-    // historical best-effort host-clock behaviour rather than refusing a live
-    // window the old contract used to answer.
-    if (producerToday.size === 0) producerToday.add(localDayKey());
-    if (producerMonth.size === 0) producerMonth.add(localDayKey().slice(0, 7));
+    // historical best-effort behaviour rather than refusing a live window the
+    // old contract used to answer. With a fleet calendar configured, "best
+    // effort" is that calendar, not this host's zone.
+    if (producerToday.size === 0) producerToday.add(hubDayKey());
+    if (producerMonth.size === 0) producerMonth.add(hubMonthKey());
     let periodName = null;
     let source = 'live_periods';
     if (range.isSameDay && producerToday.has(startDate)) {
@@ -800,7 +802,8 @@ function createHub({
     // all-time counters into recent windows on first ingest / counter reset.
     const historyAgg = aggregateHistoryRange(await getHistory(), from, to, {
       startDate: range.startDate,
-      endDate: range.endDate
+      endDate: range.endDate,
+      timeZone: resolvedFleetTimeZone
     });
     if (number(historyAgg.matchedDays) > 0 || number(historyAgg.totalTokens) > 0) {
       const { matchedDays, ...payload } = historyAgg;
@@ -1449,6 +1452,7 @@ function createHub({
          hubBuild: currentHubBuild('node-hub'),
          deviceCount: await store.countDevices(),
          secretRequired: auth.secretRequired,
+         ...(resolvedFleetTimeZone ? { fleetTimeZone: resolvedFleetTimeZone } : {}),
          now: new Date().toISOString()
       });
     }
@@ -1883,8 +1887,9 @@ function createHub({
         if (!authorize(AUTHENTICATED_SCOPE, { ingest: true, deviceId, consumeRateLimit: false })) return;
         const minimalResponse = /(?:^|,)\s*return=minimal\s*(?:,|$)/i.test(String(req.headers.prefer || ''));
         const result = await ingest(payload, { includeStats: !minimalResponse });
-        if (minimalResponse) return sendJson(res, 200, { ok: true, deviceId: result.deviceId });
-        return sendJson(res, 200, { ok: true, deviceId: result.record.deviceId, stats: result.stats });
+        const fleetField = resolvedFleetTimeZone ? { fleetTimeZone: resolvedFleetTimeZone } : {};
+        if (minimalResponse) return sendJson(res, 200, { ok: true, deviceId: result.deviceId, ...fleetField });
+        return sendJson(res, 200, { ok: true, deviceId: result.record.deviceId, stats: result.stats, ...fleetField });
       } catch (error) {
         if (error.message === 'deviceId_required') return sendJson(res, 400, { error: 'deviceId_required' });
         if (error.code === 'field_too_long' || error.code === 'too_many_entries' || error.code === 'invalid_payload') {
@@ -2109,10 +2114,17 @@ if (require.main === module) {
   const host = String(args.host || process.env.TOKEN_MONITOR_HOST || '0.0.0.0');
   const secret = String(args.secret || process.env.TOKEN_MONITOR_SECRET || '').trim();
   const staleAfterMs = Number(args.staleAfterMs || process.env.TOKEN_MONITOR_STALE_AFTER_MS || 10 * 60 * 1000);
+  const fleetTimeZone = String(
+    args.fleetTimeZone
+    || args['fleet-time-zone']
+    || process.env.TOKEN_MONITOR_FLEET_TIMEZONE
+    || ''
+  ).trim();
   const hub = createHub({
     port,
     host,
     secret,
+    fleetTimeZone,
     accountCredentialKey: args.accountCredentialKey
       || args['account-credential-key']
       || process.env.TOKEN_MONITOR_HUB_CREDENTIAL_KEY

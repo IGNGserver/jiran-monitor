@@ -7,6 +7,14 @@ const path = require('node:path');
 const chokidar = require('chokidar');
 const semver = require('semver');
 const { readJson, sharedDataDir, writeJsonAtomic } = require('./config');
+const {
+  computePeriodWindows: fleetComputePeriodWindows,
+  dayKeyOf,
+  normalizeTimeZone,
+  resolveFleetTimeZone,
+  startOfDayMs
+} = require('./fleetTimeZone');
+const { ensureTokscaleBucketTimeZone, tokscaleSettingsPath } = require('./tokscaleSettings');
 const { appVersion } = require('./appVersion');
 const { normalizeClientsCsv } = require('./clientTracking');
 const { tokscalePackageNamesForPlatform, tokscalePlatformKey } = require('./tokscalePlatform');
@@ -29,7 +37,8 @@ const {
 } = require('./wslUsage');
 const { hermesProfileWatchDirs, resolveHermesHome } = require('./hermesProfiles');
 const { mergeHistories, parseGraphResult, normalizeHistory } = require('./history');
-const { retainDailyHistory, retainLiveDailyHistory } = require('./dailyHistoryArchive');
+const { clearDailyHistoryArchive, retainDailyHistory, retainLiveDailyHistory } = require('./dailyHistoryArchive');
+const { clearSessionUsageArchive } = require('./sessionUsageArchive');
 const {
   classifyClientSyncDetailCode
 } = require('./clientSyncStatus');
@@ -654,41 +663,21 @@ function includesLocalClient(normalizedClients, clientId) {
   return Boolean(normalizedClients) && normalizedClients.split(',').includes(clientId);
 }
 
-function localTodayKey(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+// `date` bucketed into `timeZone`; an empty zone is this machine's own
+// calendar (the pre-fleet behaviour). The collector resolves the active fleet
+// zone once per tick and passes it everywhere a day/month key is produced, so a
+// device whose OS zone differs from the fleet's still stamps and compares one
+// calendar.
+function localTodayKey(date = new Date(), timeZone = '') {
+  return dayKeyOf(date, timeZone);
 }
 
-// The IANA zone this device buckets days into. Stamped onto periodWindows so the
-// wire is self-describing: the `key` is a device-local day, and a consumer that
-// needs to know *which* zone produced it no longer has to guess. Optional — a
-// host without Intl or with an unresolved zone simply omits it, and
-// normalizePeriodWindows() drops anything that is not a valid zone.
-function localTimeZoneName() {
-  try {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return typeof zone === 'string' ? zone.trim().slice(0, 128) : '';
-  } catch (_) {
-    return '';
-  }
-}
-
-// Stamp each posted snapshot with the UTC instant its today/month windows end
-// (next local midnight / next month start, in this device's timezone). The hub
-// uses these to expire a frozen snapshot once it goes offline past a day/month
-// boundary, instead of counting stale "today" data forever (issue #37).
-function computePeriodWindows(now = new Date()) {
-  const startOfNextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-  const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const timeZone = localTimeZoneName();
-  return {
-    today: { key: localTodayKey(now), endsAt: startOfNextDay.toISOString() },
-    month: { key: monthKey, endsAt: startOfNextMonth.toISOString() },
-    ...(timeZone ? { timeZone } : {})
-  };
+// today/month windows for a posted snapshot, bucketed in the active calendar.
+// `endsAt` is the UTC instant the window closes, which is what the Hub uses to
+// expire a frozen snapshot (issue #37); a shared fleet zone makes every device's
+// boundary coincide, so the fleet aggregate only steps at the fleet's midnight.
+function computePeriodWindows(now = new Date(), timeZone = '') {
+  return fleetComputePeriodWindows(now, timeZone);
 }
 
 function isoFromDate(value) {
@@ -1151,7 +1140,7 @@ async function collectHistoryOnce(options) {
   const rawGraphs = [];
   const runGraph = options.runGraph || runTokscaleGraph;
   const capDays = Number.isFinite(options.capDays) ? options.capDays : HISTORY_CAP_DAYS;
-  const todayKey = options.todayKey || localTodayKey();
+  const todayKey = options.todayKey || localTodayKey(new Date(), options.timeZone);
   if (clients) {
     try {
       const graphJson = await runGraph({ clients, commandTimeoutMs: options.commandTimeoutMs || HISTORY_TIMEOUT_MS });
@@ -1302,6 +1291,7 @@ function qoderHistoryFallbackGraphFor(options = {}, clientId) {
 // wall-clock win.
 async function collectQoderClientUsage(clientId, ctx) {
   const { options, platformValue, collectedAt, allTimeSince, anchorUsed, readState, fallbackPeriods } = ctx;
+  const timeZone = normalizeTimeZone(options.timeZone);
   const site = QODER_SITE_BY_CLIENT_ID[clientId] || 'cn';
   const log = typeof options.logger === 'function' ? options.logger : null;
   const state = {
@@ -1315,9 +1305,11 @@ async function collectQoderClientUsage(clientId, ctx) {
   };
   // A history tick needs the full source set for its graph. Read that set once
   // here and reuse it for both periods and history; an anchored watch tick
-  // without history still reads only today's source window.
+  // without history still reads only today's source window. The bound is the
+  // active calendar's midnight, and the builders filter rows by the same zone
+  // day key afterwards, so a conservative bound cannot mis-attribute a row.
   const sinceMs = anchorUsed && !options.includeHistory
-    ? new Date(collectedAt.getFullYear(), collectedAt.getMonth(), collectedAt.getDate()).getTime()
+    ? startOfDayMs(collectedAt.getTime(), timeZone)
     : undefined;
   const sourceOptions = {
     clientId,
@@ -1418,6 +1410,7 @@ async function collectQoderClientUsage(clientId, ctx) {
     const json = buildQoderCnPeriods({
       now: collectedAt,
       allTimeSince,
+      timeZone,
       rows: state.rows,
       pricingByModel: state.pricing,
       clientId
@@ -1457,6 +1450,10 @@ async function collectUsageOnce(options) {
   // build path on a non-Windows CI box (the real process.platform stays for
   // tokscale binary resolution, which is genuinely platform-bound).
   const platformValue = options.platform || process.platform;
+  // The active fleet calendar for this tick ('' = this machine's own zone).
+  // Every day/month key produced below - anchor gates, history windows,
+  // periodWindows, local-parser builders - is bucketed in it.
+  const timeZone = normalizeTimeZone(options.timeZone);
   const osInfo = options.osInfo === undefined
     ? hostOsInfo()
     : normalizeOsInfo(options.osInfo);
@@ -1502,7 +1499,7 @@ async function collectUsageOnce(options) {
   const anchor = options.todayOnlyAnchor;
   const anchorUsed = Boolean(
     anchor
-    && anchor.dateKey === localTodayKey(collectedAt)
+    && anchor.dateKey === localTodayKey(collectedAt, timeZone)
     && canTargetTodayPartitions(anchor, targetClients)
   );
   let promaPeriods = null;
@@ -1575,7 +1572,7 @@ async function collectUsageOnce(options) {
           commandTimeoutMs: options.pricingTimeoutMs ?? Math.min(commandTimeoutMs || PROMA_PRICING_LOOKUP_TIMEOUT_MS, PROMA_PRICING_LOOKUP_TIMEOUT_MS),
           pricingRevision: options.pricingRevision
         });
-        const promaJson = buildPromaPeriods({ now: collectedAt, allTimeSince, rows: promaRows, pricingByModel: promaPricing });
+        const promaJson = buildPromaPeriods({ now: collectedAt, allTimeSince, timeZone, rows: promaRows, pricingByModel: promaPricing });
         promaPeriods = {
           today: extractUsageFromTokscale(promaJson.today),
           month: extractUsageFromTokscale(promaJson.month),
@@ -1596,6 +1593,7 @@ async function collectUsageOnce(options) {
         const desktopJson = buildClaudeDesktopPeriods({
           now: collectedAt,
           allTimeSince,
+          timeZone,
           rows: claudeDesktopRows,
           pricingByModel: claudeDesktopPricing
         });
@@ -1745,6 +1743,7 @@ async function collectUsageOnce(options) {
         trackedClients: normalizedClients,
         allTimeSince,
         now: collectedAt,
+        timeZone,
         commandTimeoutMs,
         runTokscale: runTokscaleFn,
         resolvePromaPricing: (rows) => resolvePromaPricing(rows, {
@@ -1767,6 +1766,7 @@ async function collectUsageOnce(options) {
         trackedClients: normalizedClients,
         allTimeSince,
         now: collectedAt,
+        timeZone,
         commandTimeoutMs,
         runTokscale: runTokscaleFn,
         resolvePromaPricing: (rows) => resolvePromaPricing(rows, {
@@ -1800,7 +1800,7 @@ async function collectUsageOnce(options) {
       const retainedLive = retainLiveDailyHistory(today, {
         ...(options.dailyHistoryArchiveOptions || {}),
         liveDays: dailyHistoryLiveDays,
-        todayKey: localTodayKey(collectedAt),
+        todayKey: localTodayKey(collectedAt, timeZone),
         writeEnabled: options.dailyHistoryArchiveWriteEnabled
       });
       dailyHistoryLiveDays = retainedLive.liveDays || {};
@@ -1860,7 +1860,7 @@ async function collectUsageOnce(options) {
     trackedClients: normalizedClients ? normalizedClients.split(',') : [],
     clientStatus: deriveClientStatus(normalizedClients, allTime, { sourceChecks }),
     wslStatus,
-    periodWindows: computePeriodWindows(collectedAt),
+    periodWindows: computePeriodWindows(collectedAt, timeZone),
     historyAvailable: options.historyEnabled !== false,
     today,
     month,
@@ -1887,7 +1887,7 @@ async function collectUsageOnce(options) {
         cwdDir: options.cwdDir || process.cwd(),
         projectIdentity
       });
-      const nativeView = nativeCache.getView({ now: collectedAt, projectsEnabled, allTimeSince });
+      const nativeView = nativeCache.getView({ now: collectedAt, projectsEnabled, allTimeSince, timeZone });
       summary.nativeSessions = nativeView.sessions;
       summary.nativeProjects = nativeView.projects;
     } catch (error) {
@@ -1968,7 +1968,7 @@ async function collectUsageOnce(options) {
           commandTimeoutMs: options.pricingTimeoutMs,
           pricingRevision: options.pricingRevision
         });
-        graph = buildQoderCnHistoryGraph({ rows, pricingByModel: pricing, clientId: qoderClientId });
+        graph = buildQoderCnHistoryGraph({ rows, pricingByModel: pricing, clientId: qoderClientId, timeZone });
       } catch (err) {
         // A failed history read must not take down the whole tick — the live
         // periods stay authoritative and the failure remains in the local log.
@@ -1983,18 +1983,20 @@ async function collectUsageOnce(options) {
     }
     const history = await collectHistoryOnce({
       clients: tokscaleClients,
-      promaGraph: includesProma ? buildPromaHistoryGraph({ rows: promaRows || collectPromaRows(), pricingByModel: promaPricing || {} }) : null,
+      promaGraph: includesProma ? buildPromaHistoryGraph({ rows: promaRows || collectPromaRows(), pricingByModel: promaPricing || {}, timeZone }) : null,
       claudeDesktopGraph: includesClaudeDesktop
         ? buildClaudeDesktopHistoryGraph({
           rows: claudeDesktopRows || collectClaudeDesktopRows({ homeDir: options.homeDir || os.homedir() }),
-          pricingByModel: claudeDesktopPricing || {}
+          pricingByModel: claudeDesktopPricing || {},
+          timeZone
         })
         : null,
       qoderGraphs,
       historyEnabled: options.historyEnabled,
       commandTimeoutMs: options.historyTimeoutMs,
       capDays: options.historyCapDays,
-      todayKey: localTodayKey(collectedAt),
+      todayKey: localTodayKey(collectedAt, timeZone),
+      timeZone,
       runGraph: options.runGraph,
       // WSL history: per-home graph on history ticks, keyed off the same switch
       // and platform the period scan uses. Injectable for tests.
@@ -3136,15 +3138,22 @@ function canTargetTodayPartitions(anchor, targetClients) {
   );
 }
 
-function configFingerprint(clientsCsv, allTimeSince, projectsEnabled = true, qoderSourceKey = '') {
+function configFingerprint(clientsCsv, allTimeSince, projectsEnabled = true, qoderSourceKey = '', timeZone = '') {
   // Deterministic string that captures the config inputs anchor correctness
   // depends on. When this changes, the persisted anchor is invalidated.
   // `qoderSourceKey` covers every enabled locally parsed Qoder client (see
   // qoderSourceFingerprintForClients), which is why the part is labelled with
   // the family rather than with the CN client alone.
+  //
+  // The fleet calendar is part of the fingerprint: two zones can agree on the
+  // current day key while disagreeing about where the month started, so a
+  // matching `dateKey` alone must not let an anchor accumulated in the old
+  // calendar stand in for the new one.
   const qoder = String(qoderSourceKey || '').trim();
   const qoderPart = qoder ? `|qoder:${normalizeQoderSourceKey(qoder)}` : '';
-  return `${normalizeClientsCsv(clientsCsv)}|${allTimeSince}|projects:${projectsEnabled !== false ? 'on' : 'off'}${qoderPart}`;
+  const zone = normalizeTimeZone(timeZone);
+  const zonePart = zone ? `|tz:${zone}` : '';
+  return `${normalizeClientsCsv(clientsCsv)}|${allTimeSince}|projects:${projectsEnabled !== false ? 'on' : 'off'}${qoderPart}${zonePart}`;
 }
 
 // A Qoder source key is either an already-structured fingerprint
@@ -3214,13 +3223,101 @@ function restoreAnchorQoderPeriods(saved) {
 // collector still reuses the periods then and simply forces a full scan, while
 // a seed has nothing to stand on and declines.
 function collectorAnchorTrust(saved, options = {}) {
-  const { clients = '', allTimeSince = '', projectsEnabled = true, qoderSourceKey = '', now = new Date() } = options;
-  if (!saved || saved.dateKey !== localTodayKey(now)) return null;
+  const {
+    clients = '',
+    allTimeSince = '',
+    projectsEnabled = true,
+    qoderSourceKey = '',
+    timeZone = '',
+    now = new Date()
+  } = options;
+  if (!saved || saved.dateKey !== localTodayKey(now, timeZone)) return null;
   if (!saved.today || !saved.month || !saved.allTime) return null;
-  if (saved.configFingerprint !== configFingerprint(clients, allTimeSince, projectsEnabled, qoderSourceKey)) return null;
+  if (saved.configFingerprint !== configFingerprint(clients, allTimeSince, projectsEnabled, qoderSourceKey, timeZone)) return null;
   const parsed = Date.parse(saved.fullScanAt || '');
   const capturedAtMs = Number.isFinite(parsed) && parsed <= now.getTime() ? parsed : null;
   return { capturedAtMs };
+}
+
+// --- Fleet calendar application -------------------------------------------
+
+// Zone -> the last calendar this process applied, keyed by tokscale settings
+// path so two collectors with different config dirs do not share an answer.
+const appliedFleetTimeZones = new Map();
+
+// The calendar this tick must bucket in. An explicit option (tests, embedders)
+// wins; a resolver lets a long-running collector follow a zone learned from the
+// Hub; otherwise the operator env or the remembered Hub zone is the answer, and
+// an empty result keeps the machine's own calendar.
+function resolveTickTimeZone(options = {}) {
+  const explicit = normalizeTimeZone(options.timeZone);
+  if (explicit) return explicit;
+  if (typeof options.resolveTimeZone === 'function') {
+    return normalizeTimeZone(options.resolveTimeZone());
+  }
+  return resolveFleetTimeZone({
+    env: options.env || process.env,
+    platform: options.platform,
+    homeDir: options.homeDir
+  });
+}
+
+function collectorAnchorPath(options = {}) {
+  return options.anchorPath || path.join(sharedDataDir(options), 'collector-anchor.json');
+}
+
+function clearCollectorAnchor(options = {}) {
+  try {
+    fs.unlinkSync(collectorAnchorPath(options));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Align tokscale's own day bucketing with the fleet calendar, and re-key the
+// day-keyed local artifacts when the calendar moves.
+//
+// tokscale pins `scanner.bucketTimezone` on first run and refuses to change it
+// afterwards, so Jiran maintains the value directly; every tokscale invocation
+// (host and WSL, period and graph) reads the same settings file, which is what
+// makes `--today`, `--month` and `graph` agree with periodWindows.
+//
+// `changed` is true when either the pin moved or this process's calendar moved
+// (another collector may have already written the pin). Both mean the in-memory
+// anchor, the live-days overlay and the archives were built against a different
+// day boundary, so the caller must drop them and take a full scan.
+function applyFleetTimeZone(timeZone, options = {}) {
+  const zone = normalizeTimeZone(timeZone);
+  if (!zone) return { ok: true, changed: false, timeZone: '' };
+  const sharedOptions = {
+    env: options.env || process.env,
+    platform: options.platform,
+    homeDir: options.homeDir
+  };
+  const ensure = typeof options.ensureTokscaleBucketTimeZone === 'function'
+    ? options.ensureTokscaleBucketTimeZone
+    : ensureTokscaleBucketTimeZone;
+  const result = ensure(zone, sharedOptions);
+  if (!result || result.ok !== true) {
+    if (typeof options.logger === 'function') {
+      options.logger(`fleet timezone ${zone} not applied to tokscale settings: ${result?.reason || 'unknown'}`);
+    }
+    return { ok: false, reason: result?.reason || 'unknown', changed: false, timeZone: zone };
+  }
+  const settingsKey = tokscaleSettingsPath(sharedOptions);
+  const previous = appliedFleetTimeZones.get(settingsKey);
+  appliedFleetTimeZones.set(settingsKey, zone);
+  const calendarMoved = previous !== undefined && previous !== zone;
+  if (!result.changed && !calendarMoved) return { ok: true, changed: false, timeZone: zone };
+  // The pin moved, or this process is switching calendars: every day-keyed local
+  // artifact describes the old boundary. The Hub replaces a device's stored
+  // history wholesale on the next sync, so clearing locally is enough to keep
+  // old-zone and new-zone day keys from coexisting.
+  clearDailyHistoryArchive(sharedOptions);
+  clearSessionUsageArchive(sharedOptions);
+  clearCollectorAnchor(sharedOptions);
+  return { ok: true, changed: true, previous: result.previous, timeZone: zone };
 }
 
 // Force a full scan at least this often even when the anchor is otherwise
@@ -3497,7 +3594,8 @@ function startCollector(options) {
         clients,
         allTimeSince,
         projectsEnabled: options.projectsEnabled,
-        qoderSourceKey: qoderSourceKey || qoderDbPaths
+        qoderSourceKey: qoderSourceKey || qoderDbPaths,
+        timeZone: resolveTickTimeZone(options)
       });
       if (trust) {
         anchor = {
@@ -3558,7 +3656,21 @@ function startCollector(options) {
   async function performTick(reason, tickOptions = {}) {
     const tickStartedAt = Date.now();
     const collectedAt = collectionDate(options.now);
-    const todayKey = localTodayKey(collectedAt);
+    const tickTimeZone = resolveTickTimeZone(options);
+    const fleetCalendar = applyFleetTimeZone(tickTimeZone, options);
+    if (fleetCalendar.changed) {
+      // The day boundary moved under every persisted and in-memory day key.
+      // Drop them and take a full scan (with history) so the new calendar is
+      // re-derived instead of carrying old-zone windows forward.
+      anchor = null;
+      wslAnchor = null;
+      wslStatusAnchor = null;
+      lastFullScanAt = 0;
+      liveDailyHistoryDays = {};
+      for (const clientId of Object.keys(qoderHistoryGraphs)) delete qoderHistoryGraphs[clientId];
+      tickOptions = { ...tickOptions, todayOnly: false, forceHistory: true };
+    }
+    const todayKey = localTodayKey(collectedAt, tickTimeZone);
     // The previous live DAY becomes durable history at local midnight. Finalize
     // it before publishing the new day, even when the normal History interval
     // is not due yet, so fixed ranges never wait for the next scheduled graph.
@@ -3611,6 +3723,7 @@ function startCollector(options) {
         agentRuntime,
         osInfo: deviceOsInfo,
         now: collectedAt,
+        timeZone: tickTimeZone,
         includeHistory,
         // Capture after the runtime's transformUsage hook so the archive uses
         // the same today period that the user actually sees. The process-local
@@ -3773,7 +3886,8 @@ function startCollector(options) {
                 clients,
                 allTimeSince,
                 options.projectsEnabled,
-                qoderSourceKey || qoderDbPaths
+                qoderSourceKey || qoderDbPaths,
+                tickTimeZone
               ),
               fullScanAt: new Date(lastFullScanAt).toISOString()
             });
@@ -3816,7 +3930,7 @@ function startCollector(options) {
           const visibleAt = visibleSummary.updatedAt || summary.updatedAt;
           const visibleDate = visibleAt ? new Date(visibleAt) : new Date();
           const visibleDateKey = Number.isFinite(visibleDate.getTime())
-            ? localTodayKey(visibleDate)
+            ? localTodayKey(visibleDate, tickTimeZone)
             : todayKey;
           const retainedLive = retainLiveDailyHistory(visibleSummary.today, {
             ...(options.dailyHistoryArchiveOptions || {}),
@@ -4151,7 +4265,7 @@ function startCollector(options) {
     // does not drift from reality over a long-running session.
     // lastFullScanAt === 0 means no valid timestamp exists (cold start,
     // unparseable, or future timestamp) — force a full scan immediately.
-    const anchorToday = Boolean(!fullScanDue && anchor && anchor.dateKey === localTodayKey());
+    const anchorToday = Boolean(!fullScanDue && anchor && anchor.dateKey === localTodayKey(new Date(), resolveTickTimeZone(options)));
     const sourceSelfSync = intervalRequiresActivity ? sourceSyncQueue.takeDue() : null;
     // Smart mode carries the clients its watch events named since the last tick
     // and unions the self-synced ones on top regardless. Their tokscale cache
@@ -4473,6 +4587,8 @@ module.exports = {
   clientsForWatchPath,
   clientWatchCandidates,
   computePeriodWindows,
+  applyFleetTimeZone,
+  resolveTickTimeZone,
   collectorAnchorTrust,
   configFingerprint,
   enabledQoderClientIds,

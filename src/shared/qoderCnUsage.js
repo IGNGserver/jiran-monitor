@@ -9,6 +9,7 @@ const { StringDecoder } = require('node:string_decoder');
 const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const { customPricingPath } = require('./tokscaleConfig');
+const { dayKeyOf, monthKeyOf, normalizeTimeZone, startOfDayMs } = require('./fleetTimeZone');
 const QODER_DB_SUFFIX = path.join('SharedClientCache', 'cache', 'db', 'local.db');
 const QODER_MAIN_DB_NAME = 'main.sqlite';
 
@@ -932,13 +933,27 @@ async function collectQoderCnRows(options = {}) {
   return [...unique.values()];
 }
 
-function buildTokscaleJson(startMs, rows, pricingByModel, includeUndated = false, clientId = 'qodercn') {
+function buildTokscaleJson(startMs, rows, pricingByModel, includeUndated = false, clientId = 'qodercn', window = null) {
   const client = normalizeQoderClientId(clientId, 'qodercn');
+  // A fleet-calendar window arrives as zone day/month keys instead of an epoch
+  // start: a row belongs to the calendar day it falls on in the active zone,
+  // which is exact even when that day's midnight is not the machine's.
+  const todayKey = String(window?.todayKey || '');
+  const monthKey = String(window?.monthKey || '');
+  const timeZone = normalizeTimeZone(window?.timeZone);
   const grouped = new Map();
   for (const row of rows) {
     // Mirrors promaUsage: dated rows must fall inside the window, undated rows
     // count only for allTime (includeUndated) — never for today/month.
-    if (startMs && (row.createdAt ? row.createdAt < startMs : !includeUndated)) continue;
+    // An undated row can only be placed in the unbounded all-time window.
+    if (!row.createdAt) {
+      if ((startMs || todayKey || monthKey) && !includeUndated) continue;
+    } else if (todayKey || monthKey) {
+      const key = dayKeyOf(new Date(row.createdAt), timeZone);
+      if (todayKey ? key !== todayKey : key.slice(0, 7) !== monthKey) continue;
+    } else if (startMs && row.createdAt < startMs) {
+      continue;
+    }
     const key = `${row.sessionId}\0${row.model}`;
     if (!grouped.has(key)) grouped.set(key, {
       ...row, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0, credits: 0,
@@ -991,14 +1006,13 @@ function buildTokscaleJson(startMs, rows, pricingByModel, includeUndated = false
 
 function buildQoderCnPeriods(options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
+  const timeZone = normalizeTimeZone(options.timeZone);
   const rows = Array.isArray(options.rows) ? options.rows : [];
   const pricingByModel = options.pricingByModel;
   const clientId = resolveQoderSiteOptions(options).clientId;
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
   return {
-    today: buildTokscaleJson(todayStart, rows, pricingByModel, false, clientId),
-    month: buildTokscaleJson(monthStart, rows, pricingByModel, false, clientId),
+    today: buildTokscaleJson(0, rows, pricingByModel, false, clientId, { todayKey: dayKeyOf(now, timeZone), timeZone }),
+    month: buildTokscaleJson(0, rows, pricingByModel, false, clientId, { monthKey: monthKeyOf(now, timeZone), timeZone }),
     allTime: buildTokscaleJson(timestampMs(options.allTimeSince), rows, pricingByModel, true, clientId)
   };
 }
@@ -1032,9 +1046,10 @@ function buildQoderCnRangeJson(range, options = {}) {
 
 function buildQoderCnHistoryGraph(options = {}) {
   const client = resolveQoderSiteOptions(options).clientId;
+  const timeZone = normalizeTimeZone(options.timeZone);
   const days = new Map();
   for (const row of options.rows || []) {
-    const date = localDateKey(row.createdAt);
+    const date = row.createdAt ? dayKeyOf(new Date(row.createdAt), timeZone) : '';
     if (!date) continue;
     if (!days.has(date)) days.set(date, { date, clients: [] });
     const day = days.get(date);
@@ -1364,7 +1379,7 @@ function processTranscriptLine(line, state) {
     const isCompletedRequest = hasUsageBlock || state.hasUsageSeen !== true;
     if (isCompletedRequest) {
       const date = new Date(timestamp);
-      const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const dayKey = dayKeyOf(date, state.timeZone);
       const modelKey = transcriptEventModel(event, message, state.modelKey);
       const key = JSON.stringify([dayKey, modelKey, projectLabel, sessionId, identity || '']);
       const bucket = buckets.get(key) || {
@@ -1569,7 +1584,8 @@ function collectQoderCnTranscriptRows(options = {}) {
           sessionId: transcriptSessionId(filePath, dayHint, clientId),
           sessionKey: transcriptRawSessionId(root, filePath),
           rawSession: '',
-          sinceMs
+          sinceMs,
+          timeZone: normalizeTimeZone(options.timeZone)
         };
         try {
           streamTranscriptFile(filePath, stat, state, diagnostics, startedAt, options);
@@ -1590,8 +1606,18 @@ function collectQoderCnTranscriptRows(options = {}) {
     throw wrapped;
   }
   const rows = [];
+  const timeZone = normalizeTimeZone(options.timeZone);
   for (const bucket of buckets.values()) {
-    const createdAt = Date.parse(`${bucket.dayKey}T12:00:00`);
+    // A bucket is a whole calendar day, so its synthetic instant is local noon
+    // in the active zone. The candidates cover every legal offset: the UTC
+    // midnight reference lands outside the day for UTC+14, the UTC noon
+    // reference for UTC-12; whichever names the day is the one to noon-shift.
+    const dayRefs = [
+      Date.parse(`${bucket.dayKey}T00:00:00.000Z`),
+      Date.parse(`${bucket.dayKey}T12:00:00.000Z`)
+    ];
+    const dayRef = dayRefs.find((ms) => dayKeyOf(new Date(ms), timeZone) === bucket.dayKey) ?? dayRefs[0];
+    const createdAt = startOfDayMs(dayRef, timeZone) + 12 * 60 * 60 * 1000;
     if (!Number.isFinite(createdAt)) continue;
     const displayName = Object.prototype.hasOwnProperty.call(QODER_CN_MODEL_DISPLAY_NAMES, bucket.modelKey)
       ? QODER_CN_MODEL_DISPLAY_NAMES[bucket.modelKey]

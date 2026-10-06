@@ -166,3 +166,34 @@ test('every scope tab the app can render has a label in every locale', () => {
     }
   }
 });
+
+test('a fleet calendar computes presets in the Hub zone, not the viewer zone', () => {
+  // 2026-10-05 20:00 UTC is already 2026-10-06 in Shanghai and still 2026-10-05
+  // in Los Angeles, so the same instant must produce different windows.
+  const instant = new Date('2026-10-05T20:00:00.000Z');
+  const shanghai = presetRangeWindow('yesterday', instant, 'Asia/Shanghai');
+  assert.equal(shanghai.startDate, '2026-10-05');
+  assert.equal(shanghai.endDate, '2026-10-05');
+  // Bounds are the zone's own midnights, not the viewer's.
+  assert.equal(shanghai.from.toISOString(), '2026-10-04T16:00:00.000Z');
+  assert.equal(shanghai.to.toISOString(), '2026-10-05T15:59:59.999Z');
+
+  const losAngeles = presetRangeWindow('yesterday', instant, 'America/Los_Angeles');
+  assert.equal(losAngeles.startDate, '2026-10-04');
+  assert.equal(losAngeles.from.toISOString(), '2026-10-04T07:00:00.000Z');
+  assert.equal(losAngeles.to.toISOString(), '2026-10-05T06:59:59.999Z');
+});
+
+test('a fleet calendar keeps the ISO Monday week window and DST-safe bounds', () => {
+  // 2026-10-06 is a Tuesday in Shanghai; the week starts Monday 2026-10-05.
+  const week = presetRangeWindow('week', new Date('2026-10-06T02:00:00.000Z'), 'Asia/Shanghai');
+  assert.equal(week.startDate, '2026-10-05');
+  assert.equal(week.endDate, '2026-10-06');
+
+  // US fall back 2026-11-01 is a 25-hour day; its end bound must still be the
+  // last millisecond before local midnight (08:00 UTC on 11-02).
+  const fall = presetRangeWindow('yesterday', new Date('2026-11-02T10:00:00.000Z'), 'America/Los_Angeles');
+  assert.equal(fall.startDate, '2026-11-01');
+  assert.equal(fall.from.toISOString(), '2026-11-01T07:00:00.000Z');
+  assert.equal(fall.to.toISOString(), '2026-11-02T07:59:59.999Z');
+});
