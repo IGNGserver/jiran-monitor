@@ -169,20 +169,32 @@ test('the event-ledger fallback filters on the caller instants, not the hub cloc
 
 test('the live fallback keys on the producers own periodWindows', async () => {
   const previousTz = process.env.TZ;
-  // Force the hub host to a day *behind* the producer so a hub-clock check
-  // could never match the requested key.
+  // Force the hub host to a day *behind* the producer so a hub-clock check could
+  // never match the requested key. UTC+14 against UTC-12 is 26 hours apart, so the
+  // two are always on different calendar days.
   process.env.TZ = 'Etc/GMT+12';
   const repository = new MemoryRepository();
-  const day = '2026-10-04';
+  // Derive the producer's window from the wall clock: a hard-coded `endsAt`
+  // expired with the calendar, which cleared the device's `today` and turned this
+  // into a date-bombed test that failed on any later day.
+  const producerOffsetMs = 14 * 60 * 60 * 1000;
+  const producerNow = new Date(Date.now() + producerOffsetMs);
+  const day = producerNow.toISOString().slice(0, 10);
+  const endOfProducerDay = new Date(
+    Date.UTC(producerNow.getUTCFullYear(), producerNow.getUTCMonth(), producerNow.getUTCDate() + 1) - producerOffsetMs
+  );
+  const endOfProducerMonth = new Date(
+    Date.UTC(producerNow.getUTCFullYear(), producerNow.getUTCMonth() + 1, 1) - producerOffsetMs
+  );
   await repository.saveDevice({
     deviceId: 'dev-a',
     hostname: 'host-a',
     platform: 'win32',
-    updatedAt: '2026-10-04T12:00:00.000Z',
+    updatedAt: new Date().toISOString(),
     receivedAt: new Date().toISOString(),
     periodWindows: {
-      today: { key: day, endsAt: '2026-10-05T16:00:00.000Z' }, // next local midnight at UTC+8
-      month: { key: '2026-10', endsAt: '2026-11-01T00:00:00.000Z' }
+      today: { key: day, endsAt: endOfProducerDay.toISOString() },
+      month: { key: day.slice(0, 7), endsAt: endOfProducerMonth.toISOString() }
     },
     today: {
       totalTokens: 12345,

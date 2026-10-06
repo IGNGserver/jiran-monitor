@@ -198,10 +198,28 @@ data class LimitWindowDto(
   val showMeter: Boolean = true
 )
 
+/**
+ * The device-local calendar windows behind `today` / `month`, as the Hub
+ * normalizes them (`src/shared/usage.js` `normalizePeriodWindows`): each window
+ * carries the UTC instant it ends (`endsAt`) plus the device-local `key` for
+ * reference.
+ *
+ * Not a `Map<String, PeriodWindowDto>`: the Hub writes the IANA `timeZone` that
+ * produced the keys as a *sibling* string beside the two window objects
+ * (`docs/API.md`), so a homogeneous value-typed map would fail to decode the whole
+ * stats / devices / stream document the moment a host resolves a zone.
+ */
+@Serializable
+data class PeriodWindowsDto(
+  val today: PeriodWindowDto? = null,
+  val month: PeriodWindowDto? = null,
+  val timeZone: String? = null
+)
+
 @Serializable
 data class PeriodWindowDto(
-  val from: String? = null,
-  val to: String? = null
+  val endsAt: String? = null,
+  val key: String? = null
 )
 
 @Serializable
@@ -313,7 +331,7 @@ data class DeviceDto(
    */
   val limits: LimitsDto? = null,
   /** Real calendar boundaries behind `today` / `month` / `allTime`. */
-  val periodWindows: Map<String, PeriodWindowDto> = emptyMap(),
+  val periodWindows: PeriodWindowsDto = PeriodWindowsDto(),
   val agentVersion: String? = null,
   val trackedClients: List<String> = emptyList(),
   val projectsEnabled: Boolean? = null
@@ -485,14 +503,26 @@ data class HubAccountDto(
    *  Hub was asked without credential metadata, so `null` means "unknown". */
   val credentialConfigured: Boolean? = null,
   val credentialMetadata: JsonObject? = null,
-  val limits: LimitsDto? = null
+  /**
+   * This account's current quota snapshot.  The Hub stores one provider row per
+   * account, so this is a single [LimitProviderDto] — not a [LimitsDto] wrapper.
+   * Typing it as the wrapper decoded to an empty `providers` list and blanked the
+   * account's 当前额度 section.
+   */
+  val limits: LimitProviderDto? = null
 )
 
 @Serializable
 data class AccountsResponseDto(
   val ok: Boolean = false,
   val authority: String? = null,
-  val providers: List<LimitProviderDto> = emptyList(),
+  /**
+   * Provider ids the Hub can manage (`claude`, `codex`, …).  The wire value is a
+   * `List<String>` — the add-account picker uses the client's own provider table,
+   * so this field is informational; typing it as `List<LimitProviderDto>` failed
+   * to decode every `/api/accounts` response.
+   */
+  val providers: List<String> = emptyList(),
   val accounts: List<HubAccountDto> = emptyList()
 )
 

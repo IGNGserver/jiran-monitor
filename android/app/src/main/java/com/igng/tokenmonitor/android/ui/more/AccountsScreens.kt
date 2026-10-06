@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.igng.tokenmonitor.android.data.model.HubAccountDto
+import com.igng.tokenmonitor.android.data.model.LimitsDto
 import com.igng.tokenmonitor.android.data.model.SubscriptionDto
 import com.igng.tokenmonitor.android.ui.HubUiState
 import com.igng.tokenmonitor.android.ui.HubViewModel
@@ -376,9 +377,15 @@ private fun AccountCard(
         )
       }
     }
-    account.limits?.let { limits ->
+    account.limits?.let { provider ->
       Spacer(Modifier.height(FluentSpacingDefaults.m))
-      LimitsSection(limits = limits, title = "当前额度", includeAllProviders = true)
+      // The Hub stores one provider row per account, so wrap it in the
+      // single-provider `LimitsDto` shape `LimitsSection` renders.
+      LimitsSection(
+        limits = LimitsDto(providers = listOf(provider)),
+        title = "当前额度",
+        includeAllProviders = true
+      )
     }
   }
 }

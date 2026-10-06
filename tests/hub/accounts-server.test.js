@@ -194,6 +194,45 @@ test('Hub drops device limits and serves centrally refreshed limits from stats',
   }
 });
 
+test('the accounts list advertises provider ids and one provider snapshot per account', async () => {
+  const repository = new MemoryRepository();
+  const hub = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    adminSecret: 'admin-token',
+    accountCredentialKey: 'account-encryption-key',
+    accountProbe: async (provider) => accountProbe(provider),
+    accountRefreshMs: 60_000,
+    repository,
+    logger: { error() {}, warn() {}, info() {} }
+  });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    await requestJson(port, '/api/accounts', {
+      method: 'POST',
+      token: 'admin-token',
+      body: { provider: 'deepseek', name: 'work', credential: { apiKey: 'x' } }
+    });
+
+    const listed = await requestJson(port, '/api/accounts', { token: 'admin-token' });
+    assert.equal(listed.response.status, 200);
+    // `providers` is a list of provider-id *strings*, never provider objects: the
+    // Android `AccountsResponseDto.providers` is `List<String>`, and a value typed
+    // as an object failed to decode every /api/accounts response on the phone.
+    assert.ok(Array.isArray(listed.body.providers));
+    assert.ok(listed.body.providers.length > 0);
+    assert.ok(listed.body.providers.every((id) => typeof id === 'string'));
+    assert.ok(listed.body.providers.includes('deepseek'));
+    // Each account carries a single provider snapshot, not a `{ providers: [...] }`
+    // wrapper, which is why Android models `account.limits` as a `LimitProviderDto`.
+    assert.equal(listed.body.accounts[0].limits.provider, 'deepseek');
+    assert.equal(Array.isArray(listed.body.accounts[0].limits.providers), false);
+  } finally {
+    await hub.stop();
+  }
+});
+
 test('Hub account API supports adding codex and antigravity accounts with explicit credentials', async () => {
   const repository = new MemoryRepository();
   let counter = 0;
