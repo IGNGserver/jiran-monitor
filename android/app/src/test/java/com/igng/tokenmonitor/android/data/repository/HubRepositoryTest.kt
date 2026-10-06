@@ -205,6 +205,40 @@ class HubRepositoryTest {
     assertEquals(listOf("2026-09"), history.monthly.map { it.month })
   }
 
+  @Test fun accountsDecodeProviderIdStringsAndASingleProviderLimitSnapshot() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(200).setBody(
+      """{"ok":true,"authority":"hub","providers":["claude","codex","deepseek"],""" +
+        """"accounts":[{"id":"a1","provider":"deepseek","enabled":true,""" +
+        """"limits":{"provider":"deepseek","status":"ok","windows":[{"kind":"daily","used":12,"limit":100}]}}]}"""
+    ))
+
+    val result = repository.accounts()
+
+    assertTrue(result is HubResult.Success)
+    val value = (result as HubResult.Success).value
+    // `providers` is a list of provider-id strings; a value typed as provider
+    // objects failed to decode every /api/accounts response.
+    assertEquals(listOf("claude", "codex", "deepseek"), value.providers)
+    // `account.limits` is one provider snapshot, not a `{ providers: [...] }` wrapper.
+    assertEquals("deepseek", value.accounts.single().limits?.provider)
+  }
+
+  @Test fun statsDecodePeriodWindowsCarryingTheTimeZoneString() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(200).setBody(
+      """{"periods":{},"devices":[{"deviceId":"dev-a","periodWindows":{""" +
+        """"today":{"endsAt":"2026-07-19T00:00:00.000Z","key":"2026-07-18"},"timeZone":"Asia/Shanghai"}}]}"""
+    ))
+
+    val result = repository.stats()
+
+    assertTrue(result is HubResult.Success)
+    val device = (result as HubResult.Success).value.devices.single()
+    // The IANA zone is a sibling string beside the window objects, which a
+    // Map<String, PeriodWindowDto> could not decode.
+    assertEquals("Asia/Shanghai", device.periodWindows.timeZone)
+    assertEquals("2026-07-18", device.periodWindows.today?.key)
+  }
+
   @Test fun disallowingInsecureHttpBlocksRemoteHttpEndpoint() {
     val nonTestingFactory = HubApiFactory(json)
     val insecureConfig = ConnectionConfig("http://remote.host:17321", "test-secret", allowInsecureHttp = false)
