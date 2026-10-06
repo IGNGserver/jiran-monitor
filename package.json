@@ -1,7 +1,7 @@
 {
   "name": "jiran",
   "productName": "Jiran",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Local-first token, cost and plan-quota monitoring for AI coding tools — desktop app, Docker Compose Hub, headless agent, Android read client.",
   "main": "src/electron/main.js",
   "scripts": {
