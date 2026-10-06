@@ -14,6 +14,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { dayKeyOf, monthKeyOf, normalizeTimeZone } = require('./fleetTimeZone');
 
 const CLIENT_ID = 'claude-desktop';
 const SESSION_ROOT_NAMES = ['local-agent-mode-sessions', 'claude-code-sessions'];
@@ -390,6 +391,12 @@ function windowStartMs(windows) {
 function buildTokscaleJson(windows = {}, options = {}) {
   const sinceMs = windowStartMs(windows);
   const untilMs = Number(windows.untilMs || 0);
+  // A fleet-calendar window is expressed as zone day/month keys rather than
+  // epoch starts: a row belongs to the calendar day it falls on in the active
+  // zone, which is exact even when that day's midnight is not the machine's.
+  const todayKey = String(windows.todayKey || '');
+  const monthKey = String(windows.monthKey || '');
+  const timeZone = normalizeTimeZone(options.timeZone || windows.timeZone);
   const entries = [];
   let allInput = 0;
   let allOutput = 0;
@@ -400,12 +407,14 @@ function buildTokscaleJson(windows = {}, options = {}) {
 
   const allRows = (Array.isArray(options.rows) ? options.rows : collectClaudeDesktopRows(options))
     .filter((row) => {
-      if (sinceMs) {
-        if (!row.createdAt) {
-          if (options.includeUndated !== true) return false;
-        } else if (row.createdAt < sinceMs) {
-          return false;
-        }
+      if (!row.createdAt) {
+        // An undated row can only be placed in the unbounded all-time window.
+        if ((sinceMs || todayKey || monthKey) && options.includeUndated !== true) return false;
+      } else if (todayKey || monthKey) {
+        const key = dayKeyOf(new Date(row.createdAt), timeZone);
+        if (todayKey ? key !== todayKey : key.slice(0, 7) !== monthKey) return false;
+      } else if (sinceMs && row.createdAt < sinceMs) {
+        return false;
       }
       if (untilMs && row.createdAt && row.createdAt > untilMs) return false;
       return true;
@@ -482,20 +491,12 @@ function buildTokscaleJson(windows = {}, options = {}) {
   };
 }
 
-function localDateKey(timestamp) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return '';
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function buildClaudeDesktopHistoryGraph(options = {}) {
   const byDate = new Map();
+  const timeZone = normalizeTimeZone(options.timeZone);
   const rows = Array.isArray(options.rows) ? options.rows : collectClaudeDesktopRows(options);
   for (const row of rows) {
-    const date = row.createdAt ? localDateKey(row.createdAt) : '';
+    const date = row.createdAt ? dayKeyOf(new Date(row.createdAt), timeZone) : '';
     if (!date) continue;
     let day = byDate.get(date);
     if (!day) {
@@ -527,14 +528,13 @@ function buildClaudeDesktopHistoryGraph(options = {}) {
 
 function buildClaudeDesktopPeriods(options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
+  const timeZone = normalizeTimeZone(options.timeZone);
   const rows = Array.isArray(options.rows) ? options.rows : collectClaudeDesktopRows(options);
-  const buildOptions = { rows, pricingByModel: options.pricingByModel };
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
+  const buildOptions = { rows, pricingByModel: options.pricingByModel, timeZone };
 
   return {
-    today: buildTokscaleJson({ todayStart }, buildOptions),
-    month: buildTokscaleJson({ monthStart }, buildOptions),
+    today: buildTokscaleJson({ todayKey: dayKeyOf(now, timeZone) }, buildOptions),
+    month: buildTokscaleJson({ monthKey: monthKeyOf(now, timeZone) }, buildOptions),
     allTime: buildTokscaleJson({ allTimeSince: options.allTimeSince }, { ...buildOptions, includeUndated: true })
   };
 }

@@ -6,6 +6,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { PERIODS, normalizePeriod } = require('./usage');
 const { filterReasonixSyntheticSessions, isReasonixSyntheticSession } = require('./reasonixSessionGuard');
 const { readJson, sharedDataDir, writeJsonAtomic } = require('./config');
+const { dayKeyOf, monthKeyOf, normalizeTimeZone } = require('./fleetTimeZone');
 
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
@@ -53,18 +54,15 @@ function sessionUsageArchiveDate(deviceRecord, fallback = new Date()) {
   return Number.isNaN(collectedAt.getTime()) ? toDate(fallback) : collectedAt;
 }
 
-function pad2(value) {
-  return String(value).padStart(2, '0');
+// The calendar day/month an instant falls on, in the active fleet zone ('' =
+// this machine's own zone). Every archive window key is produced here so the
+// archive can never re-inject a session into a day the fleet has already left.
+function localDay(dateValue, timeZone = '') {
+  return dayKeyOf(toDate(dateValue), normalizeTimeZone(timeZone));
 }
 
-function localDay(dateValue) {
-  const date = toDate(dateValue);
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
-}
-
-function localMonth(dateValue) {
-  const date = toDate(dateValue);
-  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
+function localMonth(dateValue, timeZone = '') {
+  return monthKeyOf(toDate(dateValue), normalizeTimeZone(timeZone));
 }
 
 // Every caller feeds this function a session that has already been through
@@ -105,10 +103,11 @@ function hasSessionUsage(session) {
   return numberValue(session?.totalTokens) > 0 || numberValue(session?.costUsd) > 0;
 }
 
-function normalizeSessionUsageArchive(value) {
+function normalizeSessionUsageArchive(value, options = {}) {
   const source = value?.sessions && typeof value.sessions === 'object' ? value.sessions : value;
   const normalized = { version: 1, sessions: {} };
   if (!source || typeof source !== 'object') return normalized;
+  const timeZone = normalizeTimeZone(options.timeZone);
   // Already canonical: the marker is only set by the branch at the end of this
   // function, by captureSessionUsageArchive (which only ever adds entries that
   // came out of normalizePeriod), and by resetSessionUsageArchive.
@@ -124,8 +123,8 @@ function normalizeSessionUsageArchive(value) {
       client: '',
       sessionId: '',
       capturedAt: toDate(rawEntry.capturedAt).toISOString(),
-      day: String(rawEntry.day || localDay(rawEntry.capturedAt)),
-      month: String(rawEntry.month || localMonth(rawEntry.capturedAt)),
+      day: String(rawEntry.day || localDay(rawEntry.capturedAt, timeZone)),
+      month: String(rawEntry.month || localMonth(rawEntry.capturedAt, timeZone)),
       periodWindows: {},
       periods: {}
     };
@@ -142,8 +141,8 @@ function normalizeSessionUsageArchive(value) {
       entry.periodWindows[periodName] = {
         capturedAt: toDate(rawWindow.capturedAt || rawEntry.capturedAt).toISOString()
       };
-      if (periodName === 'today') entry.periodWindows[periodName].day = String(rawWindow.day || rawEntry.day || localDay(rawEntry.capturedAt));
-      if (periodName === 'month') entry.periodWindows[periodName].month = String(rawWindow.month || rawEntry.month || localMonth(rawEntry.capturedAt));
+      if (periodName === 'today') entry.periodWindows[periodName].day = String(rawWindow.day || rawEntry.day || localDay(rawEntry.capturedAt, timeZone));
+      if (periodName === 'month') entry.periodWindows[periodName].month = String(rawWindow.month || rawEntry.month || localMonth(rawEntry.capturedAt, timeZone));
     }
 
     if (!entry.client || !entry.sessionId || Object.keys(entry.periods).length === 0) continue;
@@ -153,8 +152,9 @@ function normalizeSessionUsageArchive(value) {
   return markSessionArchiveNormalized(normalized);
 }
 
-function captureSessionUsageArchive(existingArchive, deviceRecord, capturedAt = new Date()) {
-  const archive = normalizeSessionUsageArchive(existingArchive);
+function captureSessionUsageArchive(existingArchive, deviceRecord, capturedAt = new Date(), options = {}) {
+  const timeZone = normalizeTimeZone(options.timeZone);
+  const archive = normalizeSessionUsageArchive(existingArchive, { timeZone });
   if (!deviceRecord || typeof deviceRecord !== 'object') return archive;
 
   const captureDate = toDate(capturedAt);
@@ -168,29 +168,29 @@ function captureSessionUsageArchive(existingArchive, deviceRecord, capturedAt = 
         client: session.client,
         sessionId: session.sessionId,
         capturedAt: captureDate.toISOString(),
-        day: localDay(captureDate),
-        month: localMonth(captureDate),
+        day: localDay(captureDate, timeZone),
+        month: localMonth(captureDate, timeZone),
         periodWindows: {},
         periods: {}
       };
       const nextSession = clone(session);
       const window = entry.periodWindows?.[periodName] || {};
       const sameWindow = periodName === 'today'
-        ? window.day === localDay(captureDate)
+        ? window.day === localDay(captureDate, timeZone)
         : periodName === 'month'
-          ? window.month === localMonth(captureDate)
+          ? window.month === localMonth(captureDate, timeZone)
           : true;
       if (sameJson(entry.periods[periodName], nextSession) && sameWindow) continue;
       entry.client = session.client;
       entry.sessionId = session.sessionId;
       entry.capturedAt = captureDate.toISOString();
-      entry.day = localDay(captureDate);
-      entry.month = localMonth(captureDate);
+      entry.day = localDay(captureDate, timeZone);
+      entry.month = localMonth(captureDate, timeZone);
       entry.periods[periodName] = nextSession;
       entry.periodWindows = entry.periodWindows || {};
       entry.periodWindows[periodName] = { capturedAt: captureDate.toISOString() };
-      if (periodName === 'today') entry.periodWindows[periodName].day = localDay(captureDate);
-      if (periodName === 'month') entry.periodWindows[periodName].month = localMonth(captureDate);
+      if (periodName === 'today') entry.periodWindows[periodName].day = localDay(captureDate, timeZone);
+      if (periodName === 'month') entry.periodWindows[periodName].month = localMonth(captureDate, timeZone);
       archive.sessions[archiveKey] = entry;
     }
   }
@@ -324,15 +324,16 @@ function addArchivedSession(period, session) {
   applySessionContribution(period, computeSessionContribution(archived));
 }
 
-function shouldApplyPeriod(periodName, entry, now) {
+function shouldApplyPeriod(periodName, entry, now, timeZone = '') {
   const window = entry?.periodWindows?.[periodName] || {};
-  if (periodName === 'today') return (window.day || entry.day) === localDay(now);
-  if (periodName === 'month') return (window.month || entry.month) === localMonth(now);
+  if (periodName === 'today') return (window.day || entry.day) === localDay(now, timeZone);
+  if (periodName === 'month') return (window.month || entry.month) === localMonth(now, timeZone);
   return periodName === 'allTime';
 }
 
 function applySessionUsageArchive(summary, archive, options = {}) {
-  const normalizedArchive = normalizeSessionUsageArchive(archive);
+  const timeZone = normalizeTimeZone(options.timeZone);
+  const normalizedArchive = normalizeSessionUsageArchive(archive, { timeZone });
   const now = toDate(options.now);
   const next = clone(summary);
   const periodContainer = next.periods && typeof next.periods === 'object' ? next.periods : next;
@@ -351,7 +352,7 @@ function applySessionUsageArchive(summary, archive, options = {}) {
   for (const entry of Object.values(normalizedArchive.sessions)) {
     for (const periodName of PERIODS) {
       const session = entry.periods?.[periodName];
-      if (!session || !hasSessionUsage(session) || !shouldApplyPeriod(periodName, entry, now)) continue;
+      if (!session || !hasSessionUsage(session) || !shouldApplyPeriod(periodName, entry, now, timeZone)) continue;
       addArchivedSession(targetFor(periodName), session);
     }
   }
@@ -393,12 +394,12 @@ function sessionUsageArchivePath(options = {}) {
 
 function readSessionUsageArchive(options = {}) {
   const read = options.readJson || readJson;
-  return normalizeSessionUsageArchive(read(sessionUsageArchivePath(options), {}));
+  return normalizeSessionUsageArchive(read(sessionUsageArchivePath(options), {}), options);
 }
 
 function writeSessionUsageArchive(archive, options = {}) {
   const write = options.writeJsonAtomic || writeJsonAtomic;
-  write(sessionUsageArchivePath(options), normalizeSessionUsageArchive(archive));
+  write(sessionUsageArchivePath(options), normalizeSessionUsageArchive(archive, options));
 }
 
 function clearSessionUsageArchive(options = {}) {

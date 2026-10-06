@@ -62,6 +62,26 @@ test('collectUsageOnce stamps updatedAt and periodWindows from one injected cloc
   assert.deepEqual(summary.periodWindows, computePeriodWindows(now));
 });
 
+// A device that learned a fleet calendar stamps its windows in that zone, not
+// its own: the same injected instant must produce the fleet day and the fleet
+// midnight, which is what keeps every device's window closing together.
+test('collectUsageOnce buckets periodWindows in the requested fleet zone', async () => {
+  const now = new Date('2026-10-05T12:00:00.000Z');
+  const summary = await collectUsageOnce({
+    clients: '',
+    deviceId: 'device-a',
+    now,
+    timeZone: 'Asia/Shanghai',
+    historyEnabled: false,
+    limitsEnabled: false
+  });
+  assert.deepEqual(summary.periodWindows, computePeriodWindows(now, 'Asia/Shanghai'));
+  assert.equal(summary.periodWindows.today.key, '2026-10-05');
+  assert.equal(summary.periodWindows.today.endsAt, '2026-10-05T16:00:00.000Z');
+  assert.equal(summary.periodWindows.month.key, '2026-10');
+  assert.equal(summary.periodWindows.timeZone, 'Asia/Shanghai');
+});
+
 // The wire's `key` is a device-local day but was never accompanied by the zone
 // that produced it, even though normalizePeriodWindows() already validates a
 // `timeZone`. Stamp it so a consumer can tell which calendar the key belongs to.

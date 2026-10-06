@@ -22,6 +22,7 @@ const { postSyncPayload } = require('../shared/syncPayload');
 const { createSyncSummaryTransformer } = require('../shared/syncSummary');
 const { withSyncUploadMetadata } = require('../shared/syncUploadSink');
 const { requireSafeHubTransport } = require('../shared/hubTransport');
+const { learnFleetTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
 const { runAgent, runAgentOnce } = require('./runtime');
 
 loadDotEnv();
@@ -86,6 +87,10 @@ const usageOptions = usageConfigFromSource(usageSource, {
 
 const syncSummaryTransformer = createSyncSummaryTransformer({
   canWriteSessionUsageArchive: !dryRun,
+  // The archive is keyed by the active fleet calendar; the transformer resolves
+  // it per transform so a zone learned from the Hub takes effect without a
+  // restart (a change also drops its in-memory copy).
+  timeZone: () => resolveFleetTimeZone(),
   onArchiveError: (error, operation) => console.error(`[session-archive] ${operation} failed: ${error.message}`)
 });
 
@@ -122,7 +127,16 @@ async function postUsage(summary, context = {}) {
   deviceIdentity = { version: 1, lastPostedDeviceId: summary.deviceId };
   try { writeDeviceIdentity(summary.deviceId); }
   catch (error) { console.warn(`[identity] state write failed: ${error.message}`); }
-  return response.json();
+  const payload = await response.json();
+  // The Hub is the one place the fleet calendar is configured; remember what it
+  // advertised so the next collector tick buckets in it. A local state-write
+  // failure must not turn an accepted upload into a reported sync failure.
+  try {
+    if (payload && typeof payload === 'object') learnFleetTimeZone(payload.fleetTimeZone);
+  } catch (error) {
+    console.warn(`[fleet-timezone] could not record the Hub calendar: ${error.message}`);
+  }
+  return payload;
 }
 
 async function deliver(summary, context = {}) {

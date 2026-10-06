@@ -62,11 +62,14 @@ Example response:
   },
   "deviceCount": 2,
   "secretRequired": true,
+  "fleetTimeZone": "Asia/Shanghai",
   "now": "2026-05-18T00:00:00.000Z"
 }
 ```
 
 `version` remains `1` for compatibility. `apiVersion` versions the capability/authentication contract. The Docker Compose Hub exposes the full capability set shown above.
+
+`fleetTimeZone` is present only when the operator configured the Hub's fleet calendar (`TOKEN_MONITOR_FLEET_TIMEZONE` / `JIRAN_FLEET_TIMEZONE`, an IANA name). It is the one calendar every syncing device buckets its `today` / `month` windows into: the Hub advertises it here, on every ingest response, and on `/api/stats`, and a device that learns it aligns its own day boundaries (including tokscale's bucketing zone) to it. An absent field means each device keeps its own OS calendar, which is the pre-fleet behaviour.
 
 ## `GET /api/capabilities`
 
@@ -96,6 +99,9 @@ First-party agents send `Prefer: return=minimal` and receive only
 multi-device snapshot when no SSE consumer needs it. For compatibility, callers
 that omit the header still receive the legacy `stats` field; when SSE consumers
 are connected, the Hub computes one snapshot and reuses it for the broadcast.
+When a fleet calendar is configured, both response shapes carry `fleetTimeZone`
+(the minimal body gains only that one field), which is how a device learns the
+Hub's calendar without a second request.
 
 Example payload:
 
@@ -235,7 +241,7 @@ Current agents and the desktop app include `osName` and, when known, `osVersion`
 
 `syncUploadIntervalMs` is optional. A remote-hub desktop app or headless agent includes `0` for live uploads or the selected fixed interval in milliseconds (`600000`, `1200000`, or `1800000`). The hub uses a positive interval to keep the device and its limits fresh for at least twice the upload interval; omitted or `0` values retain the configured `staleAfterMs` behavior. Local collection remains independent of upload cadence.
 
-`periodWindows` is optional. Agents and the desktop app stamp each snapshot with the UTC instant its `today`/`month` windows end, computed in the device's own local time (`endsAt` = next local midnight / next local month start; `key` is the device-local day/month for reference), plus the IANA `timeZone` that produced the keys when the host can resolve one (a payload that omits it is still accepted). The hub uses `endsAt` to expire a device's `today`/`month` from both the aggregate and the per-device view once `now >= endsAt`, so a device that goes offline before re-posting does not keep contributing or displaying a stale day/month snapshot (`allTime` never expires). Payloads without `periodWindows` fall back to a UTC day/month comparison against `updatedAt`.
+`periodWindows` is optional. Agents and the desktop app stamp each snapshot with the UTC instant its `today`/`month` windows end, computed in the device's own local time (`endsAt` = next local midnight / next local month start; `key` is the day/month for reference), plus the IANA `timeZone` that produced the keys when the host can resolve one (a payload that omits it is still accepted). When the Hub advertised a `fleetTimeZone`, the device uses that calendar instead of its own OS zone — the shape is identical, only the zone that defines `key`/`endsAt` changes — so every device's window closes at the same instant. The hub uses `endsAt` to expire a device's `today`/`month` from both the aggregate and the per-device view once `now >= endsAt`, so a device that goes offline before re-posting does not keep contributing or displaying a stale day/month snapshot (`allTime` never expires). Aligned devices therefore expire together at the fleet's midnight instead of dropping out one at a time at their own local midnights. Payloads without `periodWindows` fall back to a UTC day/month comparison against `updatedAt`.
 
 `limits` is optional for mixed-version compatibility but is ignored by current device ingest. AI Tool Limits are owned and refreshed by the Hub account service; current agents and the desktop app do not probe local provider accounts or upload credentials. Raw OAuth credentials, access tokens, refresh tokens, and provider response bodies must never be sent.
 
@@ -261,6 +267,7 @@ Returns aggregate stats for the dashboard and desktop client.
 Response includes:
 
 - `staleAfterMs`, the effective Hub threshold used to recompute device and provider freshness
+- `fleetTimeZone`, the Hub's configured fleet calendar (IANA name), present only when one is configured. It tells clients which calendar the `periods` day/month windows and `historyPreview` day keys belong to; clients that compute calendar presets (昨日 / 本周 / custom labels) must use it instead of their own zone, or they ask a different question than the devices answered
 - `periods.today`
 - `periods.month`
 - `periods.allTime`
@@ -311,8 +318,9 @@ Retained: top-level `periods.*` headline totals and the full client/model/
 provenance maps (`clients`, `clientCosts`, `models`, `modelCosts`,
 `clientModels`, `clientModelCosts`, `clientEstimated`, `clientCredits`,
 `clientMeasurements`, `projects`), every device identity and staleness field,
-`limits`, `limitsAuthority`, `historyPreview`, `deviceCount`, and the
-`historyRevision` / `deviceHistoryRevision` invalidation tokens.
+`limits`, `limitsAuthority`, `historyPreview`, `fleetTimeZone` (when configured),
+`deviceCount`, and the `historyRevision` / `deviceHistoryRevision` invalidation
+tokens.
 
 This is the difference between a first paint measured in tens of kilobytes and
 one measured in megabytes on a fleet whose devices retain hundreds of sessions
@@ -569,7 +577,7 @@ Preferred query parameters (local calendar days, same family as day/month tabs a
 - `startDate` / `endDate` — inclusive `YYYY-MM-DD` bounds (aliases: `since` / `until`)
 - `startHour` / `endHour` — optional `0–23` (defaults `0` / `23`). Hours are accepted for UI labels and future precision, but **totals are day-rounded**: the hub sums whole local days in `[startDate, endDate]`.
 
-Callers should send **both** the day keys and the instants they name. The hub aggregates `history_daily` on the caller's `startDate`/`endDate` labels — which is what makes the window correct when the browser and the hub host sit in different timezones — and filters the `usage_events` ledger / head fill on the caller's absolute `from`/`to`. When only `from`/`to` are provided (legacy callers, e.g. a cached client bundle), the hub maps them to inclusive local calendar day keys on the hub host unless a valid IANA `tz` is supplied, in which case the keys are derived in that zone (`to` is exclusive, so the last included day is the calendar day of `to - 1ms`). An absent or invalid `tz` keeps the host-clock fallback, which is correct for same-zone callers.
+Callers should send **both** the day keys and the instants they name. The hub aggregates `history_daily` on the caller's `startDate`/`endDate` labels — which is what makes the window correct when the browser and the hub host sit in different timezones — and filters the `usage_events` ledger / head fill on the caller's absolute `from`/`to`. When only `from`/`to` are provided (legacy callers, e.g. a cached client bundle), the hub maps them to inclusive calendar day keys in a valid IANA `tz` when one is supplied, else in the Hub's calendar (`fleetTimeZone` when configured, otherwise the hub host's zone). `to` is exclusive, so the last included day is the calendar day of `to - 1ms`. The host-clock fallback is correct for same-zone callers.
 
 Response:
 

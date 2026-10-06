@@ -484,6 +484,16 @@ function presetRangesEnabled() {
   return capabilities.usageRange !== false;
 }
 
+/**
+ * The calendar the Hub reports its day/month totals in, or '' for this viewer's
+ * own. When a fleet timezone is configured, 昨日/本周 must be computed in it too:
+ * the labels are what the Hub aggregates on, so a viewer in another zone asking
+ * with local labels would get a different window than the numbers shown.
+ */
+function fleetTimeZone() {
+  return String(state.stats?.fleetTimeZone || state.health?.fleetTimeZone || '').trim();
+}
+
 function periodTabs() {
   return PERIOD_TABS.filter((period) => !isPresetRangePeriod(period) || presetRangesEnabled());
 }
@@ -2960,7 +2970,7 @@ function presetRangeKey(rangeWindow) {
  */
 function pendingPresetRangeWindow() {
   if (!presetRangesEnabled()) return null;
-  const rangeWindow = presetRangeWindow(state.prefs.period, new Date());
+  const rangeWindow = presetRangeWindow(state.prefs.period, new Date(), fleetTimeZone());
   if (!rangeWindow) return null;
   if (presetRangeWindowMatches(rangeWindow, state.customRange)) return null;
   const key = presetRangeKey(rangeWindow);
@@ -3129,7 +3139,7 @@ function bindEvents() {
     savePrefs({ period: state.prefs.period });
     animateDataUpdate();
     render();
-    const rangeWindow = presetRangeWindow(period, new Date());
+    const rangeWindow = presetRangeWindow(period, new Date(), fleetTimeZone());
     if (rangeWindow) void loadPresetRange(rangeWindow, { notify: true }).then(() => render());
   });
 

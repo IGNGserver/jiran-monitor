@@ -287,6 +287,7 @@ async function collectWslQoderUsage(home, options, bundle) {
       const periods = buildQoderCnPeriods({
         now: options.now,
         allTimeSince: options.allTimeSince,
+        ...(options.timeZone ? { timeZone: options.timeZone } : {}),
         rows,
         pricingByModel: pricing,
         clientId
@@ -396,6 +397,7 @@ async function collectWslUsage(options = {}, deps = {}) {
         const promaOptions = {
           now,
           allTimeSince,
+          ...(options.timeZone ? { timeZone: options.timeZone } : {}),
           roots: [wslHomePath(home, '.proma/agent-sessions')]
         };
         if (typeof options.resolvePromaPricing === 'function') {

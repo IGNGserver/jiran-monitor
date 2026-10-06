@@ -13,6 +13,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { dayKeyOf, monthKeyOf, normalizeTimeZone } = require('./fleetTimeZone');
 const { createHash } = require('node:crypto');
 
 const PROMA_ROOT = path.join(os.homedir(), '.proma', 'agent-sessions');
@@ -189,6 +190,12 @@ function buildTokscaleJson(windows = {}, options = {}) {
   // overlap agent-session records. Keep parsing limited to the verified
   // agent-session format until conversation attribution is implemented.
   const sinceMs = windowStartMs(windows);
+  // A fleet-calendar window is expressed as zone day/month keys rather than
+  // epoch starts: a row belongs to the calendar day it falls on in the active
+  // zone, which is exact even when that day's midnight is not the machine's.
+  const todayKey = String(windows.todayKey || '');
+  const monthKey = String(windows.monthKey || '');
+  const timeZone = normalizeTimeZone(options.timeZone || windows.timeZone);
   const entries = [];
   let allInput = 0, allOutput = 0, allCacheRead = 0, allCacheWrite = 0, allMessages = 0, allCost = 0;
 
@@ -197,8 +204,13 @@ function buildTokscaleJson(windows = {}, options = {}) {
   // usage from a session that began before midnight.
   const allRows = (Array.isArray(options.rows) ? options.rows : collectPromaRows(options))
     .filter((row) => {
+      // An undated row can only be placed in the unbounded all-time window.
+      if (!row.createdAt) return !sinceMs && !todayKey && !monthKey ? true : options.includeUndated === true;
+      if (todayKey || monthKey) {
+        const key = dayKeyOf(new Date(row.createdAt), timeZone);
+        return todayKey ? key === todayKey : key.slice(0, 7) === monthKey;
+      }
       if (!sinceMs) return true;
-      if (!row.createdAt) return options.includeUndated === true;
       return row.createdAt >= sinceMs;
     });
 
@@ -262,22 +274,14 @@ function buildTokscaleJson(windows = {}, options = {}) {
   };
 }
 
-function localDateKey(timestamp) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return '';
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 // Return raw graph-compatible contributions so collector.js can merge this
 // local adapter with tokscale's graph output through the shared history core.
 function buildPromaHistoryGraph(options = {}) {
   const byDate = new Map();
+  const timeZone = normalizeTimeZone(options.timeZone);
   const rows = Array.isArray(options.rows) ? options.rows : collectPromaRows(options);
   for (const row of rows) {
-    const date = row.createdAt ? localDateKey(row.createdAt) : '';
+    const date = row.createdAt ? dayKeyOf(new Date(row.createdAt), timeZone) : '';
     if (!date) continue; // an undated row cannot be truthfully placed on a day
     let day = byDate.get(date);
     if (!day) {
@@ -315,14 +319,13 @@ function buildPromaHistoryGraph(options = {}) {
  */
 function buildPromaPeriods(options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
+  const timeZone = normalizeTimeZone(options.timeZone);
   const rows = Array.isArray(options.rows) ? options.rows : collectPromaRows(options);
-  const buildOptions = { rows, pricingByModel: options.pricingByModel };
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
+  const buildOptions = { rows, pricingByModel: options.pricingByModel, timeZone };
 
   return {
-    today: buildTokscaleJson({ todayStart }, buildOptions),
-    month: buildTokscaleJson({ monthStart }, buildOptions),
+    today: buildTokscaleJson({ todayKey: dayKeyOf(now, timeZone) }, buildOptions),
+    month: buildTokscaleJson({ monthKey: monthKeyOf(now, timeZone) }, buildOptions),
     allTime: buildTokscaleJson({ allTimeSince: options.allTimeSince }, { ...buildOptions, includeUndated: true })
   };
 }
