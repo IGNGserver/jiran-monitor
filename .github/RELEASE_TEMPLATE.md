@@ -20,11 +20,11 @@
 **Linux AppImage：** 先给执行权限，然后运行：
 
 ```bash
-chmod +x Token-Monitor-*.AppImage
-./Token-Monitor-*.AppImage
+chmod +x Jiran-*.AppImage
+./Jiran-*.AppImage
 ```
 
-**Linux Debian 包：** 双击交给 App Center 安装，或执行 `sudo apt install ./Token-Monitor-{{version}}.deb`。按 [docs/RELEASING.md]({{repositoryUrl}}/blob/main/docs/RELEASING.md) 配好本项目的 APT 源之后，App Center 会把新版本直接显示为可升级。
+**Linux Debian 包：** 双击交给 App Center 安装，或执行 `sudo apt install ./Jiran-{{version}}.deb`。按 [docs/RELEASING.md]({{repositoryUrl}}/blob/main/docs/RELEASING.md) 配好本项目的 APT 源之后，App Center 会把新版本直接显示为可升级。
 
 **Android：** APK 是 Hub 的只读客户端，本身不采集数据，所以需要先有一个 Docker Compose Hub。签名使用长期保存的密钥，安装新版可直接覆盖旧版。
 
