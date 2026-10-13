@@ -2071,6 +2071,10 @@ function effectiveWindowSurface(source = settings) {
       return profile.kind === 'mica' ? 'mica' : 'acrylic';
     }
   }
+  if (process.platform === 'darwin') {
+    const style = macosGlassStyleFor(source);
+    return style === MACOS_GLASS_LIQUID ? 'liquid-glass' : 'vibrancy';
+  }
   return 'transparent';
 }
 
@@ -3374,7 +3378,8 @@ function appDiagnosticsInfo() {
     sharedDataDir: sharedDataDir(),
     loginItemSupported: loginItemEnabledHere(),
     loginItemOpenAtLogin: currentLoginItemState(),
-    effectiveWindowSurface: effectiveWindowSurface(settings)
+    effectiveWindowSurface: effectiveWindowSurface(settings),
+    macosGlassLiquidAvailable: macosLiquidGlassIsAvailable()
   };
 }
 

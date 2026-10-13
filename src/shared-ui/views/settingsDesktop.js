@@ -24,10 +24,10 @@ import { tr, escapeHtml, appState, settingsOptionList } from '../core/viewContex
 import { CURRENCY_OPTIONS, LANGUAGE_OPTIONS, THEME_OPTIONS } from '../core/data.js';
 
 // One dropdown for the whole window-material decision. The settings document
-// stores it as the two legacy keys (systemGlass boolean + windowsBackdrop
-// material), so the UI folds and unfolds them here rather than inventing a new
-// storage shape.
-const SURFACE_OPTIONS = [
+// stores it as the legacy keys (systemGlass boolean + windowsBackdrop on Windows,
+// macosGlassStyle on macOS), so the UI folds and unfolds them here rather than inventing
+// a new storage shape.
+const WINDOWS_SURFACE_OPTIONS = [
   ['regular', 'settings.surface.regular'],
   ['transparent', 'settings.surface.transparent'],
   ['acrylic', 'settings.surface.acrylic'],
@@ -43,24 +43,46 @@ function optionLabels(pairs) {
   return pairs.map(([value, key]) => [value, tr(key)]);
 }
 
-// Fold the stored keys into the single dropdown value. Non-Windows hosts cannot
-// apply a background material, so acrylic/mica collapse onto transparent there.
+// Fold the stored keys into the single dropdown value.
 export function surfaceValueFromSettings(settings = {}, info = {}) {
-  const isWindows = info.platform === 'win32';
   if (settings.systemGlass === false) return 'regular';
-  if (isWindows && settings.windowsBackdrop === 'acrylic') return 'acrylic';
-  if (isWindows && settings.windowsBackdrop === 'mica') return 'mica';
-  if (isWindows && settings.windowsBackdrop === 'transparent') return 'transparent';
+  if (info.platform === 'win32') {
+    if (settings.windowsBackdrop === 'acrylic') return 'acrylic';
+    if (settings.windowsBackdrop === 'mica') return 'mica';
+    if (settings.windowsBackdrop === 'transparent') return 'transparent';
+    return 'transparent';
+  }
+  if (info.platform === 'darwin') {
+    if (settings.macosGlassStyle === 'liquid-glass' && info.macosGlassLiquidAvailable !== false) {
+      return 'liquid-glass';
+    }
+    if (settings.macosGlassStyle === 'vibrancy') {
+      return 'vibrancy';
+    }
+    // If settings had an explicit Windows-only material or unconfigured glass,
+    // let transparent pass through if windowsBackdrop was explicitly transparent or unmapped
+    if (settings.windowsBackdrop === 'transparent' || settings.windowsBackdrop === 'mica' || settings.windowsBackdrop === 'acrylic') {
+      return 'transparent';
+    }
+    return 'vibrancy';
+  }
   return 'transparent';
 }
 
-// Unfold the dropdown value into the settings patch the main process already
-// normalizes. Acrylic/mica are offered only on Windows; selecting them
-// elsewhere stores the plain glass surface.
+// Unfold the dropdown value into the settings patch the main process normalizes.
 export function settingsPatchForSurface(surface) {
   const value = String(surface || 'transparent');
   if (value === 'regular') return { systemGlass: false };
-  return { systemGlass: true, ...(value === 'acrylic' || value === 'mica' || value === 'transparent' ? { windowsBackdrop: value } : {}) };
+  if (value === 'liquid-glass') {
+    return { systemGlass: true, macosGlassStyle: 'liquid-glass' };
+  }
+  if (value === 'vibrancy') {
+    return { systemGlass: true, macosGlassStyle: 'vibrancy' };
+  }
+  return {
+    systemGlass: true,
+    ...(value === 'acrylic' || value === 'mica' || value === 'transparent' ? { windowsBackdrop: value } : {})
+  };
 }
 
 function checkbox(name, labelKey, checked, { description = '', id = '' } = {}) {
@@ -102,8 +124,21 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   const groups = [];
 
   // --- Display -------------------------------------------------------------
-  const surfaceOptions = SURFACE_OPTIONS
-    .filter(([value]) => isWindows || (value !== 'acrylic' && value !== 'mica'));
+  let surfaceOptions = [
+    ['regular', 'settings.surface.regular'],
+    ['transparent', 'settings.surface.transparent']
+  ];
+  if (isWindows) {
+    surfaceOptions = WINDOWS_SURFACE_OPTIONS;
+  } else if (info.platform === 'darwin') {
+    surfaceOptions = [
+      ['regular', 'settings.surface.regular'],
+      ['vibrancy', 'settings.surface.frostedGlass']
+    ];
+    if (info.macosGlassLiquidAvailable !== false) {
+      surfaceOptions.push(['liquid-glass', 'settings.surface.liquidGlass']);
+    }
+  }
   const displayRows = [];
   displayRows.push(dropdownField('language', 'settings.language', LANGUAGE_OPTIONS,
     settings.language || 'auto', { id: 'desktopLanguageInput' }));

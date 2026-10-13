@@ -26,7 +26,7 @@ configureTransport(createIpcTransport(bridge));
 function applyWindowSurfaceClass(surface) {
   const target = document.documentElement;
   const body = document.body;
-  const valid = ['regular', 'transparent', 'acrylic', 'mica'].includes(surface) ? surface : 'regular';
+  const valid = ['regular', 'transparent', 'acrylic', 'mica', 'vibrancy', 'liquid-glass'].includes(surface) ? surface : 'regular';
   target.dataset.windowSurface = valid;
   body.dataset.windowSurface = valid;
 }
