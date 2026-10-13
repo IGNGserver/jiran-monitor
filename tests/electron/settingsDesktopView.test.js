@@ -122,18 +122,36 @@ test('the window material folds into the legacy (systemGlass, windowsBackdrop) p
   assert.equal(surfaceValueFromSettings({ systemGlass: true, windowsBackdrop: 'transparent' }, { platform: 'win32' }), 'transparent');
   assert.equal(surfaceValueFromSettings({ systemGlass: true, windowsBackdrop: 'mica' }, { platform: 'darwin' }), 'transparent',
     'a material another platform cannot apply reads as plain transparency');
+  assert.equal(surfaceValueFromSettings({ systemGlass: true, macosGlassStyle: 'liquid-glass' }, { platform: 'darwin', macosGlassLiquidAvailable: true }), 'liquid-glass');
+  assert.equal(surfaceValueFromSettings({ systemGlass: true, macosGlassStyle: 'liquid-glass' }, { platform: 'darwin', macosGlassLiquidAvailable: false }), 'vibrancy');
+  assert.equal(surfaceValueFromSettings({ systemGlass: true, macosGlassStyle: 'vibrancy' }, { platform: 'darwin' }), 'vibrancy');
+  assert.deepEqual(settingsPatchForSurface('liquid-glass'), { systemGlass: true, macosGlassStyle: 'liquid-glass' });
+  assert.deepEqual(settingsPatchForSurface('vibrancy'), { systemGlass: true, macosGlassStyle: 'vibrancy' });
 });
 
-test('acrylic and mica are offered only on Windows', () => {
+test('acrylic and mica are offered only on Windows, while liquid and frosted glass are offered on macOS', () => {
   const { renderDesktopSettings } = loadView();
   const win = renderDesktopSettings({}, { platform: 'win32' });
   assert.ok(win.includes('value="acrylic"'), 'Windows offers acrylic');
   assert.ok(win.includes('value="mica"'), 'Windows offers mica');
-  for (const platform of ['darwin', 'linux']) {
-    const html = renderDesktopSettings({}, { platform });
-    assert.ok(!html.includes('value="acrylic"'), `${platform} does not offer acrylic`);
-    assert.ok(!html.includes('value="mica"'), `${platform} does not offer mica`);
-  }
+  assert.ok(!win.includes('value="liquid-glass"'), 'Windows does not offer liquid glass');
+  assert.ok(!win.includes('value="vibrancy"'), 'Windows does not offer vibrancy');
+
+  const macModern = renderDesktopSettings({}, { platform: 'darwin', macosGlassLiquidAvailable: true });
+  assert.ok(!macModern.includes('value="acrylic"'), 'macOS does not offer acrylic');
+  assert.ok(!macModern.includes('value="mica"'), 'macOS does not offer mica');
+  assert.ok(macModern.includes('value="vibrancy"'), 'macOS offers frosted glass / vibrancy');
+  assert.ok(macModern.includes('value="liquid-glass"'), 'macOS 26+ offers liquid glass');
+
+  const macLegacy = renderDesktopSettings({}, { platform: 'darwin', macosGlassLiquidAvailable: false });
+  assert.ok(macLegacy.includes('value="vibrancy"'), 'legacy macOS offers frosted glass');
+  assert.ok(!macLegacy.includes('value="liquid-glass"'), 'legacy macOS does not offer liquid glass');
+
+  const linux = renderDesktopSettings({}, { platform: 'linux' });
+  assert.ok(!linux.includes('value="acrylic"'), 'Linux does not offer acrylic');
+  assert.ok(!linux.includes('value="mica"'), 'Linux does not offer mica');
+  assert.ok(!linux.includes('value="liquid-glass"'), 'Linux does not offer liquid glass');
+  assert.ok(!linux.includes('value="vibrancy"'), 'Linux does not offer vibrancy');
 });
 
 test('start at login is hidden when the platform has no login item', () => {

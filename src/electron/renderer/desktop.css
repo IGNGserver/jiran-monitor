@@ -271,12 +271,12 @@ body.is-mac fluent-button, body.is-mac fluent-text-input { -webkit-app-region: n
    ========================================================================== */
 
 /* 1. Base Reset & Pass-through for translucent/material window modes */
-html:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"]),
-body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"]) {
+html:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"], [data-window-surface="vibrancy"], [data-window-surface="liquid-glass"]),
+body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"], [data-window-surface="vibrancy"], [data-window-surface="liquid-glass"]) {
   background: transparent !important;
 }
 
-body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"]) .desktop-window-strip {
+body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"], [data-window-surface="vibrancy"], [data-window-surface="liquid-glass"]) .desktop-window-strip {
   background: transparent;
   backdrop-filter: none;
 }
@@ -422,9 +422,120 @@ body[data-window-surface="transparent"] .desktop-sync-status {
   border-color: color-mix(in srgb, var(--colorNeutralStroke1) 70%, transparent);
 }
 
+/* 5. macOS Frosted Glass (Vibrancy) - Classic Deep Diffusion Glass */
+body[data-window-surface="vibrancy"] .sidebar {
+  background: color-mix(in srgb, var(--colorNeutralBackground2) 68%, transparent);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border-right: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
+}
+
+body[data-window-surface="vibrancy"] .main {
+  background: transparent;
+}
+
+body[data-window-surface="vibrancy"] .scope-commandbar {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 78%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1) 65%, transparent);
+  box-shadow: var(--shadow4);
+}
+
+body[data-window-surface="vibrancy"] .hero {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 80%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1) 70%, transparent);
+  box-shadow: var(--shadow4);
+}
+
+body[data-window-surface="vibrancy"] .panel {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 86%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1) 75%, transparent);
+  box-shadow: var(--shadow4);
+}
+
+body[data-window-surface="vibrancy"] .overview-breakdowns .panel {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body[data-window-surface="vibrancy"] .overview-breakdowns > .panel + .panel {
+  border-left: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
+}
+
+body[data-window-surface="vibrancy"] .desktop-sync-status {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 80%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1) 65%, transparent);
+}
+
+/* 6. macOS 26+ Liquid Glass - Crystalline Specular & Translucent Refraction */
+body[data-window-surface="liquid-glass"] .sidebar {
+  background: color-mix(in srgb, var(--colorNeutralBackground2) 50%, transparent);
+  backdrop-filter: blur(32px) saturate(160%);
+  -webkit-backdrop-filter: blur(32px) saturate(160%);
+  border-right: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 40%, transparent);
+}
+
+body[data-window-surface="liquid-glass"] .main {
+  background: transparent;
+}
+
+body[data-window-surface="liquid-glass"] .scope-commandbar {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 62%, transparent);
+  backdrop-filter: blur(28px) saturate(175%);
+  -webkit-backdrop-filter: blur(28px) saturate(175%);
+  border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+body[data-window-surface="liquid-glass"] .hero {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 75%, transparent);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 60%, transparent);
+  box-shadow: 0 6px 20px -3px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+body[data-window-surface="liquid-glass"] .panel {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 84%, transparent);
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+  border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 70%, transparent);
+  box-shadow: var(--shadow8);
+}
+
+body[data-window-surface="liquid-glass"] .overview-breakdowns .panel {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body[data-window-surface="liquid-glass"] .overview-breakdowns > .panel + .panel {
+  border-left: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
+}
+
+body[data-window-surface="liquid-glass"] .desktop-sync-status {
+  background: color-mix(in srgb, var(--colorNeutralBackground1) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 55%, transparent);
+  box-shadow: 0 2px 8px -1px rgba(0, 0, 0, 0.06), inset 0 1px 1px 0 rgba(255, 255, 255, 0.35);
+}
+
 /* Transient popovers & drawers in translucent modes maintain higher contrast */
-body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"]) .drawer-panel,
-body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"]) .popover-card {
+body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"], [data-window-surface="vibrancy"], [data-window-surface="liquid-glass"]) .drawer-panel,
+body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [data-window-surface="mica"], [data-window-surface="vibrancy"], [data-window-surface="liquid-glass"]) .popover-card {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 94%, transparent);
   backdrop-filter: blur(32px);
   -webkit-backdrop-filter: blur(32px);
