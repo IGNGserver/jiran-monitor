@@ -48,6 +48,7 @@
       "src/shared/**/*",
       "src/shared-ui/**/*",
       "assets/icon.png",
+      "assets/icon-mac.png",
       "assets/icons/**/*",
       "package.json",
       "!node_modules/**/*.map",
@@ -80,7 +81,7 @@
       "forceCodeSigning": false,
       "minimumSystemVersion": "12.0",
       "category": "public.app-category.developer-tools",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon-mac.png"
     },
     "win": {
       "target": [

@@ -128,9 +128,16 @@ const RELEASE_URL_PREFIXES = [
 ];
 const WIN_ICON_PATH = path.join(__dirname, '..', '..', 'build', 'icons', 'icon.ico');
 const PNG_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+// The macOS Dock tile must sit inside Apple's 824/1024 icon grid or it reads
+// ~24% larger than every neighbouring app; Windows/Linux have no such grid and
+// keep the full-bleed render, so the Dock icon is a separate asset.
+const MAC_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon-mac.png');
 const APP_ICON_PATH = process.platform === 'win32' && fs.existsSync(WIN_ICON_PATH)
   ? WIN_ICON_PATH
   : PNG_ICON_PATH;
+const DOCK_ICON_PATH = process.platform === 'darwin' && fs.existsSync(MAC_ICON_PATH)
+  ? MAC_ICON_PATH
+  : APP_ICON_PATH;
 
 // A normal desktop window: big enough that the shared UI's sidebar layout has
 // room (its narrowest breakpoint is 860px), with a floor the user cannot drag
@@ -3438,7 +3445,7 @@ function buildApplicationMenu() {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
+  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(DOCK_ICON_PATH);
   ensureSettingsLoaded();
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
