@@ -42,6 +42,7 @@ const WSL_DATA_MARKERS = [
   '.grok/sessions',
   '.copilot/otel',
   '.gemini/antigravity-cli/conversations',
+  '.gemini/antigravity/conversations',
   '.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks',
   '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/tasks',
   '.pi/agent/sessions',
@@ -128,6 +129,10 @@ const MARKER_CLIENTS = {
   // Antigravity CLI's own parse-local root, mapped to the umbrella `antigravity`
   // id we track; tokscaleClientFilter widens the scan to the antigravity-cli id.
   '.gemini/antigravity-cli/conversations': 'antigravity',
+  // The IDE's own SQLite session store (tokscale's `antigravity-extension` id,
+  // folded by tokscaleClientFilter like the CLI root above). A WSL home whose
+  // only Antigravity artifact is the IDE store still deserves a scan.
+  '.gemini/antigravity/conversations': 'antigravity',
   '.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks': 'cline',
   '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/tasks': 'cline',
   '.pi/agent/sessions': 'pi',

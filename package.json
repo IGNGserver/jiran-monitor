@@ -175,7 +175,7 @@
     "mysql2": "^3.24.4",
     "semver": "^7.8.5",
     "tar": "^7.5.22",
-    "tokscale": "^4.17.0",
+    "tokscale": "^4.19.1",
     "undici": "^7.29.1"
   },
   "overrides": {
