@@ -65,6 +65,13 @@ test('every tracked client is accepted by bundled tokscale', () => {
     return !supported.has(tokscaleSpellings[client] || client);
   });
   assert.deepEqual(unsupported, []);
+  // Alias ids ride the same --client enum, and an unknown id fails the whole
+  // scan — so a stale alias (a rename upstream, a version pin that predates the
+  // id) breaks every client in the call, not just the aliased one. 4.19's
+  // `antigravity-extension` is the current case.
+  const { TOKSCALE_CLIENT_ALIASES } = require('../../src/shared/collector');
+  const unsupportedAliases = Object.values(TOKSCALE_CLIENT_ALIASES).flat().filter((alias) => !supported.has(alias));
+  assert.deepEqual(unsupportedAliases, []);
   // Neither Qoder site is in the enum at all, so passing one through would fail
   // the whole scan for every other client in the same call. That is the reason
   // LOCAL_PARSED_CLIENTS in collector.js has to filter both ids out of the CSV,

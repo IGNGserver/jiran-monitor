@@ -29,8 +29,11 @@ test('other tracked ids pass through unchanged', () => {
   assert.equal(tokscaleClientFilter('claude,commandcode'), 'claude,commandcode');
 });
 
-test('antigravity still widens to antigravity-cli', () => {
-  assert.equal(tokscaleClientFilter('antigravity'), 'antigravity,antigravity-cli');
+test('antigravity widens to its CLI and IDE-extension sub-source ids', () => {
+  // `antigravity-cli` owns the CLI's own SQLite root; `antigravity-extension`
+  // owns the IDE's conversations store, parsed from disk since tokscale 4.18.
+  // Both belong to the umbrella `antigravity` client.
+  assert.equal(tokscaleClientFilter('antigravity'), 'antigravity,antigravity-cli,antigravity-extension');
 });
 
 // tokscale 4.14 split Oh My Pi out of `pi` into its own `omp` client owning

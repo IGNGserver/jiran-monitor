@@ -290,10 +290,11 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
 // A few tools surface as one umbrella client in our tracked-client list but as
 // several client ids inside tokscale. Antigravity is the case today: tokscale 4.x
 // reads the CLI (`agy`) from its own parse-local id `antigravity-cli` (no
-// `antigravity sync`), separate from the IDE-backed `antigravity`. Widen the
-// tokscale --client filter so those sub-source rows aren't filtered out;
-// extractUsageFromTokscale's normalizeClientName folds them back into the umbrella
-// id.
+// `antigravity sync`), and since 4.18 parses the IDE's own SQLite session store
+// (`~/.gemini/antigravity/conversations/*.db`) as `antigravity-extension` —
+// separate from the RPC-backed `antigravity`. Widen the tokscale --client filter
+// so those sub-source rows aren't filtered out; extractUsageFromTokscale's
+// normalizeClientName folds them back into the umbrella id.
 //
 // `--client` is a clap value-enum: an id outside it is a hard usage error (exit
 // code 2, empty stdout), NOT a silently dropped filter — one bad id fails the
@@ -315,7 +316,7 @@ const TOKSCALE_CLIENT_RENAMES = { 'deepseek-harness': 'dsh' };
 // one row, and the watch path + WSL marker already key .omp under `pi` — so
 // normalizeClientName folds `omp` back and the split stays invisible.
 const TOKSCALE_CLIENT_ALIASES = {
-  antigravity: ['antigravity-cli'],
+  antigravity: ['antigravity-cli', 'antigravity-extension'],
   pi: ['omp']
 };
 
@@ -977,6 +978,56 @@ function antigravityDataPresent(home) {
   return ANTIGRAVITY_DATA_ROOTS.some((name) => dirExists(path.join(geminiHome, name)));
 }
 
+// tokscale publishes a legacy `sync.lock` record (pid + timestamp) before a
+// sync starts and removes it on a clean exit. A sync killed mid-flight — this
+// collector's own 30s timeout kill, an app quit, a machine reset — strands the
+// record, and every later `antigravity sync` then fails closed on it (tokscale
+// refuses to reclaim an existing record, because a rolling upgrade cannot prove
+// it is not owned by an older binary). The record is only ever published
+// atomically (a complete `pid timestamp` file) by the bundled binary before it
+// does any work, so a parseable record whose pid is gone is provably a crash
+// leftover in this deployment and may be removed. A live pid, or a record that
+// cannot be parsed, is left alone and tokscale's own error surfaces. Without
+// this one interrupted sync silently stops AGY reporting until someone deletes
+// the file by hand.
+function readAntigravitySyncLock(lockPath) {
+  try {
+    const [pidText, stampText] = String(fs.readFileSync(lockPath, 'utf8')).trim().split(/\s+/);
+    const pid = Number.parseInt(pidText, 10);
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    const timestamp = Number.parseInt(stampText, 10);
+    return { pid, timestamp: Number.isInteger(timestamp) && timestamp > 0 ? timestamp : 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists but belongs to someone else; anything else
+    // (ESRCH, or EINVAL for an out-of-range pid) is a dead process.
+    return error?.code === 'EPERM';
+  }
+}
+
+function clearStaleAntigravitySyncLock(cacheDir, logger) {
+  const lockPath = path.join(cacheDir, 'sync.lock');
+  const record = readAntigravitySyncLock(lockPath);
+  if (!record || processAlive(record.pid)) return false;
+  try {
+    fs.rmSync(lockPath, { force: true });
+  } catch (_) {
+    return false;
+  }
+  if (typeof logger === 'function') {
+    logger(`antigravity sync: removed a stale sync lock left by pid ${record.pid}`);
+  }
+  return true;
+}
+
 async function maybeSyncAntigravity(clientsCsv, logger, home = os.homedir(), options = {}) {
   const enabled = new Set(normalizeClientsCsv(clientsCsv).split(',').filter(Boolean));
   if (!enabled.has('antigravity')) return { attempted: false, failed: false };
@@ -987,6 +1038,15 @@ async function maybeSyncAntigravity(clientsCsv, logger, home = os.homedir(), opt
   );
   if (!selfSyncThrottle.claim('antigravity', minIntervalMs)) return { attempted: false, failed: false };
   const attempt = selfSyncThrottle.beginAttempt('antigravity');
+  // Clear a provably-stale lock record before spawning; tokscale fails closed
+  // on any leftover, so without this the failure outlives the crash that
+  // caused it (see clearStaleAntigravitySyncLock).
+  const cacheDir = tokscaleClientCacheDir('antigravity', {
+    homeDir: home,
+    env: options.env || process.env,
+    platform: options.platform || process.platform
+  });
+  clearStaleAntigravitySyncLock(cacheDir, logger);
   if (typeof options.run === 'function') {
     try {
       await options.run();
@@ -2674,13 +2734,14 @@ const GROK_UNIFIED_LOG_FILE = 'unified.jsonl';
 // recursive layout intact, but prune unrelated siblings under Logs before
 // chokidar allocates watches for them.
 const CODEBUDDY_EXTENSION_SOURCE_DIRS = new Set(['CodeBuddyIDE', 'VSCode']);
-// Which parts of an Antigravity IDE home are worth an event. Not "what tokscale
-// parses" — tokscale gets the token data over RPC from the running language
-// server and only reads `brain/`+`conversations/` to enumerate session ids.
-// These are the paths the IDE touches while a turn is in progress, so they are
-// what tells us the synced cache went stale. The rest of the home is runtime and
-// cache material (bin/, builtin/, crashes/, antigravity_state.pbtxt …) that
-// would make every background write a scan trigger.
+// Which parts of an Antigravity IDE home are worth an event. Not only "what
+// tokscale parses" — the token data for the RPC-backed `antigravity` source
+// arrives over the running language server, while the same `conversations/`
+// SQLite store is parsed from disk since tokscale 4.18 (`antigravity-extension`).
+// Either way these are the paths the IDE touches while a turn is in progress, so
+// they are what tells us the synced cache went stale. The rest of the home is
+// runtime and cache material (bin/, builtin/, crashes/, antigravity_state.pbtxt …)
+// that would make every background write a scan trigger.
 const ANTIGRAVITY_SOURCE_DIRS = new Set(['annotations', 'brain', 'conversations']);
 const ANTIGRAVITY_SOURCE_FILES = new Set(['agyhub_summaries_proto.pb']);
 // `brain/` is watched one level deep only. Its children are per-session working
@@ -4596,6 +4657,7 @@ module.exports = {
   qoderSourceFingerprintForClients,
   deriveClientStatus,
   selfSyncSourceRootsForClients,
+  maybeSyncAntigravity,
   watchAttributionRootsForClients,
   wslPeriodsForPreview,
   statusFromSignals,

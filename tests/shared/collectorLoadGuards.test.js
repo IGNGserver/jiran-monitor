@@ -466,7 +466,7 @@ test('Antigravity source events target its umbrella client without watching sync
     await waitForCondition(() => updates.length === 2);
     assert.equal(syncCalls, 1, 'a source event inside the floor reuses the fresh cache');
     const targeted = calls[calls.length - 1];
-    assert.equal(targeted[targeted.indexOf('--client') + 1], 'antigravity,antigravity-cli');
+    assert.equal(targeted[targeted.indexOf('--client') + 1], 'antigravity,antigravity-cli,antigravity-extension');
     assert.ok(targeted.includes('--today'));
 
     // The floor defers that sync, it does not drop it. No second event follows —
@@ -476,7 +476,7 @@ test('Antigravity source events target its umbrella client without watching sync
     await waitForCondition(() => syncCalls === 2);
     await waitForCondition(() => updates.length === 3);
     const caughtUp = calls[calls.length - 1];
-    assert.equal(caughtUp[caughtUp.indexOf('--client') + 1], 'antigravity,antigravity-cli');
+    assert.equal(caughtUp[caughtUp.indexOf('--client') + 1], 'antigravity,antigravity-cli,antigravity-extension');
     assert.ok(caughtUp.includes('--today'), 'the catch-up rescans behind the sync it waited for');
   } finally {
     Date.now = originalNow;
@@ -599,7 +599,7 @@ test('a catch-up that comes due mid-tick keeps its targeted scan scope', async (
     await waitForCondition(() => syncCalls === 2, 4000);
     const caughtUp = calls[calls.length - 1];
     const scanned = caughtUp[caughtUp.indexOf('--client') + 1];
-    assert.equal(scanned, 'antigravity,antigravity-cli', 'the catch-up stays targeted');
+    assert.equal(scanned, 'antigravity,antigravity-cli,antigravity-extension', 'the catch-up stays targeted');
     assert.equal(scanned.includes('claude'), false, 'and never widens to every tracked client');
   } finally {
     Date.now = originalNow;
@@ -792,7 +792,7 @@ test('a failed forced sync hands the source event back instead of eating it', as
     t.mock.timers.reset();
     await waitForCondition(() => syncCalls === 3, 4000);
     const retried = calls[calls.length - 1];
-    assert.equal(retried[retried.indexOf('--client') + 1], 'antigravity,antigravity-cli');
+    assert.equal(retried[retried.indexOf('--client') + 1], 'antigravity,antigravity-cli,antigravity-extension');
   } finally {
     Date.now = originalNow;
     if (handle) handle.stop();
@@ -1270,7 +1270,7 @@ test('an Antigravity CLI event rescans without paying for an IDE sync', async ()
     await waitForCondition(() => updates.length === 2);
     assert.equal(syncCalls, 1, 'a CLI-only event leaves the sync on its idle cadence');
     const targeted = calls[calls.length - 1];
-    assert.equal(targeted[targeted.indexOf('--client') + 1], 'antigravity,antigravity-cli');
+    assert.equal(targeted[targeted.indexOf('--client') + 1], 'antigravity,antigravity-cli,antigravity-extension');
     assert.ok(targeted.includes('--today'));
   } finally {
     if (handle) handle.stop();
@@ -2073,10 +2073,11 @@ test('antigravity sync runs at most once per throttle window across ticks', asyn
   }
 });
 
-test('collectUsageOnce scans tokscale for antigravity-cli when antigravity is tracked', async () => {
-  // tokscale 4.x exposes Antigravity CLI (`agy`) under its own parse-local client
-  // id `antigravity-cli`; our tracked-client list only knows the umbrella
-  // `antigravity` id, so the scan filter must be widened or the CLI rows are
+test('collectUsageOnce scans tokscale for the antigravity sub-sources when antigravity is tracked', async () => {
+  // tokscale exposes Antigravity CLI (`agy`) under its own parse-local client id
+  // `antigravity-cli`, and the IDE's conversations store under
+  // `antigravity-extension`; our tracked-client list only knows the umbrella
+  // `antigravity` id, so the scan filter must be widened or those rows are
   // dropped and never reach extractUsageFromTokscale (which folds them back in).
   const tmp = withTmpHome([]);
   const childProcess = require('node:child_process');
@@ -2102,6 +2103,7 @@ test('collectUsageOnce scans tokscale for antigravity-cli when antigravity is tr
       const ids = filter.split(',');
       assert.ok(ids.includes('antigravity'), `antigravity missing from --client ${filter}`);
       assert.ok(ids.includes('antigravity-cli'), `antigravity-cli missing from --client ${filter}`);
+      assert.ok(ids.includes('antigravity-extension'), `antigravity-extension missing from --client ${filter}`);
     }
   } finally {
     childProcess.spawn = originalSpawn;
