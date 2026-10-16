@@ -372,6 +372,43 @@ test('_quotaSummaryWindows recognizes cadence aliases and marks disabled buckets
   assert.equal(windows[1].showMeter, false);
 });
 
+test('_quotaSummaryWindows trusts the explicit bucket window field over display text', () => {
+  const windows = probe._quotaSummaryWindows({
+    groups: [{
+      displayName: 'Gemini Models',
+      buckets: [
+        { bucketId: 'opaque-a', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 0.5 },
+        { bucketId: 'opaque-b', displayName: 'Five Hour Limit Remaining', window: '5h', remainingFraction: 0.25 }
+      ]
+    }]
+  });
+
+  assert.deepEqual(windows.map((window) => [window.name, window.kind]), [
+    ['Gemini 5-hour', 'session'],
+    ['Gemini weekly', 'weekly']
+  ]);
+});
+
+test('_quotaSummaryWindows derives the family from bucket ids when a group has no display name', () => {
+  const windows = probe._quotaSummaryWindows({
+    groups: [
+      { buckets: [{ bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1 }] },
+      { buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.5 }] }
+    ]
+  });
+
+  assert.deepEqual(windows.map((window) => window.name), ['Gemini 5-hour', 'Claude/GPT weekly']);
+});
+
+test('_tierPlanName prefers the subscription name and maps generic product names through the tier id', () => {
+  assert.equal(probe._tierPlanName({ name: 'Google AI Pro', id: 'free-tier' }), 'Google AI Pro');
+  assert.equal(probe._tierPlanName({ name: 'Antigravity', id: 'standard-tier' }), 'Paid');
+  assert.equal(probe._tierPlanName({ id: 'legacy-tier' }), 'Legacy');
+  assert.equal(probe._tierPlanName({}), null);
+  assert.equal(probe.antigravityTierIdLabel('standard-tier'), 'Paid');
+  assert.equal(probe.antigravityTierIdLabel('unknown-tier'), '');
+});
+
 test('probe prefers quota summary and merges identity from GetUserStatus', async () => {
   const methods = [];
   const result = await probe.probe({

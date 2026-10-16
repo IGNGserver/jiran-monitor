@@ -86,6 +86,29 @@ function preferredPlanInfoName(planInfo) {
   );
 }
 
+// Tier ids the Cloud Code API uses when a plan has no marketing name. The same
+// ids appear in the local language server's userTier block, and
+// `standard-tier` covers paid Google AI accounts — its generic display name
+// ("Antigravity") must not become the plan label.
+function antigravityTierIdLabel(tierId) {
+  switch (String(tierId || '').trim()) {
+    case 'standard-tier': return 'Paid';
+    case 'free-tier': return 'Free';
+    case 'legacy-tier': return 'Legacy';
+    default: return '';
+  }
+}
+
+// Plan name for a userTier block, name first (the local language server reports
+// the actual subscription there), falling back to the tier id when the name is
+// the generic product label.
+function tierPlanName(tier) {
+  const name = firstTrimmedString(tier?.name);
+  const lower = String(name || '').toLowerCase();
+  if (name && lower !== 'antigravity' && lower !== 'antigravity remote') return name;
+  return antigravityTierIdLabel(tier?.id) || name || null;
+}
+
 function isLanguageServerCommand(lowerCommand) {
   return /(^|[/\\])language(?:_|-)server(?:[_-][a-z0-9]+)*(?:\.exe)?(\s|$)/.test(lowerCommand);
 }
@@ -420,16 +443,26 @@ function quotaRemainingFraction(bucket) {
   return null;
 }
 
-function quotaGroupName(displayName) {
+function quotaGroupName(displayName, buckets) {
   const name = String(displayName || '').trim();
   const lower = name.toLowerCase();
   if (lower.includes('gemini')) return 'Gemini';
   if (lower.includes('claude') || lower.includes('gpt')) return 'Claude/GPT';
+  // The family also lives in the stable bucket ids (`gemini-*` vs `3p-*`),
+  // which survive a display-text change.
+  const ids = (Array.isArray(buckets) ? buckets : []).map((bucket) => String(bucket?.bucketId || '').toLowerCase());
+  if (ids.some((id) => id.startsWith('gemini'))) return 'Gemini';
+  if (ids.some((id) => id.startsWith('3p') || id.startsWith('third-party'))) return 'Claude/GPT';
   return name || 'Quota';
 }
 
 function quotaBucketKind(bucket) {
   const aliases = new Set(['session', '5h', '5-hour', 'five hour', 'five-hour']);
+  // The explicit window field is the canonical cadence signal; display names
+  // ("Weekly Limit Remaining") and even bucket ids can change under it.
+  const window = String(bucket?.window || '').trim().toLowerCase().replaceAll('_', '-');
+  if (window === 'weekly') return 'weekly';
+  if (aliases.has(window)) return 'session';
   const candidates = [];
   for (const value of [bucket?.bucketId, bucket?.displayName]) {
     const normalized = String(value || '').trim().toLowerCase().replaceAll('_', '-');
@@ -449,7 +482,7 @@ function quotaSummaryWindows(payload) {
   const groups = Array.isArray(summary?.groups) ? summary.groups : [];
   const windows = [];
   for (const group of groups) {
-    const groupName = quotaGroupName(group?.displayName);
+    const groupName = quotaGroupName(group?.displayName, group?.buckets);
     for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
       const kind = quotaBucketKind(bucket);
       if (!kind) continue;
@@ -607,8 +640,10 @@ async function groupedQuotaFromCandidates(candidates, call, {
             signal
           }, probeDeadlineMs, 1000);
           accountPlan =
-            firstTrimmedString(identity?.userStatus?.userTier?.name)
-            || preferredPlanInfoName(identity?.userStatus?.planStatus?.planInfo)
+            firstTrimmedString(
+              tierPlanName(identity?.userStatus?.userTier),
+              preferredPlanInfoName(identity?.userStatus?.planStatus?.planInfo)
+            )
             || null;
           accountEmail = identity?.userStatus?.email?.trim?.() || null;
         } catch (_) {
@@ -641,8 +676,10 @@ async function legacyQuotaFromCandidates(candidates, call, { probeDeadlineMs, si
       if (data?.userStatus) {
         const configs = data.userStatus.cascadeModelConfigData?.clientModelConfigs;
         const accountPlan =
-          firstTrimmedString(data.userStatus.userTier?.name)
-          || preferredPlanInfoName(data.userStatus.planStatus?.planInfo)
+          firstTrimmedString(
+            tierPlanName(data.userStatus.userTier),
+            preferredPlanInfoName(data.userStatus.planStatus?.planInfo)
+          )
           || null;
         const accountEmail = data.userStatus.email?.trim?.() || null;
         const models = modelsFromConfigs(configs);
@@ -786,6 +823,8 @@ module.exports = {
   detectProcessInfos,
   listeningPorts,
   callLs,
+  antigravityTierIdLabel,
+  _tierPlanName: tierPlanName,
   _parseProcessLine: parseProcessLine,
   _antigravityProcessKind: antigravityProcessKind,
   _isAntigravityIdeCommand: isAntigravityIdeCommand,

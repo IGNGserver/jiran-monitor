@@ -88,4 +88,7 @@ test('Antigravity plan labels compact Google AI plan names for the provider row'
   assert.equal(await antigravityLabel('Google AI Pro'), 'Pro');
   assert.equal(await antigravityLabel('Google AI Ultra'), 'Ultra');
   assert.equal(await antigravityLabel('Pro'), 'Pro');
+  // "Antigravity" is the product name, not a plan level.
+  assert.equal(await antigravityLabel('Antigravity'), '');
+  assert.equal(await antigravityLabel('Antigravity Remote'), '');
 });
