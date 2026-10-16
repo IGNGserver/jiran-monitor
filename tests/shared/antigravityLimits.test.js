@@ -5,8 +5,35 @@ const test = require('node:test');
 
 const { fetchAntigravityLimits } = require('../../src/shared/limitCollector');
 
+const SUMMARY_URL = '/v1internal:retrieveUserQuotaSummary';
+const CODE_ASSIST_URL = '/v1internal:loadCodeAssist';
+
+function quotaSummaryPayload({ includeGemini = true, sessionRemaining = 0.4 } = {}) {
+  const groups = [];
+  if (includeGemini) {
+    groups.push({
+      displayName: 'Gemini Models',
+      buckets: [
+        { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.8, resetTime: '2026-09-19T00:00:00Z' },
+        { bucketId: 'gemini-5h', window: '5h', remainingFraction: sessionRemaining, resetTime: '2026-09-12T05:00:00Z' }
+      ]
+    });
+  }
+  groups.push({
+    displayName: 'Claude and GPT models',
+    buckets: [
+      { bucketId: '3p-weekly', window: 'weekly', remainingFraction: 0.6, resetTime: '2026-09-19T00:00:00Z' }
+    ]
+  });
+  return { groups };
+}
+
+function jsonResponse(payload) {
+  return { ok: true, status: 200, json: async () => payload };
+}
+
 test('fetchAntigravityLimits uses the OAuth cloud quota summary adapter', async () => {
-  let request;
+  const requests = [];
   const result = (await fetchAntigravityLimits({
     antigravityAccessToken: 'agy-access-token',
     antigravityProjectId: 'project-1'
@@ -14,38 +41,155 @@ test('fetchAntigravityLimits uses the OAuth cloud quota summary adapter', async 
     now: () => Date.parse('2026-09-12T00:00:00Z'),
     antigravityCloudBaseUrls: ['https://quota.example.test'],
     fetch: async (url, init) => {
-      request = { url, init };
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          email: 'cloud@example.com',
-          response: {
-            groups: [{
-              displayName: 'Gemini',
-              buckets: [
-                { bucketId: 'session', remainingFraction: 0.4, resetTime: '2026-09-12T05:00:00Z' },
-                { bucketId: 'weekly', remainingFraction: 0.8, resetTime: '2026-09-19T00:00:00Z' }
-              ]
-            }]
-          }
-        })
-      };
+      requests.push({ url: String(url), init });
+      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+      return jsonResponse({ email: 'cloud@example.com', ...quotaSummaryPayload() });
     }
   }))[0];
 
-  assert.equal(request.url, 'https://quota.example.test/v1internal:retrieveUserQuotaSummary');
-  assert.equal(request.init.method, 'POST');
-  assert.equal(request.init.headers.authorization, 'Bearer agy-access-token');
-  assert.deepEqual(JSON.parse(request.init.body), { project: 'project-1' });
+  const summaryRequest = requests.find((request) => request.url.endsWith(SUMMARY_URL));
+  assert.equal(summaryRequest.url, 'https://quota.example.test/v1internal:retrieveUserQuotaSummary');
+  assert.equal(summaryRequest.init.method, 'POST');
+  assert.equal(summaryRequest.init.headers.authorization, 'Bearer agy-access-token');
+  // Cloud Code gates the quota endpoints on the Antigravity Hub client family.
+  assert.match(summaryRequest.init.headers['user-agent'], /^antigravity\/hub\//);
+  assert.deepEqual(JSON.parse(summaryRequest.init.body), { project: 'project-1' });
   assert.equal(result.status, 'ok');
   assert.equal(result.source, 'oauth');
   assert.equal(result.sourceDetail, 'managed');
   assert.equal(result.credentialOrigin, 'manual');
   assert.equal(result.accountEmail, 'cloud@example.com');
-  assert.deepEqual(result.windows.map((window) => window.kind), ['session', 'weekly']);
-  assert.equal(result.windows[0].usedPercent, 60);
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
+  ]);
+  assert.equal(Math.round(result.windows[0].usedPercent), 60);
   assert.equal(result.windows[1].remainingPercent, 80);
+});
+
+test('fetchAntigravityLimits prefers production over the daily sandbox endpoint', async () => {
+  const requests = [];
+  const result = (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
+    fetch: async (url) => {
+      requests.push(String(url));
+      if (String(url).startsWith('https://sandbox.example.test')) {
+        // The daily channel can serve a reduced summary (Claude/GPT only); a
+        // non-empty response must not shadow the production answer.
+        return jsonResponse({
+          groups: [{
+            displayName: 'Claude and GPT models',
+            buckets: [{ bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1 }]
+          }]
+        });
+      }
+      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+      return jsonResponse(quotaSummaryPayload());
+    }
+  }))[0];
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
+  ]);
+  assert.ok(requests.length > 0);
+  assert.ok(requests.every((url) => url.startsWith('https://prod.example.test')));
+});
+
+test('fetchAntigravityLimits falls back to the sandbox only when production fails', async () => {
+  const requests = [];
+  const result = (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
+    fetch: async (url) => {
+      requests.push(String(url));
+      if (String(url).startsWith('https://prod.example.test')) {
+        throw new Error('network down');
+      }
+      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+      return jsonResponse(quotaSummaryPayload());
+    }
+  }))[0];
+
+  assert.equal(result.status, 'ok');
+  assert.ok(requests[0].startsWith('https://prod.example.test'));
+  assert.ok(requests[1].startsWith('https://sandbox.example.test'));
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
+  ]);
+});
+
+test('fetchAntigravityLimits reads the account plan from loadCodeAssist with paidTier first', async () => {
+  const result = (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://quota.example.test'],
+    fetch: async (url) => {
+      if (String(url).endsWith(CODE_ASSIST_URL)) {
+        // currentTier.id alone reports free-tier for paid Google AI accounts.
+        return jsonResponse({
+          currentTier: { id: 'free-tier', name: 'Antigravity' },
+          paidTier: { id: 'g1-ultra-lite-tier', name: 'Google AI Ultra' }
+        });
+      }
+      return jsonResponse(quotaSummaryPayload());
+    }
+  }))[0];
+
+  assert.equal(result.planLabel, 'Ultra');
+  assert.equal(result.accountLabel, 'Ultra');
+});
+
+test('fetchAntigravityLimits suppresses a Free plan label contradicted by a measured five-hour window', async () => {
+  const freeTier = async (summary) => (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://quota.example.test'],
+    fetch: async (url) => {
+      if (String(url).endsWith(CODE_ASSIST_URL)) {
+        return jsonResponse({ currentTier: { id: 'free-tier', name: 'Antigravity' } });
+      }
+      return jsonResponse(summary);
+    }
+  }))[0];
+
+  const withSession = await freeTier(quotaSummaryPayload());
+  assert.equal(withSession.planLabel, '');
+  assert.equal(withSession.accountLabel, '');
+
+  const weeklyOnly = await freeTier({
+    groups: [{
+      displayName: 'Gemini Models',
+      buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 1 }]
+    }]
+  });
+  assert.equal(weeklyOnly.planLabel, 'Free');
+});
+
+test('fetchAntigravityLimits labels a hosted-domain free tier as Workspace', async () => {
+  const payload = Buffer.from(JSON.stringify({ email: 'u@corp.example', hd: 'corp.example' })).toString('base64');
+  const idToken = `header.${payload}.signature`;
+  const result = (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token',
+    antigravityIdToken: idToken
+  }, {
+    antigravityCloudBaseUrls: ['https://quota.example.test'],
+    fetch: async (url) => {
+      if (String(url).endsWith(CODE_ASSIST_URL)) {
+        return jsonResponse({ currentTier: { id: 'free-tier', name: 'Antigravity' } });
+      }
+      return jsonResponse({
+        groups: [{
+          displayName: 'Gemini Models',
+          buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 1 }]
+        }]
+      });
+    }
+  }))[0];
+
+  assert.equal(result.planLabel, 'Workspace');
 });
 
 test('fetchAntigravityLimits returns notConfigured when probe says LS not running', async () => {
@@ -124,4 +268,3 @@ test('fetchAntigravityLimits extracts email from antigravityIdToken JWT', async 
   assert.equal(result.status, 'ok');
   assert.equal(result.accountEmail, 'jwt-user@google.com');
 });
-

@@ -97,11 +97,28 @@ const CODEX_RESET_CREDITS_PATH = '/wham/rate-limit-reset-credits';
 const CODEX_EMPTY_QUOTA_RETRY_DELAY_MS = 300;
 const CODEX_RPC_TIMEOUT_MS = 20_000;
 const TOKEN_MONITOR_USER_AGENT = `jiran/${appVersion()} (+https://github.com/IGNGserver/jiran)`;
+// Production first: the daily/sandbox channel is a staging environment whose
+// answers can be partial (2026-10-16: it stopped returning the Gemini group to
+// client identities it no longer serves) and whose quota numbers can disagree
+// with the production backend. It stays a last-resort fallback only.
 const ANTIGRAVITY_CLOUD_BASE_URLS = Object.freeze([
-  'https://daily-cloudcode-pa.sandbox.googleapis.com',
-  'https://cloudcode-pa.googleapis.com'
+  'https://cloudcode-pa.googleapis.com',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com'
 ]);
 const ANTIGRAVITY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
+const ANTIGRAVITY_LOAD_CODE_ASSIST_PATH = '/v1internal:loadCodeAssist';
+// Cloud Code gates the quota endpoints on the Antigravity Hub client family — a
+// bare `antigravity` UA gets a reduced summary, and the daily channel drops its
+// Gemini group — so pin the compatibility identity CodexBar and CLIProxyAPI
+// send. 2.9.1 is a protocol constant, not this app's version.
+const ANTIGRAVITY_CLOUD_USER_AGENT = `antigravity/hub/2.9.1 ${
+  process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'darwin'
+}/${process.arch === 'arm64' ? 'arm64' : 'amd64'}`;
+const ANTIGRAVITY_CLIENT_METADATA = Object.freeze({
+  ideType: 'ANTIGRAVITY',
+  platform: 'PLATFORM_UNSPECIFIED',
+  pluginType: 'GEMINI'
+});
 
 function nowIso(nowMs) {
   return new Date(nowMs).toISOString();
@@ -451,10 +468,28 @@ function codexPlanLabelFromParts(...parts) {
   return displayPlanText(cleaned, Infinity);
 }
 
+// The quota summary carries no plan metadata; `loadCodeAssist` does. Prefer
+// `paidTier.name` (Google AI Pro/Ultra): `currentTier.id` alone reports
+// free-tier for paid Google AI accounts, so trusting it would mislabel them.
+function antigravityPlanFromCodeAssist(payload, { hostedDomain = '' } = {}) {
+  const paidTier = payload?.paidTier || {};
+  const paidName = String(paidTier.name || '').trim();
+  if (paidName) return paidName;
+  if (String(paidTier.id || '').trim()) return 'Paid';
+  const planType = String(payload?.planInfo?.planType || '').trim();
+  if (planType) return planType;
+  const tierId = String(payload?.currentTier?.id || '').trim();
+  if (tierId === 'free-tier') return hostedDomain ? 'Workspace' : 'Free';
+  return antigravityProbe.antigravityTierIdLabel(tierId)
+    || String(payload?.currentTier?.name || '').trim();
+}
+
 function antigravityPlanLabelFromParts(...parts) {
   const text = parts.map((part) => String(part || '').trim()).find(Boolean) || '';
   const raw = cleanPlanText(text, ['google', 'ai']);
-  if (!raw) return '';
+  // "Antigravity" is the product name, not a plan level; showing it would make
+  // every account's badge read the same.
+  if (!raw || raw === 'antigravity' || raw === 'antigravity remote') return '';
   return planLabelFromParts(raw);
 }
 
@@ -3550,25 +3585,26 @@ async function fetchAntigravityCloudLimits(options = {}, deps = {}) {
     authorization: `Bearer ${accessToken}`,
     accept: 'application/json',
     'content-type': 'application/json',
-    'user-agent': 'antigravity',
+    'user-agent': ANTIGRAVITY_CLOUD_USER_AGENT,
     'x-goog-api-client': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
-    'client-metadata': JSON.stringify({
-      ideType: 'IDE_UNSPECIFIED',
-      platform: 'PLATFORM_UNSPECIFIED',
-      pluginType: 'GEMINI'
-    })
+    'client-metadata': JSON.stringify(ANTIGRAVITY_CLIENT_METADATA)
   };
   const projectId = String(options.antigravityProjectId || '').trim();
   const refreshToken = String(options.antigravityRefreshToken || '').trim();
+  const idTokenPayload = options.antigravityIdToken ? decodeJwtPayload(options.antigravityIdToken) : {};
   const idTokenEmail = options.antigravityIdToken
-    ? String(decodeJwtPayload(options.antigravityIdToken)?.email || '').trim().toLowerCase()
+    ? String(idTokenPayload?.email || '').trim().toLowerCase()
+    : '';
+  const hostedDomain = options.antigravityIdToken
+    ? String(idTokenPayload?.hd || '').trim()
     : '';
   const configuredAccountEmail = String(options.antigravityAccountEmail || idTokenEmail || '').trim().toLowerCase();
   const fallbackAccountKey = hashKey('antigravity', configuredAccountEmail || refreshToken || projectId || accessToken);
   let lastError = errorWithStatus('unavailable', 'Antigravity cloud quota unavailable');
   for (const baseUrl of baseUrls) {
+    const base = String(baseUrl).replace(/\/+$/, '');
     try {
-      const payload = await fetchJson(`${String(baseUrl).replace(/\/+$/, '')}${ANTIGRAVITY_QUOTA_PATH}`, headers, deps, {
+      const payload = await fetchJson(`${base}${ANTIGRAVITY_QUOTA_PATH}`, headers, deps, {
         method: 'POST',
         body: projectId ? { project: projectId } : {},
         forbiddenIsUnauthorized: true
@@ -3587,12 +3623,27 @@ async function fetchAntigravityCloudLimits(options = {}, deps = {}) {
       const accountKey = accountEmail
         ? hashKey('antigravity', accountEmail)
         : fallbackAccountKey;
-      const plan = payload?.accountPlan
-        || payload?.plan
-        || payload?.userStatus?.userTier?.name
-        || response?.userStatus?.userTier?.name
-        || '';
-      const planLabel = antigravityPlanLabelFromParts(plan);
+      // The quota summary carries no plan metadata; loadCodeAssist is the tier
+      // authority. Best-effort — a tier failure must never blank the quota.
+      let planLabel = '';
+      try {
+        const codeAssist = await fetchJson(`${base}${ANTIGRAVITY_LOAD_CODE_ASSIST_PATH}`, headers, {
+          ...deps,
+          fetchTimeoutMs: Math.min(Number(deps.fetchTimeoutMs) || 12000, 4000)
+        }, {
+          method: 'POST',
+          body: { metadata: ANTIGRAVITY_CLIENT_METADATA },
+          forbiddenIsUnauthorized: true
+        });
+        planLabel = antigravityPlanLabelFromParts(antigravityPlanFromCodeAssist(codeAssist, { hostedDomain }));
+        // A measured five-hour window is paid-only cadence; a Free claim beside
+        // one is the mislabel this guard exists for.
+        if (planLabel === 'Free' && windows.some((window) => (
+          window.kind === 'session' && window.remainingFraction !== null && window.showMeter !== false
+        ))) {
+          planLabel = '';
+        }
+      } catch (_) {}
       return [normalizeLimitProvider({
         provider: 'antigravity',
         accountKey,
