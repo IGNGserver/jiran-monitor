@@ -32,6 +32,10 @@ function jsonResponse(payload) {
   return { ok: true, status: 200, json: async () => payload };
 }
 
+function requestHost(url) {
+  return new URL(String(url)).hostname;
+}
+
 test('fetchAntigravityLimits uses the OAuth cloud quota summary adapter', async () => {
   const requests = [];
   const result = (await fetchAntigravityLimits({
@@ -74,7 +78,7 @@ test('fetchAntigravityLimits prefers production over the daily sandbox endpoint'
     antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
     fetch: async (url) => {
       requests.push(String(url));
-      if (String(url).startsWith('https://sandbox.example.test')) {
+      if (requestHost(url) === 'sandbox.example.test') {
         // The daily channel can serve a reduced summary (Claude/GPT only); a
         // non-empty response must not shadow the production answer.
         return jsonResponse({
@@ -94,7 +98,7 @@ test('fetchAntigravityLimits prefers production over the daily sandbox endpoint'
     'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
   ]);
   assert.ok(requests.length > 0);
-  assert.ok(requests.every((url) => url.startsWith('https://prod.example.test')));
+  assert.ok(requests.every((url) => requestHost(url) === 'prod.example.test'));
 });
 
 test('fetchAntigravityLimits falls back to the sandbox only when production fails', async () => {
@@ -105,7 +109,7 @@ test('fetchAntigravityLimits falls back to the sandbox only when production fail
     antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
     fetch: async (url) => {
       requests.push(String(url));
-      if (String(url).startsWith('https://prod.example.test')) {
+      if (requestHost(url) === 'prod.example.test') {
         throw new Error('network down');
       }
       if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
@@ -114,8 +118,8 @@ test('fetchAntigravityLimits falls back to the sandbox only when production fail
   }))[0];
 
   assert.equal(result.status, 'ok');
-  assert.ok(requests[0].startsWith('https://prod.example.test'));
-  assert.ok(requests[1].startsWith('https://sandbox.example.test'));
+  assert.equal(requestHost(requests[0]), 'prod.example.test');
+  assert.equal(requestHost(requests[1]), 'sandbox.example.test');
   assert.deepEqual(result.windows.map((window) => window.label), [
     'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
   ]);
