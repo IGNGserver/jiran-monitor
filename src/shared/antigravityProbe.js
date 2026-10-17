@@ -417,8 +417,15 @@ const CC_MODEL_BLACKLIST = new Set([
   'MODEL_PLACEHOLDER_M12'
 ]);
 
+function isArgonModel(label, modelId) {
+  return /(^|[^a-z])argon([^a-z]|$)/.test(`${label || ''} ${modelId || ''}`.toLowerCase());
+}
+
 function poolForModel(label, modelId) {
   const lc = `${label || ''} ${modelId || ''}`.toLowerCase();
+  // Gemini 4 Argon carries neither "pro" nor "flash"; without this it fell
+  // through to the Claude pool.
+  if (isArgonModel(label, modelId)) return 'Argon';
   if (lc.includes('gemini') && lc.includes('pro')) return 'Gemini Pro';
   if (lc.includes('gemini') && lc.includes('flash')) return 'Gemini Flash';
   return 'Claude';
@@ -443,17 +450,51 @@ function quotaRemainingFraction(bucket) {
   return null;
 }
 
-function quotaGroupName(displayName, buckets) {
-  const name = String(displayName || '').trim();
-  const lower = name.toLowerCase();
-  if (lower.includes('gemini')) return 'Gemini';
-  if (lower.includes('claude') || lower.includes('gpt')) return 'Claude/GPT';
-  // The family also lives in the stable bucket ids (`gemini-*` vs `3p-*`),
-  // which survive a display-text change.
-  const ids = (Array.isArray(buckets) ? buckets : []).map((bucket) => String(bucket?.bucketId || '').toLowerCase());
-  if (ids.some((id) => id.startsWith('gemini'))) return 'Gemini';
-  if (ids.some((id) => id.startsWith('3p') || id.startsWith('third-party'))) return 'Claude/GPT';
-  return name || 'Quota';
+// Known quota families. The stable bucket-id prefixes (`gemini-*`, `3p-*`)
+// decide first because they survive display-text changes; Argon is checked
+// before Gemini so a "Gemini 4 Argon" group is not folded into the Gemini pool.
+const QUOTA_GROUP_FAMILIES = Object.freeze([
+  Object.freeze({ key: 'argon', name: 'Argon', idPrefixes: ['argon'], text: /(^|[^a-z])argon([^a-z]|$)/ }),
+  Object.freeze({ key: 'gemini', name: 'Gemini', idPrefixes: ['gemini'], text: /gemini/ }),
+  Object.freeze({ key: '3p', name: 'Claude/GPT', idPrefixes: ['3p', 'third-party'], text: /claude|gpt/ })
+]);
+const QUOTA_GROUP_RANK = Object.freeze(['gemini', 'argon', '3p']);
+
+function quotaGroupFamily(displayName, buckets) {
+  const lower = String(displayName || '').trim().toLowerCase();
+  const ids = (Array.isArray(buckets) ? buckets : [])
+    .map((bucket) => String(bucket?.bucketId || '').trim().toLowerCase().replaceAll('_', '-'))
+    .filter(Boolean);
+  for (const family of QUOTA_GROUP_FAMILIES) {
+    if (ids.some((id) => (
+      family.key === 'argon'
+        ? family.text.test(id)
+        : family.idPrefixes.some((prefix) => id === prefix || id.startsWith(`${prefix}-`))
+    ))) return family;
+  }
+  for (const family of QUOTA_GROUP_FAMILIES) {
+    if (family.text.test(lower)) return family;
+  }
+  return null;
+}
+
+// One identity per summary group. Two groups that land in the same family keep
+// distinct labels, because the renderers group windows by label: sharing one
+// would merge two pools into a single card with duplicate rows.
+function quotaGroupIdentities(groups) {
+  const used = new Set();
+  return groups.map((group, index) => {
+    const displayName = String(group?.displayName || '').trim();
+    const family = quotaGroupFamily(displayName, group?.buckets);
+    let key = family ? family.key : (displayName.toLowerCase() || `group-${index}`);
+    let name = family ? family.name : (displayName || 'Quota');
+    if (used.has(key)) {
+      key = `${key}:${index}`;
+      name = displayName && displayName !== name ? displayName : `${name} ${index + 1}`;
+    }
+    used.add(key);
+    return { key, family: family ? family.key : null, name };
+  });
 }
 
 function quotaBucketKind(bucket) {
@@ -480,9 +521,10 @@ function quotaBucketKind(bucket) {
 function quotaSummaryWindows(payload) {
   const summary = payload?.response || payload?.summary || payload;
   const groups = Array.isArray(summary?.groups) ? summary.groups : [];
+  const identities = quotaGroupIdentities(groups);
   const windows = [];
-  for (const group of groups) {
-    const groupName = quotaGroupName(group?.displayName, group?.buckets);
+  groups.forEach((group, index) => {
+    const { key: groupKey, family: groupFamily, name: groupName } = identities[index];
     for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
       const kind = quotaBucketKind(bucket);
       if (!kind) continue;
@@ -491,16 +533,79 @@ function quotaSummaryWindows(payload) {
       windows.push({
         kind,
         name: `${groupName} ${kind === 'session' ? '5-hour' : 'weekly'}`,
+        group: groupKey,
+        family: groupFamily,
         remainingFraction: disabled ? null : remainingFraction,
         resetTime: parseResetTime(bucket?.resetTime),
         resetDescription: typeof bucket?.description === 'string' ? bucket.description : '',
         showMeter: !disabled && remainingFraction !== null
       });
     }
-  }
-  const groupRank = (name) => name.startsWith('Gemini ') ? 0 : name.startsWith('Claude/GPT ') ? 1 : 2;
+  });
+  return sortQuotaWindows(windows);
+}
+
+function sortQuotaWindows(windows) {
+  const groupRank = (window) => {
+    const index = QUOTA_GROUP_RANK.indexOf(window.family);
+    return index === -1 ? QUOTA_GROUP_RANK.length : index;
+  };
   const kindRank = (kind) => kind === 'session' ? 0 : 1;
-  return windows.sort((a, b) => groupRank(a.name) - groupRank(b.name) || kindRank(a.kind) - kindRank(b.kind));
+  return windows.sort((a, b) => groupRank(a) - groupRank(b) || kindRank(a.kind) - kindRank(b.kind));
+}
+
+const ARGON_SHARED_RESET_TOLERANCE_MS = 2 * 60 * 1000;
+const SESSION_WINDOW_HORIZON_MS = 6 * 60 * 60 * 1000;
+
+function sameQuotaReading(window, reading) {
+  if (typeof window?.remainingFraction !== 'number') return false;
+  if (Math.abs(window.remainingFraction - reading.remainingFraction) > 1e-6) return false;
+  if (!window.resetTime || !reading.resetTime) return !window.resetTime && !reading.resetTime;
+  return Math.abs(Date.parse(window.resetTime) - Date.parse(reading.resetTime)) <= ARGON_SHARED_RESET_TOLERANCE_MS;
+}
+
+// Gemini 4 Argon is metered per model (`retrieveUserQuota`) and never appears
+// as a summary group. Ultra draws it from the Gemini pool — its bucket then
+// equals one of that group's buckets — while paid Pro meters it in a pool of
+// its own. Only a reading the summary does not already show becomes a window.
+// An account without Argon access has no Argon bucket at all.
+//
+// The per-model bucket carries no cadence, so it is inferred from the reset: a
+// reset beyond six hours cannot be the five-hour window. An untouched separate
+// pool that resets with the Gemini five-hour window reads as shared; it is at
+// 100% either way.
+function argonModelQuotaWindows(payload, summaryWindows = [], { nowMs = Date.now() } = {}) {
+  const windows = Array.isArray(summaryWindows) ? summaryWindows : [];
+  if (windows.some((window) => window.family === 'argon')) return [];
+  const body = payload?.response || payload;
+  const readings = (Array.isArray(body?.buckets) ? body.buckets : [])
+    .filter((bucket) => isArgonModel('', bucket?.modelId))
+    .map((bucket) => ({
+      remainingFraction: quotaRemainingFraction(bucket),
+      resetTime: parseResetTime(bucket?.resetTime)
+    }))
+    .filter((reading) => reading.remainingFraction !== null);
+  if (readings.length === 0) return [];
+  const tightest = readings.reduce((best, reading) => (
+    reading.remainingFraction < best.remainingFraction
+    || (reading.remainingFraction === best.remainingFraction
+      && reading.resetTime && (!best.resetTime || reading.resetTime < best.resetTime))
+      ? reading
+      : best
+  ));
+  if (windows.some((window) => window.family === 'gemini' && sameQuotaReading(window, tightest))) return [];
+  const resetMs = tightest.resetTime ? Date.parse(tightest.resetTime) : NaN;
+  const kind = Number.isFinite(resetMs) && resetMs - nowMs <= SESSION_WINDOW_HORIZON_MS ? 'session' : 'weekly';
+  return [{
+    kind,
+    name: `Argon ${kind === 'session' ? '5-hour' : 'weekly'}`,
+    group: 'argon',
+    family: 'argon',
+    remainingFraction: tightest.remainingFraction,
+    resetTime: tightest.resetTime,
+    resetDescription: '',
+    showMeter: true
+  }];
 }
 
 function modelsFromConfigs(configs) {
@@ -533,7 +638,7 @@ function collapsePools(models) {
       pools.set(name, { name, remainingFraction: m.remainingFraction, resetTime: m.resetTime });
     }
   }
-  const order = ['Gemini Pro', 'Gemini Flash', 'Claude'];
+  const order = ['Gemini Pro', 'Gemini Flash', 'Argon', 'Claude'];
   return order.flatMap((name) => (pools.has(name) ? [pools.get(name)] : []));
 }
 
@@ -836,6 +941,8 @@ module.exports = {
   _collapsePools: collapsePools,
   _poolForModel: poolForModel,
   _quotaSummaryWindows: quotaSummaryWindows,
+  _argonModelQuotaWindows: argonModelQuotaWindows,
+  _sortQuotaWindows: sortQuotaWindows,
   _quotaBucketKind: quotaBucketKind,
   _endpointCandidates: endpointCandidates,
   _groupedQuotaFromCandidates: groupedQuotaFromCandidates

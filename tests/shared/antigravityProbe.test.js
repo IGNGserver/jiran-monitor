@@ -400,6 +400,74 @@ test('_quotaSummaryWindows derives the family from bucket ids when a group has n
   assert.deepEqual(windows.map((window) => window.name), ['Gemini 5-hour', 'Claude/GPT weekly']);
 });
 
+test('_quotaSummaryWindows keeps an Argon group apart from the Gemini pool', () => {
+  const windows = probe._quotaSummaryWindows({
+    groups: [
+      { displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-weekly', window: 'weekly', remainingFraction: 1 }] },
+      { displayName: 'Gemini 4 Argon', buckets: [{ bucketId: 'gemini-argon-weekly', window: 'weekly', remainingFraction: 0.4 }] },
+      { displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.9 }] }
+    ]
+  });
+
+  assert.deepEqual(windows.map((window) => [window.name, window.remainingFraction]), [
+    ['Gemini weekly', 0.9],
+    ['Argon weekly', 0.4],
+    ['Claude/GPT weekly', 1]
+  ]);
+});
+
+test('_quotaSummaryWindows gives two groups of one family distinct labels', () => {
+  // The renderers group windows by label; a shared label would merge two
+  // pools into one card with duplicate rows.
+  const windows = probe._quotaSummaryWindows({
+    groups: [
+      { displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.9 }] },
+      { displayName: 'Gemini Image Models', buckets: [{ bucketId: 'gemini-image-weekly', window: 'weekly', remainingFraction: 0.2 }] },
+      { displayName: 'Lab Models', buckets: [{ bucketId: 'lab-weekly', window: 'weekly', remainingFraction: 0.5 }] }
+    ]
+  });
+
+  assert.deepEqual(windows.map((window) => window.name), [
+    'Gemini weekly', 'Gemini Image Models weekly', 'Lab Models weekly'
+  ]);
+  assert.equal(new Set(windows.map((window) => window.group)).size, 3);
+});
+
+test('_argonModelQuotaWindows infers the cadence from the reset and ignores shared readings', () => {
+  const nowMs = Date.parse('2026-10-17T14:00:00Z');
+  const gemini = probe._quotaSummaryWindows({
+    groups: [{
+      displayName: 'Gemini Models',
+      buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.8, resetTime: '2026-10-17T16:00:00Z' }]
+    }]
+  });
+
+  const shared = probe._argonModelQuotaWindows({
+    buckets: [{ modelId: 'gemini-4-argon-high', remainingFraction: 0.8, resetTime: '2026-10-17T16:00:30Z' }]
+  }, gemini, { nowMs });
+  assert.deepEqual(shared, []);
+
+  const session = probe._argonModelQuotaWindows({
+    buckets: [{ modelId: 'gemini-4-argon-high', remainingFraction: 0.3, resetTime: '2026-10-17T18:00:00Z' }]
+  }, gemini, { nowMs });
+  assert.deepEqual(session.map((window) => [window.name, window.kind, window.remainingFraction]), [
+    ['Argon 5-hour', 'session', 0.3]
+  ]);
+
+  // Buckets without a fraction are availability-only and never a measurement.
+  assert.deepEqual(probe._argonModelQuotaWindows({
+    buckets: [{ modelId: 'gemini-4-argon-high', resetTime: '2026-10-22T00:00:00Z' }]
+  }, gemini, { nowMs }), []);
+});
+
+test('_collapsePools keeps Gemini 4 Argon out of the Claude pool', () => {
+  const pools = probe._collapsePools([
+    { label: 'Gemini 4 Argon (High)', modelId: 'gemini-4-argon-high', remainingFraction: 0.3, resetTime: null },
+    { label: 'Claude Opus', modelId: 'X', remainingFraction: 0.9, resetTime: null }
+  ]);
+  assert.deepEqual(pools.map((pool) => [pool.name, pool.remainingFraction]), [['Argon', 0.3], ['Claude', 0.9]]);
+});
+
 test('_tierPlanName prefers the subscription name and maps generic product names through the tier id', () => {
   assert.equal(probe._tierPlanName({ name: 'Google AI Pro', id: 'free-tier' }), 'Google AI Pro');
   assert.equal(probe._tierPlanName({ name: 'Antigravity', id: 'standard-tier' }), 'Paid');
