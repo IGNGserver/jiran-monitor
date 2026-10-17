@@ -3,9 +3,16 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { fetchAntigravityLimits } = require('../../src/shared/limitCollector');
+const {
+  fetchAntigravityLimits,
+  ANTIGRAVITY_CLOUD_BASE_URLS,
+  ANTIGRAVITY_CLOUD_USER_AGENT,
+  ANTIGRAVITY_HUB_CLIENT_VERSION,
+  ANTIGRAVITY_MIN_HUB_CLIENT_VERSION
+} = require('../../src/shared/limitCollector');
 
 const SUMMARY_URL = '/v1internal:retrieveUserQuotaSummary';
+const MODEL_QUOTA_URL = '/v1internal:retrieveUserQuota';
 const CODE_ASSIST_URL = '/v1internal:loadCodeAssist';
 
 function quotaSummaryPayload({ includeGemini = true, sessionRemaining = 0.4 } = {}) {
@@ -70,17 +77,40 @@ test('fetchAntigravityLimits uses the OAuth cloud quota summary adapter', async 
   assert.equal(result.windows[1].remainingPercent, 80);
 });
 
-test('fetchAntigravityLimits prefers production over the daily sandbox endpoint', async () => {
+test('the default host order puts the daily inference host first and production last', () => {
+  // Production's Gemini counters went stale on 2026-10-17 while the daily host
+  // kept metering real consumption; see ANTIGRAVITY_CLOUD_BASE_URLS.
+  assert.deepEqual(ANTIGRAVITY_CLOUD_BASE_URLS, [
+    'https://daily-cloudcode-pa.googleapis.com',
+    'https://daily-cloudcode-pa.sandbox.googleapis.com',
+    'https://cloudcode-pa.googleapis.com'
+  ]);
+});
+
+test('the Cloud Code user agent is an Antigravity Hub identity at or above the model-gating floor', () => {
+  const version = (value) => value.split('.').map(Number);
+  const [major, minor, patch] = version(ANTIGRAVITY_HUB_CLIENT_VERSION);
+  const [floorMajor, floorMinor, floorPatch] = version(ANTIGRAVITY_MIN_HUB_CLIENT_VERSION);
+  // Cloud Code hides Gemini 4 Argon from clients below 2.23.0.
+  assert.equal(ANTIGRAVITY_MIN_HUB_CLIENT_VERSION, '2.23.0');
+  assert.ok(
+    major > floorMajor
+    || (major === floorMajor && (minor > floorMinor || (minor === floorMinor && patch >= floorPatch))),
+    `${ANTIGRAVITY_HUB_CLIENT_VERSION} is below ${ANTIGRAVITY_MIN_HUB_CLIENT_VERSION}`
+  );
+  assert.match(ANTIGRAVITY_CLOUD_USER_AGENT, new RegExp(`^antigravity/hub/${ANTIGRAVITY_HUB_CLIENT_VERSION.replaceAll('.', '\\.')} (darwin|linux|windows)/(arm64|amd64)$`));
+});
+
+test('fetchAntigravityLimits does not let a summary without the Gemini group shadow a later host', async () => {
   const requests = [];
   const result = (await fetchAntigravityLimits({
     antigravityAccessToken: 'agy-access-token'
   }, {
-    antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
+    antigravityCloudBaseUrls: ['https://first.example.test', 'https://second.example.test'],
     fetch: async (url) => {
       requests.push(String(url));
-      if (requestHost(url) === 'sandbox.example.test') {
-        // The daily channel can serve a reduced summary (Claude/GPT only); a
-        // non-empty response must not shadow the production answer.
+      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+      if (requestHost(url) === 'first.example.test') {
         return jsonResponse({
           groups: [{
             displayName: 'Claude and GPT models',
@@ -88,7 +118,6 @@ test('fetchAntigravityLimits prefers production over the daily sandbox endpoint'
           }]
         });
       }
-      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
       return jsonResponse(quotaSummaryPayload());
     }
   }))[0];
@@ -97,19 +126,61 @@ test('fetchAntigravityLimits prefers production over the daily sandbox endpoint'
   assert.deepEqual(result.windows.map((window) => window.label), [
     'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
   ]);
-  assert.ok(requests.length > 0);
-  assert.ok(requests.every((url) => requestHost(url) === 'prod.example.test'));
+  // Follow-up reads come from the host that answered the summary.
+  assert.ok(requests.filter((url) => !url.endsWith(SUMMARY_URL))
+    .every((url) => requestHost(url) === 'second.example.test'));
 });
 
-test('fetchAntigravityLimits falls back to the sandbox only when production fails', async () => {
+test('fetchAntigravityLimits keeps a partial summary when no host serves the Gemini group', async () => {
+  const result = (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://first.example.test', 'https://second.example.test'],
+    fetch: async (url) => {
+      if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+      if (requestHost(url) === 'second.example.test') throw new Error('network down');
+      return jsonResponse(quotaSummaryPayload({ includeGemini: false }));
+    }
+  }))[0];
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.windows.map((window) => window.label), ['Claude/GPT weekly']);
+});
+
+test('fetchAntigravityLimits tries the next host after a 403 but stops on a 401', async () => {
+  const hosts = ['https://first.example.test', 'https://second.example.test'];
+  const run = async (status) => {
+    const summaryHosts = [];
+    const result = (await fetchAntigravityLimits({ antigravityAccessToken: 'agy-access-token' }, {
+      antigravityCloudBaseUrls: hosts,
+      fetch: async (url) => {
+        if (String(url).endsWith(SUMMARY_URL)) summaryHosts.push(requestHost(url));
+        if (requestHost(url) === 'first.example.test') return { ok: false, status, json: async () => ({}) };
+        if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
+        return jsonResponse(quotaSummaryPayload());
+      }
+    }))[0];
+    return { result, summaryHosts };
+  };
+
+  const forbidden = await run(403);
+  assert.equal(forbidden.result.status, 'ok');
+  assert.deepEqual(forbidden.summaryHosts, ['first.example.test', 'second.example.test']);
+
+  const unauthorized = await run(401);
+  assert.equal(unauthorized.result.status, 'unauthorized');
+  assert.deepEqual(unauthorized.summaryHosts, ['first.example.test']);
+});
+
+test('fetchAntigravityLimits falls back to the next host only when the first fails', async () => {
   const requests = [];
   const result = (await fetchAntigravityLimits({
     antigravityAccessToken: 'agy-access-token'
   }, {
-    antigravityCloudBaseUrls: ['https://prod.example.test', 'https://sandbox.example.test'],
+    antigravityCloudBaseUrls: ['https://daily.example.test', 'https://prod.example.test'],
     fetch: async (url) => {
       requests.push(String(url));
-      if (requestHost(url) === 'prod.example.test') {
+      if (requestHost(url) === 'daily.example.test') {
         throw new Error('network down');
       }
       if (String(url).endsWith(CODE_ASSIST_URL)) return jsonResponse({});
@@ -118,8 +189,8 @@ test('fetchAntigravityLimits falls back to the sandbox only when production fail
   }))[0];
 
   assert.equal(result.status, 'ok');
-  assert.equal(requestHost(requests[0]), 'prod.example.test');
-  assert.equal(requestHost(requests[1]), 'sandbox.example.test');
+  assert.equal(requestHost(requests[0]), 'daily.example.test');
+  assert.equal(requestHost(requests[1]), 'prod.example.test');
   assert.deepEqual(result.windows.map((window) => window.label), [
     'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT weekly'
   ]);
@@ -271,4 +342,102 @@ test('fetchAntigravityLimits extracts email from antigravityIdToken JWT', async 
 
   assert.equal(result.status, 'ok');
   assert.equal(result.accountEmail, 'jwt-user@google.com');
+});
+
+// Shapes below are trimmed from a live Ultra (`g1-ultra-lite-tier`) answer of
+// the daily host on 2026-10-17: Argon's per-model bucket equals the Gemini
+// five-hour bucket, because Ultra draws Argon from the Gemini pool.
+function ultraDailySummary() {
+  return {
+    groups: [
+      {
+        displayName: 'Gemini Models',
+        description: 'Models within this group: Gemini Flash, Gemini Pro',
+        buckets: [
+          { bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-24T01:16:00Z', remainingFraction: 0.74201816 },
+          { bucketId: 'gemini-5h', displayName: 'Five Hour Limit Remaining', window: '5h', resetTime: '2026-10-17T16:16:00Z', remainingFraction: 0.7981962 }
+        ]
+      },
+      {
+        displayName: 'Claude and GPT models',
+        description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+        buckets: [
+          { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-19T02:40:24Z', remainingFraction: 0.34724215 },
+          { bucketId: '3p-5h', displayName: 'Five Hour Limit Remaining', window: '5h', resetTime: '2026-10-17T19:17:00Z', remainingFraction: 1 }
+        ]
+      }
+    ]
+  };
+}
+
+async function fetchWithModelQuota(modelQuota, { summary = ultraDailySummary(), failModelQuota = false } = {}) {
+  const requests = [];
+  const result = (await fetchAntigravityLimits({ antigravityAccessToken: 'agy-access-token' }, {
+    now: () => Date.parse('2026-10-17T14:17:00Z'),
+    antigravityCloudBaseUrls: ['https://daily.example.test'],
+    fetch: async (url) => {
+      requests.push(String(url));
+      if (String(url).endsWith(CODE_ASSIST_URL)) {
+        return jsonResponse({ currentTier: { id: 'free-tier' }, paidTier: { id: 'g1-ultra-lite-tier', name: 'Google AI Ultra' } });
+      }
+      if (String(url).endsWith(MODEL_QUOTA_URL)) {
+        if (failModelQuota) return { ok: false, status: 500, json: async () => ({}) };
+        return jsonResponse(modelQuota);
+      }
+      return jsonResponse(summary);
+    }
+  }))[0];
+  return { result, requests };
+}
+
+test('fetchAntigravityLimits adds no Argon row when Argon draws from the Gemini pool', async () => {
+  const { result, requests } = await fetchWithModelQuota({
+    buckets: [
+      { tokenType: 'WTUS', modelId: 'gemini-3.8-flash-high', remainingFraction: 0.7981962, resetTime: '2026-10-17T16:16:00Z' },
+      { tokenType: 'WTUS', modelId: 'gemini-4-argon-high', remainingFraction: 0.7981962, resetTime: '2026-10-17T16:16:00Z' },
+      { tokenType: 'WTUS', modelId: 'gemini-4-argon-low', remainingFraction: 0.7981962, resetTime: '2026-10-17T16:16:00Z' },
+      { tokenType: 'WTUS', modelId: 'claude-opus-4-6-thinking', remainingFraction: 0.34724215, resetTime: '2026-10-19T02:40:24Z' }
+    ]
+  });
+
+  assert.ok(requests.some((url) => url === 'https://daily.example.test/v1internal:retrieveUserQuota'));
+  assert.equal(result.planLabel, 'Ultra');
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT 5-hour', 'Claude/GPT weekly'
+  ]);
+  assert.equal(result.windows[1].remainingPercent, 74.202);
+});
+
+test('fetchAntigravityLimits shows a separately metered Argon pool beside Gemini', async () => {
+  const { result } = await fetchWithModelQuota({
+    buckets: [
+      { modelId: 'gemini-3.8-flash-high', remainingFraction: 0.7981962, resetTime: '2026-10-17T16:16:00Z' },
+      { modelId: 'gemini-4-argon-medium', remainingFraction: 0.55, resetTime: '2026-10-22T09:00:00Z' },
+      { modelId: 'gemini-4-argon-high', remainingFraction: 0.5, resetTime: '2026-10-22T09:00:00Z' }
+    ]
+  });
+
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Argon weekly', 'Claude/GPT 5-hour', 'Claude/GPT weekly'
+  ]);
+  const argon = result.windows[2];
+  assert.equal(argon.kind, 'weekly');
+  assert.equal(argon.remainingPercent, 50);
+  assert.equal(argon.resetsAt, '2026-10-22T09:00:00.000Z');
+});
+
+test('fetchAntigravityLimits shows no Argon row for an account without Argon access', async () => {
+  // Pro accounts without the entitlement get no Argon bucket at all.
+  const { result } = await fetchWithModelQuota({
+    buckets: [{ modelId: 'gemini-3.8-flash-high', remainingFraction: 1, resetTime: '2026-10-17T19:17:00Z' }]
+  });
+  assert.ok(result.windows.every((window) => !/argon/i.test(window.label)));
+});
+
+test('fetchAntigravityLimits keeps the summary windows when the per-model quota read fails', async () => {
+  const { result } = await fetchWithModelQuota(null, { failModelQuota: true });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.windows.map((window) => window.label), [
+    'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT 5-hour', 'Claude/GPT weekly'
+  ]);
 });

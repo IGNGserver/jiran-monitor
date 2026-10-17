@@ -97,21 +97,28 @@ const CODEX_RESET_CREDITS_PATH = '/wham/rate-limit-reset-credits';
 const CODEX_EMPTY_QUOTA_RETRY_DELAY_MS = 300;
 const CODEX_RPC_TIMEOUT_MS = 20_000;
 const TOKEN_MONITOR_USER_AGENT = `jiran/${appVersion()} (+https://github.com/IGNGserver/jiran)`;
-// Production first: the daily/sandbox channel is a staging environment whose
-// answers can be partial (2026-10-16: it stopped returning the Gemini group to
-// client identities it no longer serves) and whose quota numbers can disagree
-// with the production backend. It stays a last-resort fallback only.
+// Daily first: it is the host Antigravity clients send inference to, so its
+// counters move with real consumption. Since 2026-10-17 the production host's
+// Gemini group serves frozen counters (a five-hour window that never leaves
+// 100%, a weekly window that kept an exhausted state the daily host had already
+// reset), so trusting it first misreported every Gemini pool. The sandbox
+// mirrors the daily host; production stays as the last resort.
 const ANTIGRAVITY_CLOUD_BASE_URLS = Object.freeze([
-  'https://cloudcode-pa.googleapis.com',
-  'https://daily-cloudcode-pa.sandbox.googleapis.com'
+  'https://daily-cloudcode-pa.googleapis.com',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com',
+  'https://cloudcode-pa.googleapis.com'
 ]);
 const ANTIGRAVITY_QUOTA_PATH = '/v1internal:retrieveUserQuotaSummary';
+const ANTIGRAVITY_MODEL_QUOTA_PATH = '/v1internal:retrieveUserQuota';
 const ANTIGRAVITY_LOAD_CODE_ASSIST_PATH = '/v1internal:loadCodeAssist';
-// Cloud Code gates the quota endpoints on the Antigravity Hub client family — a
-// bare `antigravity` UA gets a reduced summary, and the daily channel drops its
-// Gemini group — so pin the compatibility identity CodexBar and CLIProxyAPI
-// send. 2.9.1 is a protocol constant, not this app's version.
-const ANTIGRAVITY_CLOUD_USER_AGENT = `antigravity/hub/2.9.1 ${
+// Cloud Code gates the quota endpoints on the Antigravity Hub client family (a
+// bare `antigravity` UA gets 403 SUBSCRIPTION_REQUIRED) and hides newer models —
+// Gemini 4 Argon among them — from clients below 2.23.0, so pin a current Hub
+// version. A protocol constant, not this app's version; never lower it below
+// ANTIGRAVITY_MIN_HUB_CLIENT_VERSION.
+const ANTIGRAVITY_MIN_HUB_CLIENT_VERSION = '2.23.0';
+const ANTIGRAVITY_HUB_CLIENT_VERSION = '2.24.0';
+const ANTIGRAVITY_CLOUD_USER_AGENT = `antigravity/hub/${ANTIGRAVITY_HUB_CLIENT_VERSION} ${
   process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'darwin'
 }/${process.arch === 'arm64' ? 'arm64' : 'amd64'}`;
 const ANTIGRAVITY_CLIENT_METADATA = Object.freeze({
@@ -3548,8 +3555,7 @@ async function fetchCodexLimits(options = {}, deps = {}) {
   return providers;
 }
 
-function antigravityCloudWindows(payload) {
-  const rawWindows = antigravityProbe._quotaSummaryWindows(payload);
+function antigravityCloudWindows(rawWindows) {
   return (Array.isArray(rawWindows) ? rawWindows : []).map((window) => ({
     kind: window.kind,
     label: window.name,
@@ -3600,67 +3606,104 @@ async function fetchAntigravityCloudLimits(options = {}, deps = {}) {
     : '';
   const configuredAccountEmail = String(options.antigravityAccountEmail || idTokenEmail || '').trim().toLowerCase();
   const fallbackAccountKey = hashKey('antigravity', configuredAccountEmail || refreshToken || projectId || accessToken);
+  const requestBody = projectId ? { project: projectId } : {};
+  // A summary without the Gemini group is partial (a host can stop serving a
+  // family to a client identity) and must not shadow a later host that has it;
+  // it is kept only as the answer of last resort.
   let lastError = errorWithStatus('unavailable', 'Antigravity cloud quota unavailable');
+  let chosen = null;
+  let partial = null;
   for (const baseUrl of baseUrls) {
     const base = String(baseUrl).replace(/\/+$/, '');
     try {
       const payload = await fetchJson(`${base}${ANTIGRAVITY_QUOTA_PATH}`, headers, deps, {
         method: 'POST',
-        body: projectId ? { project: projectId } : {},
+        body: requestBody,
         forbiddenIsUnauthorized: true
       });
-      const windows = antigravityCloudWindows(payload);
-      if (windows.length === 0) throw errorWithStatus('unavailable', 'Antigravity quota response has no usable windows');
-      const response = payload?.response || payload?.summary || payload;
-      const accountEmail = String(
-        configuredAccountEmail
-        || payload?.accountEmail
-        || payload?.email
-        || payload?.userStatus?.email
-        || response?.userStatus?.email
-        || ''
-      ).trim().toLowerCase();
-      const accountKey = accountEmail
-        ? hashKey('antigravity', accountEmail)
-        : fallbackAccountKey;
-      // The quota summary carries no plan metadata; loadCodeAssist is the tier
-      // authority. Best-effort — a tier failure must never blank the quota.
-      let planLabel = '';
-      try {
-        const codeAssist = await fetchJson(`${base}${ANTIGRAVITY_LOAD_CODE_ASSIST_PATH}`, headers, {
-          ...deps,
-          fetchTimeoutMs: Math.min(Number(deps.fetchTimeoutMs) || 12000, 4000)
-        }, {
-          method: 'POST',
-          body: { metadata: ANTIGRAVITY_CLIENT_METADATA },
-          forbiddenIsUnauthorized: true
-        });
-        planLabel = antigravityPlanLabelFromParts(antigravityPlanFromCodeAssist(codeAssist, { hostedDomain }));
-        // A measured five-hour window is paid-only cadence; a Free claim beside
-        // one is the mislabel this guard exists for.
-        if (planLabel === 'Free' && windows.some((window) => (
-          window.kind === 'session' && window.remainingFraction !== null && window.showMeter !== false
-        ))) {
-          planLabel = '';
-        }
-      } catch (_) {}
-      return [normalizeLimitProvider({
-        provider: 'antigravity',
-        accountKey,
-        accountEmail,
-        accountLabel: planLabel || '',
-        planLabel: planLabel || '',
-        source: 'oauth',
-        sourceDetail: 'managed',
-        credentialOrigin: 'manual',
-        status: 'ok',
-        updatedAt,
-        windows
-      })];
+      const summaryWindows = antigravityProbe._quotaSummaryWindows(payload);
+      if (summaryWindows.length === 0) throw errorWithStatus('unavailable', 'Antigravity quota response has no usable windows');
+      const candidate = { base, payload, summaryWindows };
+      if (summaryWindows.some((window) => window.family === 'gemini')) {
+        chosen = candidate;
+        break;
+      }
+      if (!partial) partial = candidate;
     } catch (error) {
       lastError = error;
-      if (error?.status === 'unauthorized') break;
+      // A 401 is the token, not the host. A 403 can be one host refusing this
+      // client identity, so the next host still gets a chance.
+      if (error?.httpStatus === 401) break;
     }
+  }
+  chosen = chosen || partial;
+  if (chosen) {
+    const { base, payload } = chosen;
+    let summaryWindows = chosen.summaryWindows;
+    // Argon is metered per model, so the summary alone cannot show a separate
+    // Argon pool. Best-effort from the same host — a failure here must never
+    // blank the summary windows.
+    try {
+      const modelQuota = await fetchJson(`${base}${ANTIGRAVITY_MODEL_QUOTA_PATH}`, headers, {
+        ...deps,
+        fetchTimeoutMs: Math.min(Number(deps.fetchTimeoutMs) || 12000, 4000)
+      }, {
+        method: 'POST',
+        body: requestBody,
+        forbiddenIsUnauthorized: true
+      });
+      const argonWindows = antigravityProbe._argonModelQuotaWindows(modelQuota, summaryWindows, { nowMs });
+      if (argonWindows.length > 0) {
+        summaryWindows = antigravityProbe._sortQuotaWindows([...summaryWindows, ...argonWindows]);
+      }
+    } catch (_) {}
+    const windows = antigravityCloudWindows(summaryWindows);
+    const response = payload?.response || payload?.summary || payload;
+    const accountEmail = String(
+      configuredAccountEmail
+      || payload?.accountEmail
+      || payload?.email
+      || payload?.userStatus?.email
+      || response?.userStatus?.email
+      || ''
+    ).trim().toLowerCase();
+    const accountKey = accountEmail
+      ? hashKey('antigravity', accountEmail)
+      : fallbackAccountKey;
+    // The quota summary carries no plan metadata; loadCodeAssist is the tier
+    // authority. Best-effort — a tier failure must never blank the quota.
+    let planLabel = '';
+    try {
+      const codeAssist = await fetchJson(`${base}${ANTIGRAVITY_LOAD_CODE_ASSIST_PATH}`, headers, {
+        ...deps,
+        fetchTimeoutMs: Math.min(Number(deps.fetchTimeoutMs) || 12000, 4000)
+      }, {
+        method: 'POST',
+        body: { metadata: ANTIGRAVITY_CLIENT_METADATA },
+        forbiddenIsUnauthorized: true
+      });
+      planLabel = antigravityPlanLabelFromParts(antigravityPlanFromCodeAssist(codeAssist, { hostedDomain }));
+      // A measured five-hour window is paid-only cadence; a Free claim beside
+      // one is the mislabel this guard exists for.
+      if (planLabel === 'Free' && windows.some((window) => (
+        window.kind === 'session' && window.remainingFraction !== null && window.showMeter !== false
+      ))) {
+        planLabel = '';
+      }
+    } catch (_) {}
+    return [normalizeLimitProvider({
+      provider: 'antigravity',
+      accountKey,
+      accountEmail,
+      accountLabel: planLabel || '',
+      planLabel: planLabel || '',
+      source: 'oauth',
+      sourceDetail: 'managed',
+      credentialOrigin: 'manual',
+      status: 'ok',
+      updatedAt,
+      windows
+    })];
   }
   return [normalizeLimitProvider({
     provider: 'antigravity',
@@ -4747,6 +4790,10 @@ module.exports = {
   probeLimitProvider,
   providerPhysicalBoundMs,
   fetchAntigravityLimits,
+  ANTIGRAVITY_CLOUD_BASE_URLS,
+  ANTIGRAVITY_CLOUD_USER_AGENT,
+  ANTIGRAVITY_HUB_CLIENT_VERSION,
+  ANTIGRAVITY_MIN_HUB_CLIENT_VERSION,
   fetchOpenCodeLimits,
   fetchOpenRouterLimits: openrouterLimits.fetchOpenRouterLimits,
   fetchThirdPartyLimits: thirdPartyLimits.fetchThirdPartyLimits,
