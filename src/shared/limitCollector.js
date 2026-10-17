@@ -478,8 +478,18 @@ function codexPlanLabelFromParts(...parts) {
 // The quota summary carries no plan metadata; `loadCodeAssist` does. Prefer
 // `paidTier.name` (Google AI Pro/Ultra): `currentTier.id` alone reports
 // free-tier for paid Google AI accounts, so trusting it would mislabel them.
+//
+// The paid tier id is finer than its name: both Ultra plans are named "Google
+// AI Ultra", and only the id tells the lower `g1-ultra-lite-tier` apart, so a
+// known id wins over the name. Unknown ids keep the name.
+const ANTIGRAVITY_PAID_TIER_PLANS = Object.freeze({
+  'g1-ultra-lite-tier': 'Ultra Lite'
+});
+
 function antigravityPlanFromCodeAssist(payload, { hostedDomain = '' } = {}) {
   const paidTier = payload?.paidTier || {};
+  const paidTierPlan = ANTIGRAVITY_PAID_TIER_PLANS[String(paidTier.id || '').trim().toLowerCase()];
+  if (paidTierPlan) return paidTierPlan;
   const paidName = String(paidTier.name || '').trim();
   if (paidName) return paidName;
   if (String(paidTier.id || '').trim()) return 'Paid';
@@ -3686,7 +3696,7 @@ async function fetchAntigravityCloudLimits(options = {}, deps = {}) {
       // A measured five-hour window is paid-only cadence; a Free claim beside
       // one is the mislabel this guard exists for.
       if (planLabel === 'Free' && windows.some((window) => (
-        window.kind === 'session' && window.remainingFraction !== null && window.showMeter !== false
+        window.kind === 'session' && window.usedPercent !== null && window.showMeter !== false
       ))) {
         planLabel = '';
       }

@@ -213,8 +213,27 @@ test('fetchAntigravityLimits reads the account plan from loadCodeAssist with pai
     }
   }))[0];
 
-  assert.equal(result.planLabel, 'Ultra');
-  assert.equal(result.accountLabel, 'Ultra');
+  // Both Ultra plans are named "Google AI Ultra"; only the id names the lower one.
+  assert.equal(result.planLabel, 'Ultra Lite');
+  assert.equal(result.accountLabel, 'Ultra Lite');
+});
+
+test('fetchAntigravityLimits keeps the paid tier name when the tier id is not a known plan', async () => {
+  const planFor = async (paidTier) => (await fetchAntigravityLimits({
+    antigravityAccessToken: 'agy-access-token'
+  }, {
+    antigravityCloudBaseUrls: ['https://quota.example.test'],
+    fetch: async (url) => {
+      if (String(url).endsWith(CODE_ASSIST_URL)) {
+        return jsonResponse({ currentTier: { id: 'free-tier', name: 'Antigravity' }, paidTier });
+      }
+      return jsonResponse(quotaSummaryPayload());
+    }
+  }))[0].planLabel;
+
+  assert.equal(await planFor({ id: 'g1-pro-tier', name: 'Google AI Pro' }), 'Pro');
+  assert.equal(await planFor({ id: 'g1-ultra-tier', name: 'Google AI Ultra' }), 'Ultra');
+  assert.equal(await planFor({ id: 'G1-ULTRA-LITE-TIER', name: 'Google AI Ultra' }), 'Ultra Lite');
 });
 
 test('fetchAntigravityLimits suppresses a Free plan label contradicted by a measured five-hour window', async () => {
@@ -241,6 +260,19 @@ test('fetchAntigravityLimits suppresses a Free plan label contradicted by a meas
     }]
   });
   assert.equal(weeklyOnly.planLabel, 'Free');
+
+  // A disabled five-hour bucket (it stops applying once the weekly limit is
+  // hit) measures nothing, so it must not contradict a Free tier.
+  const disabledSession = await freeTier({
+    groups: [{
+      displayName: 'Gemini Models',
+      buckets: [
+        { bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0 },
+        { bucketId: 'gemini-5h', window: '5h', remainingFraction: 1, disabled: true }
+      ]
+    }]
+  });
+  assert.equal(disabledSession.planLabel, 'Free');
 });
 
 test('fetchAntigravityLimits labels a hosted-domain free tier as Workspace', async () => {
@@ -401,7 +433,7 @@ test('fetchAntigravityLimits adds no Argon row when Argon draws from the Gemini 
   });
 
   assert.ok(requests.some((url) => url === 'https://daily.example.test/v1internal:retrieveUserQuota'));
-  assert.equal(result.planLabel, 'Ultra');
+  assert.equal(result.planLabel, 'Ultra Lite');
   assert.deepEqual(result.windows.map((window) => window.label), [
     'Gemini 5-hour', 'Gemini weekly', 'Claude/GPT 5-hour', 'Claude/GPT weekly'
   ]);
