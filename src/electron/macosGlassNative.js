@@ -59,6 +59,7 @@ function createMacosGlassApi(koffi) {
   const selSetEffectIsInteractive = selector('setEffectIsInteractive:');
   const selSetCornerRadius = selector('setCornerRadius:');
   const selRespondsToSelector = selector('respondsToSelector:');
+  const selRelease = selector('release');
 
   const glassViews = new Map();
   const liquidGlassClass = objcGetClass('NSGlassEffectView');
@@ -92,6 +93,12 @@ function createMacosGlassApi(koffi) {
     const glassView = glassViews.get(key);
     if (!glassView) return false;
     try { sendVoid(glassView, selRemoveFromSuperview); } catch (_) {}
+    // alloc/init handed us an owned (+1) reference that this map keeps for as
+    // long as the glass is shown — it is what keeps the pointer valid if the
+    // window's content view goes away first. Give it back once the view is out
+    // of the hierarchy; without this every material switch leaked one
+    // window-sized NSGlassEffectView.
+    try { sendVoid(glassView, selRelease); } catch (_) {}
     glassViews.delete(key);
     return true;
   }

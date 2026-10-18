@@ -38,9 +38,10 @@ function harness() {
     pendingPushTimer: null,
     pendingPushHistoryRevision: null,
     statsPushDeferred: false,
+    deferredStatsCompose: null,
     PUSH_COALESCE_MS: 200,
     statsHistoryRevision: () => '',
-    injectLocalDeviceStatus: () => {},
+    injectLocalDeviceStatus: (stats) => stats,
     desktopSnapshotMeta: () => ({ source: 'test' }),
     syncHealthSnapshot: () => ({ state: 'live' }),
     clearTimeout,
@@ -48,6 +49,8 @@ function harness() {
     Date
   });
   vm.runInContext([
+    functionSource('resolvePushStats'),
+    functionSource('settleDeferredStats'),
     functionSource('sendPush'),
     functionSource('flushPush'),
     functionSource('flushPendingPush'),
@@ -110,4 +113,42 @@ test('minimized windows defer snapshots and both reveal events are wired', () =>
   assert.equal(sent[0].payload.data.stats.revision, 3);
   assert.match(source, /win\.on\('show', replayDeferredStatsPush\)/);
   assert.match(source, /win\.on\('restore', replayDeferredStatsPush\)/);
+});
+
+test('a Hub frame is composed on delivery, and only once after a hidden stretch', () => {
+  const { context, sent, windowState } = harness();
+  let composed = 0;
+  const frame = (revision) => ({
+    event: 'stats',
+    data: { type: 'stats', reason: 'update' },
+    composeStats: () => { composed += 1; return { revision }; }
+  });
+  for (let revision = 1; revision <= 100; revision += 1) {
+    context.pendingStatsPush = frame(revision);
+    vm.runInContext('flushPush()', context);
+  }
+  assert.equal(composed, 0, 'nothing is aggregated while nobody can see it');
+  assert.equal(sent.length, 0);
+  assert.equal(context.statsPushDeferred, true);
+
+  windowState.visible = true;
+  vm.runInContext('replayDeferredStatsPush()', context);
+  assert.equal(composed, 1, 'the newest frame is composed once on reveal');
+  assert.equal(sent[0].payload.data.stats.revision, 100);
+  assert.equal(sent[0].payload.composeStats, undefined, 'the thunk never crosses IPC');
+
+  context.pendingStatsPush = frame(101);
+  vm.runInContext('flushPush()', context);
+  assert.equal(composed, 2, 'a visible window composes each frame as it is delivered');
+  assert.equal(sent.at(-1).payload.data.stats.revision, 101);
+  assert.equal(context.latestStats.revision, 101);
+});
+
+test('a frame that composes to nothing is not pushed', () => {
+  const { context, sent, windowState } = harness();
+  windowState.visible = true;
+  context.pendingStatsPush = { event: 'stats', data: { type: 'stats' }, composeStats: () => null };
+  vm.runInContext('flushPush()', context);
+  assert.equal(sent.length, 0);
+  assert.equal(context.latestStats, null);
 });

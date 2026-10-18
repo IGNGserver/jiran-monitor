@@ -102,6 +102,22 @@ function uiIcon(name) {
   return `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${path}</svg>`;
 }
 
+// Compare against the HTML this code last wrote, never against `innerHTML`:
+// serialization does not round-trip a template. An inline SVG `<path/>` reads
+// back as `<path></path>`, `" >` as `">`, and an upgraded Fluent element adds
+// its own role/aria attributes — so the old `innerHTML !== html` guards were
+// always true and rebuilt the nav, the period tabs and the device options on
+// every stats frame, recreating Fluent elements (and their shadow roots) each
+// time. Returns whether the container was rewritten.
+const writtenHtml = new WeakMap();
+function writeHtmlIfChanged(element, html) {
+  if (!element) return false;
+  if (writtenHtml.get(element) === html && element.childNodes.length > 0) return false;
+  element.innerHTML = html;
+  writtenHtml.set(element, html);
+  return true;
+}
+
 function renderStaticUiIcons() {
   document.querySelectorAll('[data-ui-icon]').forEach((element) => {
     element.innerHTML = uiIcon(element.dataset.uiIcon);
@@ -910,7 +926,7 @@ function renderChrome() {
   }).join('');
   // Compare before assigning: a stats tick used to rebuild this list every few
   // seconds, dropping focus and hover on a nav link the user was on.
-  if (els.primaryNav.innerHTML !== navHtml) els.primaryNav.innerHTML = navHtml;
+  writeHtmlIfChanged(els.primaryNav, navHtml);
   const scoped = viewUsesUsageScope();
   document.querySelector('.scope-commandbar')?.classList.toggle('hidden', !scoped);
   els.deviceFilter?.closest('.device-filter')?.classList.toggle('hidden', !scoped);
@@ -931,7 +947,7 @@ function renderChrome() {
   const periodTabsHtml = segButtons(periodOptions, selectedPeriod, 'period');
   // Rebuild only on a real change: this list is inside the scope bar the user
   // interacts with, and replacing it every frame moved focus off the selected tab.
-  if (els.periodTabs.innerHTML !== periodTabsHtml) els.periodTabs.innerHTML = periodTabsHtml;
+  writeHtmlIfChanged(els.periodTabs, periodTabsHtml);
   els.periodTabs.value = selectedPeriod;
 
   els.pageTitle.textContent = tr(`nav.${state.prefs.view}`);
@@ -957,14 +973,21 @@ function renderChrome() {
       ...allDevices.map((device) => `<fluent-option value="${escapeHtml(deviceOptionValue(device.deviceId || ''))}"${device.deviceId === selectedDeviceId ? ' selected' : ''}>${escapeHtml(device.hostname || device.deviceId || tr('devices.title'))}</fluent-option>`)
     ].join('');
     let deviceListbox = els.deviceFilter.querySelector('fluent-listbox');
+    let optionsChanged = true;
     if (!deviceListbox) {
       els.deviceFilter.innerHTML = `<fluent-listbox>${deviceOptionsHtml}</fluent-listbox>`;
-    } else if (deviceListbox.innerHTML !== deviceOptionsHtml) {
+      deviceListbox = els.deviceFilter.querySelector('fluent-listbox');
+      if (deviceListbox) writtenHtml.set(deviceListbox, deviceOptionsHtml);
+    } else {
       // Keep Dropdown's generated slotted control connected while refreshing
       // the options; replacing the Dropdown's own innerHTML leaves a blank trigger.
-      deviceListbox.innerHTML = deviceOptionsHtml;
+      optionsChanged = writeHtmlIfChanged(deviceListbox, deviceOptionsHtml);
     }
-    setFluentDropdownValue(els.deviceFilter, selectedDeviceOption);
+    // Re-selecting an unchanged value queues a frame-polling synchronizer per
+    // render; only do it when the options were rebuilt or the value moved.
+    if (optionsChanged || els.deviceFilter.value !== selectedDeviceOption) {
+      setFluentDropdownValue(els.deviceFilter, selectedDeviceOption);
+    }
     els.deviceFilter.title = selectedDevice?.hostname || selectedDevice?.deviceId || tr('filters.allDevices');
   }
   renderMobileNav();
@@ -1013,7 +1036,7 @@ function renderMobileNav() {
   `).join('');
   // Only the active marker changes between frames; rewriting the whole bar on a
   // stats tick dropped the tap feedback on whichever item the user was touching.
-  if (nav.innerHTML !== navHtml) nav.innerHTML = navHtml;
+  writeHtmlIfChanged(nav, navHtml);
 }
 
 function rowHtml(row, { showIcon = false, sub } = {}) {

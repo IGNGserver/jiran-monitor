@@ -1528,6 +1528,74 @@ function streamTranscriptFile(filePath, stat, state, diagnostics, startedAt, opt
   }
 }
 
+// Per-file transcript results, reused while a file is unchanged.
+//
+// A transcript tree is mostly finished sessions: only the files of a running
+// session grow. Re-reading and re-parsing every file on every collector tick
+// (watch ticks arrive seconds apart, and the budget allows up to a gigabyte per
+// scan) made each tick pay for the whole history. A file's contribution is a
+// pure function of its bytes and of the scan's clientId/root/sinceMs/timeZone,
+// so it is cached under those and keyed by the file's size, mtime and ctime.
+// Each file is parsed into its own bucket map and merged into the scan's map in
+// file order, which reproduces exactly what accumulating into one shared map
+// did: bucket keys carry the file-derived session id, a bucket's sourceSession
+// is set by whichever file created it first, and insertion order is the same.
+// Only a file that was read to the end without tripping a budget is cached.
+const TRANSCRIPT_FILE_CACHE_MAX_SCOPES = 16;
+const transcriptFileCache = new Map();
+const TRANSCRIPT_COUNTER_FIELDS = Object.freeze(['readBytes', 'recognizedEvents', 'ignoredEvents', 'badJsonLines', 'oversizedLines']);
+
+function transcriptFileFingerprint(stat) {
+  return `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function openTranscriptCacheScope(options, key) {
+  if (options.transcriptCache === false) return null;
+  let previous = transcriptFileCache.get(key);
+  if (previous) transcriptFileCache.delete(key);
+  else previous = new Map();
+  return {
+    previous,
+    next: new Map(),
+    commit() {
+      transcriptFileCache.set(key, this.next);
+      while (transcriptFileCache.size > TRANSCRIPT_FILE_CACHE_MAX_SCOPES) {
+        transcriptFileCache.delete(transcriptFileCache.keys().next().value);
+      }
+    },
+    abandon() {
+      transcriptFileCache.set(key, previous);
+    }
+  };
+}
+
+function cloneTranscriptBucket(bucket) {
+  return { ...bucket, sourceIdentities: new Set(bucket.sourceIdentities) };
+}
+
+function mergeTranscriptBucket(target, key, bucket) {
+  const existing = target.get(key);
+  if (!existing) {
+    target.set(key, cloneTranscriptBucket(bucket));
+    return;
+  }
+  existing.input += bucket.input;
+  existing.output += bucket.output;
+  existing.requests += bucket.requests;
+  existing.credits += bucket.credits;
+  if (bucket.cacheRead) existing.cacheRead = (existing.cacheRead || 0) + bucket.cacheRead;
+  if (bucket.cacheWrite) existing.cacheWrite = (existing.cacheWrite || 0) + bucket.cacheWrite;
+  for (const identity of bucket.sourceIdentities) existing.sourceIdentities.add(identity);
+}
+
+function applyTranscriptFileDelta(diagnostics, delta) {
+  for (const field of TRANSCRIPT_COUNTER_FIELDS) diagnostics[field] += delta[field];
+  if (delta.estimated) diagnostics.estimated = true;
+  if (delta.lastDataAt && (!diagnostics.lastDataAt || Date.parse(delta.lastDataAt) > Date.parse(diagnostics.lastDataAt))) {
+    diagnostics.lastDataAt = delta.lastDataAt;
+  }
+}
+
 function collectQoderCnTranscriptRows(options = {}) {
   const homeDir = options.homeDir || os.homedir();
   const sinceMs = typeof options.sinceMs === 'number' ? options.sinceMs : undefined;
@@ -1539,6 +1607,8 @@ function collectQoderCnTranscriptRows(options = {}) {
   const diagnostics = transcriptDiagnostics(options);
   const startedAt = transcriptScanNow(options);
   const buckets = new Map();
+  const scanTimeZone = normalizeTimeZone(options.timeZone);
+  const cacheScope = openTranscriptCacheScope(options, JSON.stringify([clientId, sinceMs ?? null, scanTimeZone || null]));
   try {
     for (const rawRoot of roots) {
       if (!checkTranscriptBudget(diagnostics, startedAt, options)) {
@@ -1571,6 +1641,24 @@ function collectQoderCnTranscriptRows(options = {}) {
           diagnostics.truncated = true;
           throw transcriptBudgetError(diagnostics.failureCode, diagnostics);
         }
+        const fingerprint = transcriptFileFingerprint(stat);
+        const cached = cacheScope?.previous.get(filePath);
+        if (cached && cached.fingerprint === fingerprint && cached.root === root) {
+          applyTranscriptFileDelta(diagnostics, cached.delta);
+          diagnostics.readFiles += 1;
+          for (const [key, bucket] of cached.buckets) mergeTranscriptBucket(buckets, key, bucket);
+          cacheScope.next.set(filePath, cached);
+          continue;
+        }
+        const fileBuckets = new Map();
+        const before = {
+          ...Object.fromEntries(TRANSCRIPT_COUNTER_FIELDS.map((field) => [field, diagnostics[field]])),
+          truncated: diagnostics.truncated,
+          failureCode: diagnostics.failureCode,
+          lastDataAt: diagnostics.lastDataAt,
+          estimated: diagnostics.estimated
+        };
+        let fileComplete = true;
         const relative = path.relative(root, filePath);
         const dayHint = relative.split(path.sep).find((part) => /^\d{4}-\d{2}-\d{2}$/.test(part)) || '';
         const state = {
@@ -1579,7 +1667,7 @@ function collectQoderCnTranscriptRows(options = {}) {
           // or as context billed up to. See `processTranscriptLine`.
           countedTokens: 0,
           diagnostics,
-          buckets,
+          buckets: fileBuckets,
           projectLabel: transcriptProjectLabel(root, filePath),
           sessionId: transcriptSessionId(filePath, dayHint, clientId),
           sessionKey: transcriptRawSessionId(root, filePath),
@@ -1587,16 +1675,44 @@ function collectQoderCnTranscriptRows(options = {}) {
           sinceMs,
           timeZone: normalizeTimeZone(options.timeZone)
         };
+        // Read this file's own `estimated`/`lastDataAt` by starting them from
+        // empty, then fold them back into the scan's values (always, even when
+        // a budget error unwinds out of the file).
+        diagnostics.estimated = false;
+        diagnostics.lastDataAt = null;
+        let fileEstimated = false;
+        let fileLastDataAt = null;
         try {
           streamTranscriptFile(filePath, stat, state, diagnostics, startedAt, options);
           diagnostics.readFiles += 1;
         } catch (error) {
           if (error?.code && String(error.code).startsWith('QODER_CN_TRANSCRIPT_')) throw error;
           diagnostics.readErrors += 1;
+          fileComplete = false;
+        } finally {
+          fileEstimated = diagnostics.estimated;
+          fileLastDataAt = diagnostics.lastDataAt;
+          applyTranscriptFileDelta(Object.assign(diagnostics, { estimated: before.estimated, lastDataAt: before.lastDataAt }), {
+            ...Object.fromEntries(TRANSCRIPT_COUNTER_FIELDS.map((field) => [field, 0])),
+            estimated: fileEstimated,
+            lastDataAt: fileLastDataAt
+          });
+        }
+        for (const [key, bucket] of fileBuckets) mergeTranscriptBucket(buckets, key, bucket);
+        const delta = Object.fromEntries(TRANSCRIPT_COUNTER_FIELDS.map((field) => [field, diagnostics[field] - before[field]]));
+        fileComplete = fileComplete
+          && delta.readBytes === stat.size
+          && diagnostics.truncated === before.truncated
+          && diagnostics.failureCode === before.failureCode;
+        if (cacheScope && fileComplete) {
+          delta.estimated = fileEstimated;
+          delta.lastDataAt = fileLastDataAt;
+          cacheScope.next.set(filePath, { fingerprint, root, delta, buckets: fileBuckets });
         }
       }
     }
   } catch (error) {
+    cacheScope?.abandon();
     publishTranscriptDiagnostics(options, diagnostics);
     if (error?.code && String(error.code).startsWith('QODER_CN_TRANSCRIPT_')) throw error;
     diagnostics.failureCode = diagnostics.failureCode || 'QODER_CN_TRANSCRIPT_READ_FAILED';
@@ -1605,6 +1721,7 @@ function collectQoderCnTranscriptRows(options = {}) {
     wrapped.diagnostics = { ...diagnostics, usedSources: [...diagnostics.usedSources] };
     throw wrapped;
   }
+  cacheScope?.commit();
   const rows = [];
   const timeZone = normalizeTimeZone(options.timeZone);
   for (const bucket of buckets.values()) {

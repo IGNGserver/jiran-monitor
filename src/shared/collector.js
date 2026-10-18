@@ -259,18 +259,24 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
   const { bin, prefixArgs, env } = tokscaleCommand();
   return new Promise((resolve, reject) => {
     const child = spawn(bin, [...prefixArgs, ...userArgs], { env, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
+    // Raw chunks, decoded once at close: a full scan prints megabytes of JSON,
+    // and `chunk.toString()` per chunk both re-copies the text and splits any
+    // multi-byte UTF-8 character (a CJK project or session name) that straddles
+    // a chunk boundary into replacement characters.
+    const stdoutChunks = [];
+    const stderrChunks = [];
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       terminateChild(child);
       abandonChildStreams(child);
+      stdoutChunks.length = 0;
+      stderrChunks.length = 0;
       reject(new Error(`tokscale timed out after ${commandTimeoutMs}ms`));
     }, commandTimeoutMs);
-    child.stdout.on('data', (chunk) => { if (!settled) stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk) => { if (!settled) stderr += chunk.toString(); });
+    child.stdout.on('data', (chunk) => { if (!settled) stdoutChunks.push(chunk); });
+    child.stderr.on('data', (chunk) => { if (!settled) stderrChunks.push(chunk); });
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
@@ -281,6 +287,10 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
       clearTimeout(timeout);
       if (settled) return;
       settled = true;
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      stdoutChunks.length = 0;
+      stderrChunks.length = 0;
       if (code !== 0) return reject(new Error(`tokscale exited with code ${code}: ${stderr.trim() || stdout.trim()}`));
       try { resolve(parseJsonOutput(stdout)); } catch (error) { reject(error); }
     });
@@ -3385,6 +3395,8 @@ function applyFleetTimeZone(timeZone, options = {}) {
 // valid, so a long-running session periodically rescans month/allTime
 // and picks up any changes that the delta-derivation might miss.
 const FULL_SCAN_INTERVAL_MS = 60 * 60 * 1000;
+// Upper bound on the extra idle time a slow watch tick earns (watchTickDelayMs).
+const WATCH_IDLE_GAP_CAP_MS = 5 * 1000;
 
 // Escape hatch for filesystems that never deliver native events — network
 // mounts, some FUSE drivers, container bind mounts. chokidar has its own
@@ -4156,6 +4168,19 @@ function startCollector(options) {
     return targetClients;
   }
 
+  // Every watch tick is one full tokscale load (a period scan reads every log,
+  // then filters), so on a slow machine with an AI tool streaming into its logs
+  // the debounce re-armed straight into the next scan and the collector held a
+  // core indefinitely. Leave at least as much idle time after a tick as that
+  // tick took, capped so freshness stays within a few seconds: on a fast machine
+  // this is still just the debounce, on a slow one it bounds the duty cycle.
+  function watchTickDelayMs(now = Date.now()) {
+    const lastFinishedAt = Math.max(lastTickSuccessAt, lastTickFailureAt);
+    if (!lastFinishedAt || !Number.isFinite(lastTickDurationMs)) return watchDebounceMs;
+    const idleGap = Math.min(Math.max(0, lastTickDurationMs), WATCH_IDLE_GAP_CAP_MS);
+    return Math.max(watchDebounceMs, lastFinishedAt + idleGap - now);
+  }
+
   function scheduleTick(reason, eventClients) {
     if (stopped) return;
     recordWatchClients(eventClients);
@@ -4174,7 +4199,7 @@ function startCollector(options) {
         targetClients: takeWatchClients(),
         sourceSelfSync: sourceSyncQueue.takeDue()
       });
-    }, watchDebounceMs);
+    }, watchTickDelayMs());
   }
 
   // chokidar's close() returns a promise, but only after an O(N) synchronous
