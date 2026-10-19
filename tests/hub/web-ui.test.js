@@ -96,7 +96,7 @@ test('hub serves the web UI on the same port without a secret', async () => {
     assert.equal(sw.status, 200);
     assert.match(sw.headers.get('content-type') || '', /javascript/);
     const swSource = await sw.text();
-    assert.match(swSource, /token-monitor-web-v7-fluent/);
+    assert.match(swSource, /jiran-web-v8-fluent/);
     for (const modulePath of [
       '/ui/core/viewContext.js',
       '/ui/views/home.js',
@@ -140,6 +140,7 @@ test('hub serves the web UI on the same port without a secret', async () => {
     assert.ok(Array.isArray(manifestBody.icons));
     assert.ok(manifestBody.icons.some((icon) => String(icon.purpose || '').includes('maskable')));
     assert.ok(manifestBody.icons.some((icon) => String(icon.purpose || '').includes('any')));
+    assert.ok(manifestBody.icons.some((icon) => icon.sizes === '180x180' && icon.src.includes('apple-touch-icon')));
 
     // API routes remain JSON and still work beside the UI.
     const health = await (await fetch(`${base}/api/health`)).json();
