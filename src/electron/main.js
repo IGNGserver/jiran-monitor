@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, screen, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, screen, session, shell, utilityProcess } = require('electron');
 // The native downloader is needed only after the user requests an update.
 let autoUpdater;
 const { defaultDeviceId, loadDotEnv, parseBoolean, pidFileCandidates, sharedDataDir, normalizeHubUrl } = require('../shared/config');
@@ -78,10 +78,10 @@ const linuxAutostart = require('./linuxAutostart');
 const { classifyStreamFailure } = require('./syncConnection');
 const { composeLocalSyncStats, reattachLocalNativeView } = require('./syncDisplayStats');
 const {
-  cacheable: cacheableDesktopSnapshot,
   emptyDesktopSnapshotCache,
   readDesktopSnapshotCache,
-  writeDesktopSnapshotCache
+  writeDesktopSnapshotCache,
+  writeDesktopSnapshotCacheAsync
 } = require('./desktopSnapshotCache');
 const { normalizeSyncUploadIntervalMs } = require('../shared/syncUploadScheduler');
 const { createUpdateInstallQuitGuard, observeUpdateInstallHandoff } = require('./updateInstallQuit');
@@ -113,6 +113,9 @@ const {
 const { configureLinuxDisplayBackend } = require('./linuxDisplay');
 const { migrateLegacyUserData } = require('./userDataMigration');
 const { migrateLegacySharedData } = require('../shared/sharedDataMigration');
+const { startPerfProbe } = require('./perfProbe');
+const { createSseFrameSplitter } = require('./sseFrames');
+const { createCollectorProcess } = require('./collectorProcess');
 
 if (!app.isPackaged) loadDotEnv();
 configureLinuxDisplayBackend({ app, platform: process.platform, env: process.env, argv: process.argv });
@@ -1033,20 +1036,40 @@ function ensureDesktopSnapshotCacheLoaded() {
   return desktopSnapshotCache;
 }
 
+// The cache only has to survive a restart, so it is written at most once per
+// interval (trailing), off the main thread, and finally on quit. Writing it on
+// every collector tick and every Hub frame used to serialize, fsync and rename a
+// multi-megabyte file on the thread that pumps the window's messages.
+const DESKTOP_SNAPSHOT_CACHE_WRITE_INTERVAL_MS = 30 * 1000;
+let desktopSnapshotCacheWriteInFlight = false;
+let desktopSnapshotCacheWriteDirty = false;
+let desktopSnapshotCacheLastWriteAt = 0;
+
 function queueDesktopSnapshotCacheWrite() {
-  if (desktopSnapshotCacheWriteTimer !== null) return;
-  desktopSnapshotCacheWriteTimer = setTimeout(() => {
-    desktopSnapshotCacheWriteTimer = null;
-    try {
-      ensureDesktopSnapshotCacheLoaded();
-      desktopSnapshotCache = writeDesktopSnapshotCache(desktopSnapshotCachePath(), desktopSnapshotCache);
-    } catch (error) {
-      // Cache persistence is best effort. A permission failure must not stop
-      // collection, Hub reconnect, or settings access.
-      console.warn(`[snapshot-cache] write failed: ${error.message}`);
-    }
-  }, 250);
+  desktopSnapshotCacheWriteDirty = true;
+  if (desktopSnapshotCacheWriteTimer !== null || desktopSnapshotCacheWriteInFlight) return;
+  const wait = Math.max(0, desktopSnapshotCacheLastWriteAt + DESKTOP_SNAPSHOT_CACHE_WRITE_INTERVAL_MS - Date.now());
+  desktopSnapshotCacheWriteTimer = setTimeout(runDesktopSnapshotCacheWrite, wait);
   desktopSnapshotCacheWriteTimer.unref?.();
+}
+
+async function runDesktopSnapshotCacheWrite() {
+  desktopSnapshotCacheWriteTimer = null;
+  if (!desktopSnapshotCacheWriteDirty) return;
+  desktopSnapshotCacheWriteDirty = false;
+  desktopSnapshotCacheWriteInFlight = true;
+  desktopSnapshotCacheLastWriteAt = Date.now();
+  try {
+    ensureDesktopSnapshotCacheLoaded();
+    await writeDesktopSnapshotCacheAsync(desktopSnapshotCachePath(), desktopSnapshotCache);
+  } catch (error) {
+    // Cache persistence is best effort. A permission failure must not stop
+    // collection, Hub reconnect, or settings access.
+    console.warn(`[snapshot-cache] write failed: ${error.message}`);
+  } finally {
+    desktopSnapshotCacheWriteInFlight = false;
+    if (desktopSnapshotCacheWriteDirty) queueDesktopSnapshotCacheWrite();
+  }
 }
 
 function flushDesktopSnapshotCache() {
@@ -1054,6 +1077,7 @@ function flushDesktopSnapshotCache() {
     clearTimeout(desktopSnapshotCacheWriteTimer);
     desktopSnapshotCacheWriteTimer = null;
   }
+  desktopSnapshotCacheWriteDirty = false;
   if (!desktopSnapshotCacheLoaded || !desktopSnapshotCache) return;
   try {
     desktopSnapshotCache = writeDesktopSnapshotCache(desktopSnapshotCachePath(), desktopSnapshotCache);
@@ -1066,11 +1090,13 @@ function cacheLocalSnapshot({ history = null } = {}) {
   ensureDesktopSnapshotCacheLoaded();
   if (!localStats && !lastCollectedDevice) return;
   const capturedAt = new Date().toISOString();
+  // References, not copies: the entry is serialized when it is written, and
+  // the objects are the same read model the renderer is being served.
   desktopSnapshotCache.local = {
     capturedAt,
-    stats: cacheableDesktopSnapshot(localStats || localDeviceStats(lastCollectedDevice)),
-    device: cacheableDesktopSnapshot(lastCollectedDevice || localDevice),
-    history: cacheableDesktopSnapshot(history)
+    stats: localStats || localDeviceStats(lastCollectedDevice),
+    device: lastCollectedDevice || localDevice || null,
+    history: history || null
   };
   queueDesktopSnapshotCacheWrite();
 }
@@ -1081,9 +1107,9 @@ function cacheHubSnapshot({ history = null } = {}) {
   const previous = desktopSnapshotCache.hub || {};
   desktopSnapshotCache.hub = {
     capturedAt: new Date().toISOString(),
-    stats: cacheableDesktopSnapshot(latestHubStats),
+    stats: latestHubStats,
     device: null,
-    history: cacheableDesktopSnapshot(history) || previous.history || null
+    history: history || previous.history || null
   };
   queueDesktopSnapshotCacheWrite();
 }
@@ -1152,6 +1178,23 @@ function desktopSnapshotMeta() {
 
 let mode = 'idle';
 let deviceRuntimeHandle = null;
+// The scan runs in a utility process so its synchronous work cannot block the
+// thread that pumps the window (collectorHost.js explains why). The in-process
+// path stays available as an escape hatch for debugging.
+let collectorProcess = null;
+function collectorRuntimeDeps() {
+  if (parseBoolean(process.env.TOKEN_MONITOR_COLLECTOR_IN_PROCESS, false)) return {};
+  if (typeof utilityProcess?.fork !== 'function') return {};
+  try {
+    collectorProcess ||= createCollectorProcess({
+      fork: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options)
+    });
+    return { createUsageRuntime: collectorProcess.createUsageRuntime };
+  } catch (error) {
+    console.log(`[collector] utility process unavailable, collecting in-process: ${error.message}`);
+    return {};
+  }
+}
 let localDevice = null;
 let localStats = null;
 let sseAbortController = null;
@@ -1459,9 +1502,12 @@ function startSyncCollector(options) {
       );
       localStatsLive = true;
       cacheLocalSnapshot();
-      const displayStats = composeLocalSyncStats(latestHubStats, lastCollectedDevice);
-      if (displayStats) {
-        sendPush({ event: 'stats', data: { type: 'stats', reason: 'local', stats: displayStats, at: new Date().toISOString() } });
+      if (latestHubStats || lastCollectedDevice) {
+        sendPush({
+          event: 'stats',
+          data: { type: 'stats', reason: 'local', at: new Date().toISOString() },
+          composeStats: () => composeLocalSyncStats(latestHubStats, lastCollectedDevice)
+        });
       }
       updateSyncHealth('local', { state: 'ok', lastSuccessAt: new Date().toISOString(), failureCode: null });
       return true;
@@ -1474,7 +1520,7 @@ function startSyncCollector(options) {
     usageOptions: electronUsageConfig('sync-collector'),
     sink: syncUploadSink,
     onError: (error, reason) => console.log(`[sync-collector] ${reason}: ${error.message}`)
-  });
+  }, collectorRuntimeDeps());
   publishSyncHealth();
 }
 
@@ -1527,8 +1573,29 @@ let pendingPushTimer = null;
 let pendingPushHistoryRevision = null;
 let statsPushDeferred = false;
 
+let deferredStatsCompose = null;
+
+// A stats payload either carries its stats or, for a Hub frame, a composeStats
+// thunk that builds them on delivery (see the SSE reader).
+function resolvePushStats(payload) {
+  if (typeof payload?.composeStats !== 'function') return payload;
+  const { composeStats, ...rest } = payload;
+  return { ...rest, data: { ...rest.data, stats: composeStats() } };
+}
+
+// The newest stats the renderer would have been sent, composing a Hub frame
+// that arrived while the window was hidden.
+function settleDeferredStats() {
+  if (!deferredStatsCompose) return latestStats;
+  const compose = deferredStatsCompose;
+  deferredStatsCompose = null;
+  const stats = compose();
+  if (stats) latestStats = injectLocalDeviceStatus(stats);
+  return latestStats;
+}
+
 function sendPush(payload) {
-  if (payload?.data?.stats) {
+  if (payload?.data?.stats || typeof payload?.composeStats === 'function') {
     pendingPushHistoryRevision ??= statsHistoryRevision(latestStats);
     pendingStatsPush = payload;
   } else {
@@ -1548,8 +1615,23 @@ function flushPush() {
   if (!statsPayload && !otherPayload) return;
   const previousHistoryRevision = pendingPushHistoryRevision;
   pendingPushHistoryRevision = null;
+  const windowHidden = !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
   for (let payload of [statsPayload, otherPayload]) {
     if (!payload) continue;
+    if (typeof payload.composeStats === 'function') {
+      if (windowHidden) {
+        // Keep only the newest frame's thunk; replayDeferredStatsPush (or the
+        // next visible frame) composes it once.
+        deferredStatsCompose = payload.composeStats;
+        statsPushDeferred = true;
+        continue;
+      }
+      deferredStatsCompose = null;
+      payload = resolvePushStats(payload);
+      if (!payload.data.stats) continue;
+    } else if (payload?.data?.stats) {
+      deferredStatsCompose = null;
+    }
     if (payload?.data?.stats) {
       injectLocalDeviceStatus(payload.data.stats);
       latestStats = payload.data.stats;
@@ -1595,6 +1677,7 @@ function replayDeferredStatsPush() {
   // A tick queued just before reveal may contain a newer snapshot than
   // latestStats. Flushing first also avoids sending the same stats twice.
   flushPendingPush();
+  settleDeferredStats();
   try {
     if (statsPushDeferred && latestStats) {
       mainWindow.webContents.send('stats:push', {
@@ -1729,7 +1812,7 @@ function startLocalCollector() {
       });
       sendStatus(false, { reason: 'network', detail: stableSyncFailureCode(error, reason || 'collection_failed'), state: 'collecting' });
     }
-  });
+  }, collectorRuntimeDeps());
 }
 
 function clearSyncRestPoll() {
@@ -1992,17 +2075,13 @@ async function startStatsStream(options = {}) {
     armSseIdleWatchdog(controller, timeoutStream);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    const splitFrames = createSseFrameSplitter();
     for (;;) {
       const { value, done } = await reader.read();
       if (!isCurrent()) return { ok: false, superseded: true };
       if (done) break;
       if (value) armSseIdleWatchdog(controller, timeoutStream);
-      buffer += decoder.decode(value, { stream: true });
-      let frame;
-      while ((frame = buffer.match(/\r?\n\r?\n/)) !== null) {
-        const chunk = buffer.slice(0, frame.index);
-        buffer = buffer.slice(frame.index + frame[0].length);
+      for (const chunk of splitFrames(decoder.decode(value, { stream: true }))) {
         let parsed = parseSseChunk(chunk);
         if (!parsed) continue;
         const eventAt = new Date().toISOString();
@@ -2026,8 +2105,11 @@ async function startStatsStream(options = {}) {
           latestHubStats = parsed.data.stats;
           latestHubStatsLive = true;
           cacheHubSnapshot();
-          const displayStats = composeLocalSyncStats(latestHubStats, lastCollectedDevice);
-          parsed = { ...parsed, data: { ...parsed.data, stats: displayStats } };
+          // Composed when it is delivered, not per frame: re-aggregating the
+          // whole fleet is the main cost of a frame, and while the window is
+          // hidden (the tray default) nothing reads the result until it returns.
+          const hubStats = latestHubStats;
+          parsed = { ...parsed, composeStats: () => composeLocalSyncStats(hubStats, lastCollectedDevice) };
         }
         sendPush(parsed);
       }
@@ -2238,6 +2320,7 @@ function performQuit() {
   quitInProgress = true;
   try { stopAll(); }
   catch (error) { console.log(`[quit] stopAll failed: ${error?.message || error}`); }
+  try { collectorProcess?.dispose(); } catch (_) {}
   app.exit(0);
 }
 
@@ -3196,12 +3279,13 @@ async function fetchCustomRangeStats(rangeInput) {
     const collectLocalCustomRange = async () => {
       const clients = TRACKED_CLIENTS;
       const commandTimeoutMs = Number(process.env.TOKEN_MONITOR_COMMAND_TIMEOUT_MS) || 120000;
-      const result = await collectCustomRangeOnce({
-        clients,
-        range,
-        commandTimeoutMs,
-        homeDir: os.homedir()
-      });
+      const rangeArgs = { clients, range, commandTimeoutMs, homeDir: os.homedir() };
+      // Same process as the collector when it is out of process: a range pass
+      // is a full tokscale load plus parsing, which must not run on this thread.
+      const rangeRunner = collectorRuntimeDeps().createUsageRuntime ? collectorProcess : null;
+      const result = rangeRunner
+        ? await rangeRunner.run('collectCustomRangeOnce', [rangeArgs])
+        : await collectCustomRangeOnce(rangeArgs);
       return { ok: true, ...result };
     };
 
@@ -3447,6 +3531,14 @@ function buildApplicationMenu() {
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(DOCK_ICON_PATH);
   ensureSettingsLoaded();
+  startPerfProbe({
+    app,
+    filePath: path.join(app.getPath('userData'), 'perf.log'),
+    extra: () => {
+      const usage = deviceRuntimeHandle?.getDiagnostics?.()?.usage || null;
+      return usage ? { mode, lastTickDurationMs: usage.lastTickDurationMs, lastTickScope: usage.lastTickScope } : { mode };
+    }
+  });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {

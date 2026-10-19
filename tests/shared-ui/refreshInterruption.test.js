@@ -175,10 +175,49 @@ test('reopening a detail does not replay its entrance animation', () => {
   assert.match(fluent, /if \(event\.target\.dataset\.restoredOpen\)/, 'the toggle listener ignores a snapshot restore');
 });
 
+/** `writeHtmlIfChanged` from app.js, evaluated on its own. */
+function loadWriteHtmlIfChanged() {
+  const source = appSource.slice(
+    appSource.indexOf('const writtenHtml = new WeakMap();'),
+    appSource.indexOf('function renderStaticUiIcons()')
+  );
+  return vm.runInNewContext(`${source}; writeHtmlIfChanged;`, { WeakMap });
+}
+
+/** A container whose innerHTML reads back the way a browser serializes it. */
+function serializingElement() {
+  let html = '';
+  let nodes = 0;
+  const element = {
+    writes: 0,
+    get childNodes() { return { length: nodes }; },
+    // An inline SVG `<path/>` serializes as `<path></path>` and `" >` as `">`:
+    // the read-back never equals the template that produced it.
+    get innerHTML() { return html.replace(/<path([^>]*?)\/>/g, '<path$1></path>').replace(/" >/g, '">'); },
+    set innerHTML(value) { element.writes += 1; html = value; nodes = value ? 1 : 0; }
+  };
+  return element;
+}
+
 test('chrome subtrees are only rewritten when they actually change', () => {
-  assert.match(appSource, /if \(els\.primaryNav\.innerHTML !== navHtml\) els\.primaryNav\.innerHTML = navHtml;/);
-  assert.match(appSource, /if \(els\.periodTabs\.innerHTML !== periodTabsHtml\) els\.periodTabs\.innerHTML = periodTabsHtml;/);
-  assert.match(appSource, /if \(nav\.innerHTML !== navHtml\) nav\.innerHTML = navHtml;/);
+  const writeHtmlIfChanged = loadWriteHtmlIfChanged();
+  const nav = serializingElement();
+  const template = '<a class="nav-btn " data-view="usage" ><span><svg><path d="M4 19V5"/></svg></span></a>';
+  assert.notEqual(nav.innerHTML, template, 'the stub reproduces the serialization mismatch');
+  assert.equal(writeHtmlIfChanged(nav, template), true);
+  // The same frame again, many times: the subtree is left alone even though
+  // reading innerHTML back would never match the template.
+  for (let frame = 0; frame < 5; frame += 1) assert.equal(writeHtmlIfChanged(nav, template), false);
+  assert.equal(nav.writes, 1);
+  assert.equal(writeHtmlIfChanged(nav, template.replace('usage', 'devices')), true);
+  assert.equal(nav.writes, 2);
+
+  // Every chrome subtree goes through the helper rather than an innerHTML compare.
+  assert.doesNotMatch(appSource, /\.innerHTML !== /, 'no guard compares against serialized innerHTML');
+  assert.match(appSource, /writeHtmlIfChanged\(els\.primaryNav, navHtml\)/);
+  assert.match(appSource, /writeHtmlIfChanged\(els\.periodTabs, periodTabsHtml\)/);
+  assert.match(appSource, /writeHtmlIfChanged\(nav, navHtml\)/);
+  assert.match(appSource, /optionsChanged = writeHtmlIfChanged\(deviceListbox, deviceOptionsHtml\)/);
 });
 
 test('a data update does not replay the entrance or chart sweep', () => {

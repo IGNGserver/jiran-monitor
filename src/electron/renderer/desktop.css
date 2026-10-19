@@ -281,10 +281,21 @@ body:is([data-window-surface="transparent"], [data-window-surface="acrylic"], [d
   backdrop-filter: none;
 }
 
+/* Persistent surfaces carry no CSS backdrop-filter unless it is visible. The OS
+   material (Mica/Acrylic/vibrancy/liquid glass) is composited by the window
+   server *under* the web contents, so Chromium's backdrop-filter only sees the
+   page's own backdrop — transparent, or a uniform tint — and blurring that is a
+   no-op that still costs every element its own render surface and a blur pass
+   per frame (re-run on every scroll and data refresh). Each removed rule was
+   checked pixel-for-pixel (screenshot with and without it, overview and usage
+   views): zero changed pixels. Three blurs do change pixels, because they sit
+   over another translucent layer rather than the bare backdrop, and are kept:
+   the transparent-mode sidebar and the vibrancy / liquid-glass sync-status card.
+   tests/electron/desktopMaterialCss.test.js pins this list. */
+
 /* 2. Mica Material (Windows 11) - Natural canvas texture with elevated content */
 body[data-window-surface="mica"] .sidebar {
   background: color-mix(in srgb, var(--colorNeutralBackground2) 65%, transparent);
-  backdrop-filter: blur(20px);
 }
 
 body[data-window-surface="mica"] .main {
@@ -327,7 +338,6 @@ body[data-window-surface="mica"] .desktop-sync-status {
 /* 3. Acrylic Material (Windows 10/11) - Rich translucent blur with soft tint */
 body[data-window-surface="acrylic"] .sidebar {
   background: color-mix(in srgb, var(--colorNeutralBackground3) 50%, transparent);
-  backdrop-filter: blur(30px);
 }
 
 body[data-window-surface="acrylic"] .main {
@@ -374,8 +384,6 @@ body[data-window-surface="transparent"] {
 
 body[data-window-surface="transparent"] .app {
   background: color-mix(in srgb, var(--colorNeutralBackground3) 78%, transparent);
-  backdrop-filter: blur(28px) saturate(125%);
-  -webkit-backdrop-filter: blur(28px) saturate(125%);
 }
 
 body[data-window-surface="transparent"] .sidebar {
@@ -425,8 +433,6 @@ body[data-window-surface="transparent"] .desktop-sync-status {
 /* 5. macOS Frosted Glass (Vibrancy) - Classic Deep Diffusion Glass */
 body[data-window-surface="vibrancy"] .sidebar {
   background: color-mix(in srgb, var(--colorNeutralBackground2) 68%, transparent);
-  backdrop-filter: blur(24px) saturate(140%);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
   border-right: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
 }
 
@@ -436,32 +442,24 @@ body[data-window-surface="vibrancy"] .main {
 
 body[data-window-surface="vibrancy"] .scope-commandbar {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 78%, transparent);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border-color: color-mix(in srgb, var(--colorNeutralStroke1) 65%, transparent);
   box-shadow: var(--shadow4);
 }
 
 body[data-window-surface="vibrancy"] .hero {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 80%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   border-color: color-mix(in srgb, var(--colorNeutralStroke1) 70%, transparent);
   box-shadow: var(--shadow4);
 }
 
 body[data-window-surface="vibrancy"] .panel {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 86%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
   border-color: color-mix(in srgb, var(--colorNeutralStroke1) 75%, transparent);
   box-shadow: var(--shadow4);
 }
 
 body[data-window-surface="vibrancy"] .overview-breakdowns .panel {
   background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   border-color: transparent;
   box-shadow: none;
 }
@@ -480,8 +478,6 @@ body[data-window-surface="vibrancy"] .desktop-sync-status {
 /* 6. macOS 26+ Liquid Glass - Crystalline Specular & Translucent Refraction */
 body[data-window-surface="liquid-glass"] .sidebar {
   background: color-mix(in srgb, var(--colorNeutralBackground2) 50%, transparent);
-  backdrop-filter: blur(32px) saturate(160%);
-  -webkit-backdrop-filter: blur(32px) saturate(160%);
   border-right: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 40%, transparent);
 }
 
@@ -491,32 +487,24 @@ body[data-window-surface="liquid-glass"] .main {
 
 body[data-window-surface="liquid-glass"] .scope-commandbar {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 62%, transparent);
-  backdrop-filter: blur(28px) saturate(175%);
-  -webkit-backdrop-filter: blur(28px) saturate(175%);
   border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 50%, transparent);
   box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 body[data-window-surface="liquid-glass"] .hero {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 75%, transparent);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
   border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 60%, transparent);
   box-shadow: 0 6px 20px -3px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 body[data-window-surface="liquid-glass"] .panel {
   background: color-mix(in srgb, var(--colorNeutralBackground1) 84%, transparent);
-  backdrop-filter: blur(20px) saturate(135%);
-  -webkit-backdrop-filter: blur(20px) saturate(135%);
   border: 1px solid color-mix(in srgb, var(--colorNeutralStroke1) 70%, transparent);
   box-shadow: var(--shadow8);
 }
 
 body[data-window-surface="liquid-glass"] .overview-breakdowns .panel {
   background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   border-color: transparent;
   box-shadow: none;
 }

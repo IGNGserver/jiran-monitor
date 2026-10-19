@@ -37,15 +37,27 @@ const FIXED_OFFSET_RE = /^[+-]|^(?:UTC|GMT)[+-]/i;
 
 const formatterCache = new Map();
 
+// Whether a name is in the tz database cannot change while the process runs,
+// and the check constructs an Intl.DateTimeFormat — expensive, and it runs per
+// record and per period while a fleet snapshot is aggregated on every frame.
+const VALID_ZONE_CACHE_LIMIT = 256;
+const validZoneCache = new Map();
+
 function isValidTimeZone(value) {
   const zone = String(value || '').trim().slice(0, ZONE_MAX_LENGTH);
   if (!zone || FIXED_OFFSET_RE.test(zone)) return false;
+  const known = validZoneCache.get(zone);
+  if (known !== undefined) return known;
+  let valid;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(0);
-    return true;
+    valid = true;
   } catch (_) {
-    return false;
+    valid = false;
   }
+  if (validZoneCache.size >= VALID_ZONE_CACHE_LIMIT) validZoneCache.clear();
+  validZoneCache.set(zone, valid);
+  return valid;
 }
 
 // A zone the tz database knows, or ''. Fixed offsets are rejected by Intl and by
