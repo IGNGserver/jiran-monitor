@@ -1559,9 +1559,11 @@ function createHub({
       let rows = [];
       for (const periodName of periods) {
         const sessions = stats.periods?.[periodName]?.sessions || {};
-        rows = rows.concat(Object.values(sessions).map((session) => ({ ...session, period: periodName })));
+        rows = rows.concat(Object.entries(sessions).filter(([, session]) => Number(session.totalTokens || 0) > 0)
+          .map(([key, session]) => ({ ...session, key, period: periodName })));
       }
-      rows.sort((left, right) => String(right.lastUsedAt || '').localeCompare(String(left.lastUsedAt || '')));
+      rows.sort((left, right) => Date.parse(right.lastUsedAt || right.startedAt || 0) - Date.parse(left.lastUsedAt || left.startedAt || 0)
+        || Number(right.totalTokens || 0) - Number(left.totalTokens || 0));
       const shown = rows.slice(0, SESSION_LIST_LIMIT);
       return sendJson(res, 200, { total: rows.length, shown: shown.length, sessions: shown });
     }

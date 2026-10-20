@@ -1916,6 +1916,7 @@ function summarizeStats(stats = {}) {
   for (const periodName of PERIODS) periods[periodName] = summaryPeriod(stats.periods?.[periodName]);
   return {
     ...stats,
+    detail: 'summary',
     periods,
     devices: (stats.devices || []).map((device) => {
       const devicePeriods = {};

@@ -12,38 +12,5 @@
 // so a `\r\n\r\n` split across chunks is still found) and the pieces of a
 // frame are joined exactly once, when its boundary arrives.
 
-const BOUNDARY = /\r?\n\r?\n/g;
-const CARRY = 3;
-
-function createSseFrameSplitter() {
-  let pending = [];
-  let carry = '';
-
-  return function push(text) {
-    const frames = [];
-    let rest = String(text || '');
-    for (;;) {
-      const probe = carry + rest;
-      BOUNDARY.lastIndex = 0;
-      const match = BOUNDARY.exec(probe);
-      if (!match) {
-        if (rest) pending.push(rest);
-        carry = probe.slice(-CARRY);
-        return frames;
-      }
-      // `carry` is already part of `pending`, so offsets into `probe` shift by
-      // its length when mapped back onto `rest`. A boundary that started inside
-      // the carry ends the frame a few characters before the pending text does.
-      const cut = match.index - carry.length;
-      let frame = pending.join('');
-      if (cut >= 0) frame += rest.slice(0, cut);
-      else frame = frame.slice(0, frame.length + cut);
-      frames.push(frame);
-      rest = rest.slice(match.index + match[0].length - carry.length);
-      pending = [];
-      carry = '';
-    }
-  };
-}
-
-module.exports = { createSseFrameSplitter };
+// Node 22.13+ / Electron support require(esm); both hosts share the bounded parser.
+module.exports = require('../shared-ui/core/sseFrames.js');

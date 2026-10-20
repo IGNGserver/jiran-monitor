@@ -262,7 +262,8 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     // list it was replacing was still on screen.
     val coldStart = _state.value.stats == null
     _state.value = _state.value.copy(isLoading = coldStart, error = null)
-    val staged = _state.value.authorization?.capabilities?.statsSummary == true
+    // Try summary before capability discovery; only an unsupported route falls back.
+    val staged = _state.value.authorization?.capabilities?.statsSummary != false
     when (val result = repository.stats(staged)) {
       is HubResult.Success -> if (isCurrent(generation)) {
         if (frameVersion == statsFrameVersion) {
@@ -635,7 +636,7 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       var backoffMs = 1_000L
       while (isActive && isCurrent(generation)) {
         _state.value = _state.value.copy(realtime = RealtimeStatus.Reconnecting)
-        runCatching {
+        val streamResult = runCatching {
           repository.statsEvents().collect { event ->
             if (isCurrent(generation)) {
               event.stats?.let { stats ->
@@ -670,9 +671,15 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
         }.onFailure {
           if (isActive && isCurrent(generation)) _state.value = _state.value.copy(realtime = RealtimeStatus.Disconnected)
         }
+        if (streamResult.exceptionOrNull() is com.igng.tokenmonitor.android.data.repository.SseAuthorizationException) {
+          if (isCurrent(generation)) _state.value = _state.value.copy(error = "未授权：请检查共享密钥。")
+          return@launch
+        }
         if (isActive && isCurrent(generation)) {
           _state.value = _state.value.copy(realtime = RealtimeStatus.Reconnecting)
-          delay(backoffMs)
+          // Buffered SSE must not prevent lightweight REST from recovering data.
+          if (backoffMs >= 4_000L) refreshStats().join()
+          delay((backoffMs * kotlin.random.Random.nextLong(800L, 1201L) / 1000L).coerceAtMost(30_000L))
           backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
         }
       }

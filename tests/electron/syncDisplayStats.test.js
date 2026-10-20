@@ -1,5 +1,10 @@
 'use strict';
 
+require('node:test')('remote summaries never get re-aggregated from incomplete device periods', () => {
+  const stats = { detail: 'summary', devices: [], periods: { today: { totalTokens: 123 } } };
+  require('node:assert/strict').equal(require('../../src/electron/syncDisplayStats').composeLocalSyncStats(stats, { deviceId: 'local', today: { totalTokens: 999 } }), stats);
+});
+
 const assert = require('node:assert/strict');
 const test = require('node:test');
 

@@ -12,6 +12,9 @@ function nonNegativeNumber(value) {
 }
 
 function composeLocalSyncStats(hubStats, localDevice, options = {}) {
+  // A summary omits per-device grain: aggregating it with one full local device
+  // would erase the other devices' client/model maps. The Hub stays authoritative.
+  if (hubStats?.detail === 'summary') return hubStats;
   if (!localDevice?.deviceId) return hubStats;
   if (hubStats && !Array.isArray(hubStats.devices)) return hubStats;
 

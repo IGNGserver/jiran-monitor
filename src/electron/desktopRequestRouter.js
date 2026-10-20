@@ -79,7 +79,11 @@ function createRequestRouter(deps) {
   // Routes the desktop client always serves itself, regardless of Hub state.
   // These are the device-local surfaces the Hub has no concept of.
   async function localRoute(path, method, options) {
-    if (path === '/stats' && READ_METHODS.has(method)) return call(deps.getStats, options);
+    if ((path === '/stats' || path === '/stats/summary') && READ_METHODS.has(method)) return call(deps.getStats, options);
+    if (/^\/devices\/[^/]+$/.test(path) && READ_METHODS.has(method) && deps.getDevice) {
+      return call(deps.getDevice, decodeURIComponent(path.slice('/devices/'.length)));
+    }
+    if (path === '/sessions' && READ_METHODS.has(method)) return call(deps.getSessions, options.query.get('period') || 'today');
     if (path === '/history' && READ_METHODS.has(method)) return call(deps.getHistory, options);
     if (path === '/rates' && READ_METHODS.has(method)) return call(deps.getRates, options);
     if (path === '/capabilities' && READ_METHODS.has(method)) return call(deps.getCapabilities, options);

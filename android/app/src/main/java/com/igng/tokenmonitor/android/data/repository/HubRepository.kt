@@ -45,6 +45,8 @@ sealed interface HubResult<out T> {
   data class Failure(val error: HubError) : HubResult<Nothing>
 }
 
+class SseAuthorizationException : IOException("SSE unauthorized; update the Hub credential")
+
 /**
  * A conditional read's outcome: [document] is null when the server answered
  * `304 Not Modified`, and [etag] is the validator to send on the next read.
@@ -78,7 +80,6 @@ class HubRepository @Inject constructor(
     }
     // /api/health is intentionally public on the Hub, so a health-only check
     // cannot prove that the saved secret can access the protected API.
-    api.stats()
     val authorization = api.capabilities()
     health.copy(
       apiVersion = authorization.apiVersion ?: health.apiVersion,
@@ -94,7 +95,13 @@ class HubRepository @Inject constructor(
    * served by the unchanged `/api/stats`.
    */
   suspend fun stats(staged: Boolean): HubResult<StatsDto> =
-    withConnection { apiFactory.create(it).let { api -> if (staged) api.statsSummary() else api.stats() } }
+    withConnection { apiFactory.create(it).let { api ->
+      if (!staged) api.stats() else try {
+        api.statsSummary()
+      } catch (error: HttpException) {
+        if (error.code() == 404 || error.code() == 405) api.stats() else throw error
+      }
+    } }
       .mapSuccess { it.sanitizeForDisplay() }
   suspend fun device(deviceId: String): HubResult<DeviceResponseDto> =
     withConnection { apiFactory.create(it).device(deviceId) }
@@ -193,12 +200,21 @@ class HubRepository @Inject constructor(
     }
     val source = apiFactory.eventSource(config, apiFactory.statsRequest(config), object : EventSourceListener() {
       override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+        if (data.length > 8 * 1024 * 1024) {
+          close(IOException("SSE frame is too large"))
+          eventSource.cancel()
+          return
+        }
         runCatching { json.decodeFromString<SseStatsDto>(data).sanitizeForDisplay() }
           .onSuccess { trySend(it) }
           .onFailure { close(it) }
       }
 
       override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+        if (response?.code == 401) {
+          close(SseAuthorizationException())
+          return
+        }
         close(t ?: IOException("SSE closed with HTTP ${response?.code ?: "unknown"}"))
       }
     })

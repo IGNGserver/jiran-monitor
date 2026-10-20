@@ -151,7 +151,11 @@ async function fetchWithTimeout(fetchFn, url, options = {}, timeoutMs = DEFAULT_
     }, deadline);
   });
   const requestPromise = Promise.resolve().then(async () => {
-    const response = await fetchFn(url, { ...options, signal: controller.signal });
+    // The caller's cancellation must remain wired after SSE headers arrive.
+    // The temporary deadline listener below is disposed at that point, but an
+    // AbortSignal.any relationship lasts for the whole response body lifetime.
+    const signal = externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal;
+    const response = await fetchFn(url, { ...options, signal });
     if (!bufferBody || !response || typeof response.arrayBuffer !== 'function') return response;
 
     // fetch() resolves when response headers arrive. Ordinary Hub calls need the

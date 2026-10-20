@@ -302,6 +302,10 @@ aggregate and device list, minus the two detail collections a dashboard does not
 draw. Every headline number is a reference to the value `/api/stats` already
 computed, not a second measurement.
 
+The additive `detail: "summary"` marker identifies this projection in REST and
+slim SSE responses. Clients negotiating with older staged Hubs must also accept
+the same projection without the marker.
+
 Dropped relative to `/api/stats`:
 
 - `periods.*.sessions`, `devices[].periods.*.sessions` — the session archive
@@ -343,10 +347,11 @@ Requires the owner key. The aggregate session list on its own, so
 `/api/stats` no longer has to carry it for a screen the user may never open.
 Returns `{ total, shown, sessions }`:
 
-- `total` is the number of session rows the Hub holds for the requested periods
+- `total` is the number of positive-token session rows for the requested periods
 - `shown` is the number returned after the display cap (200 rows, newest first
   by `lastUsedAt`); `total > shown` means the list is capped, not complete
-- `sessions[]` is the session shape from `periods.*.sessions`, plus a `period`
+- `sessions[]` is the session shape from `periods.*.sessions`, plus its original
+  map `key` (for component metrics) and a `period`
   field naming where the row came from (`today` / `month` / `allTime`)
 
 The optional `period` query parameter restricts the list to one of those three.
@@ -369,7 +374,7 @@ every change, so a client never polls to stay live.
   the frame omits have moved and re-fetches them (`GET /api/devices/:id`,
   `GET /api/sessions`, `GET /api/history`).
   Without the parameter the stream is unchanged and carries the full document,
-  which is what the shared web/desktop renderer reads directly.
+  for legacy clients. Current web and desktop hosts negotiate the slim shape.
 - A `: hb` comment line is written on a fixed 30-second cadence purely to keep
   the connection alive; it never queries MySQL.
 - Streams are bounded. At capacity the Hub answers `503` with

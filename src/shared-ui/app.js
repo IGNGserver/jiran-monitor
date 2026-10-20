@@ -24,6 +24,7 @@ import {
 } from './transport/index.js';
 import { applyI18n, resolveLocale, t } from './core/i18n.js';
 import { markLoadingStage } from './core/loadingPerformance.js';
+import { createDetailCache, detailRequest, withStatsDetail } from './core/stagedStats.js';
 import {
   isPresetRangePeriod,
   localDayKey,
@@ -453,8 +454,11 @@ function tr(key, params) {
   return t(state.locale, key, params);
 }
 
+const statsDetails = createDetailCache((path, options) => fetchJson(path, { ...options, secret: state.secret }));
+
 function viewStats() {
-  const stats = state.stats || EMPTY_STATS_MODEL;
+  const spec = detailRequest(state.stats, state.prefs);
+  const stats = withStatsDetail(state.stats || EMPTY_STATS_MODEL, spec, statsDetails.get(spec)?.data);
   const deviceId = String(state.prefs.deviceFilter || '').trim();
   if (!deviceId) return stats;
   const device = (stats.devices || []).find((entry) => String(entry?.deviceId || '') === deviceId);
@@ -1876,6 +1880,11 @@ async function saveWebSettingsForm(form) {
 }
 
 function signOutFromHub() {
+  statsDetails.clear();
+  state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
+  state.statsRequest = null;
+  state.stats = null;
+  state.history = null;
   clearSecret();
   state.secret = '';
   if (state.stopStream) state.stopStream();
@@ -2006,6 +2015,19 @@ function render({ quiet = false } = {}) {
   }
   let html;
   try {
+    // Headline figures remain available while an explicitly selected detail loads.
+    if (typeof statsDetails !== 'undefined') {
+      const spec = detailRequest(state.stats, state.prefs);
+      if (spec && !statsDetails.get(spec)) {
+        void statsDetails.load(spec).then(() => render({ quiet: true }));
+      }
+      if (spec && !statsDetails.get(spec)?.data) {
+        renderHero();
+        const error = statsDetails.get(spec)?.error;
+        writeContentHtml(error ? managementError(tr('error.title'), error, 'retry-dashboard') : loadingHtml(), renderState);
+        return;
+      }
+    }
     // Keep the hero update before the view render: it is useful to show the
     // latest aggregate even when a secondary view has a local rendering bug.
     renderHero();
@@ -2152,14 +2174,25 @@ function applyStatsSnapshot(stats, meta = null) {
 }
 
 async function refreshStats() {
+  if (state.statsRequest) return state.statsRequest;
   state.error = null;
-  const stats = await fetchJson('/api/stats', { secret: state.secret });
-  let meta = null;
-  if (isCapable('desktopSettings')) {
-    try { meta = await getTransport().desktop?.getSnapshotMeta?.(); } catch (_) {}
-  }
-  applyStatsSnapshot(stats, meta);
-  return stats;
+  const version = state.statsFrameVersion || 0;
+  const secret = state.secret;
+  const request = (async () => {
+    const staged = state.authorization?.capabilities?.statsSummary === true;
+    const stats = await fetchJson(staged ? '/api/stats/summary' : '/api/stats', { secret });
+    if (staged && !stats.detail) stats.detail = 'summary';
+    let meta = null;
+    if (isCapable('desktopSettings')) {
+      try { meta = await getTransport().desktop?.getSnapshotMeta?.(); } catch (_) {}
+    }
+    // A late REST response may not overwrite a newer live frame or another login.
+    if (secret === state.secret && version === (state.statsFrameVersion || 0)) applyStatsSnapshot(stats, meta);
+    return stats;
+  })();
+  state.statsRequest = request;
+  try { return await request; }
+  finally { if (state.statsRequest === request) state.statsRequest = null; }
 }
 
 function connectStream() {
@@ -2168,10 +2201,13 @@ function connectStream() {
     state.stopStream = null;
   }
   state.stopStream = openStatsStream({
+    detail: state.authorization?.capabilities?.statsSummary === true ? 'slim' : 'full',
     secret: state.secret,
     onStatus: setStreamStatus,
     onStats: (stats, _event, meta) => {
+      state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
       markLoadingStage('live');
+      if (!stats.detail && state.authorization?.capabilities?.statsSummary === true) stats.detail = 'summary';
       if (meta?.lastEventAt) state.dataAsOf = meta.lastEventAt;
       applyStatsSnapshot(stats, meta);
     },
@@ -2185,6 +2221,9 @@ function connectStream() {
       renderDesktopSyncStatus();
     },
     onRetry: (delay) => {
+      // A proxy may buffer SSE indefinitely while ordinary REST still works.
+      // The transport's bounded backoff also bounds this lightweight fallback.
+      if (delay >= 4000 && !document.hidden) void refreshStats().catch(() => {});
       if (state.stream !== 'live') setStreamStatus('retrying');
       if (delay) els.streamStatus.title = `${tr('status.retrying')} · ${Math.ceil(delay / 1000)}s`;
     }
@@ -2609,6 +2648,13 @@ async function tryConnect(secret, remember = true, { persist = false } = {}) {
   // Electron's main process owns the credential. Keep it out of renderer state;
   // a newly entered value is validated through the dedicated bridge before it is
   // persisted, because ordinary IPC requests intentionally ignore `secret`.
+  if (state.secret !== candidateSecret && typeof statsDetails !== 'undefined') {
+    statsDetails.clear();
+    state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
+    state.statsRequest = null;
+    state.stats = null;
+    state.history = null;
+  }
   state.secret = desktopOwnsSecret ? '' : candidateSecret;
   try {
     if (desktopOwnsSecret && candidateSecret) {
@@ -3295,6 +3341,7 @@ function bindEvents() {
       return;
     }
     const retryDashboard = event.target.closest('[data-retry-dashboard]');
+    if (retryDashboard) statsDetails.clear();
     if (retryDashboard) {
       void bootstrapAuthorized().catch((error) => {
         state.error = error;
@@ -3312,6 +3359,10 @@ function bindEvents() {
     }
     const managementRetry = event.target.closest('[data-management-retry]');
     if (managementRetry) {
+      if (managementRetry.dataset.managementRetry === 'retry-dashboard') {
+        statsDetails.clear();
+        render();
+      }
       if (managementRetry.dataset.managementRetry === 'subscriptions-retry') void loadSubscriptions({ force: true });
       if (managementRetry.dataset.managementRetry === 'pricing-retry') void loadPricing({ force: true });
       if (managementRetry.dataset.managementRetry === 'accounts-retry') void loadAccounts({ force: true });
