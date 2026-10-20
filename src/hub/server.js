@@ -41,7 +41,7 @@ const { calculateUsageEventDeltas, summarizeSessions } = require('./usage-events
 const { createHubAccountService } = require('./accountService');
 const { createOAuthSessionManager } = require('./oauthService');
 const { createOutboundFetch } = require('../shared/outboundFetch');
-const { fetchRates, isCacheStale } = require('../shared/exchangeRates');
+const { createDisplayRatesCache } = require('./displayRates');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRICE_FIELDS = [
@@ -436,28 +436,7 @@ function createHub({
   // Display rates for the dashboard. Fetched at most once per day and kept in
   // memory; a failed fetch falls back to the shared built-in table so cost
   // rendering never breaks because a third-party endpoint is down.
-  let displayRates = null;
-  let displayRatesFetch = null;
-
-  async function getDisplayRates() {
-    const fresh = displayRates && !isCacheStale(displayRates.date);
-    if (fresh) return { rates: displayRates.rates, date: displayRates.date, source: displayRates.source };
-    if (displayRatesFetch) return displayRatesFetch;
-    displayRatesFetch = (async () => {
-      try {
-        const fetched = await fetchRates({ fetchImpl: oauthHttpFetch });
-        displayRates = fetched;
-        return { rates: fetched.rates, date: fetched.date, source: fetched.source };
-      } catch (error) {
-        logger.warn?.(`[hub-rates] live rates unavailable: ${error?.message || error}`);
-        const fallback = displayRates || { rates: null, date: null, source: 'built-in' };
-        return { rates: fallback.rates, date: fallback.date, source: fallback.source || 'built-in' };
-      } finally {
-        displayRatesFetch = null;
-      }
-    })();
-    return displayRatesFetch;
-  }
+  const displayRates = createDisplayRatesCache({ fetchImpl: oauthHttpFetch, logger });
   // Coalescing window for the stats aggregation. `statsCache` is invalidated by
   // every mutation (ingest, rename, delete, subscriptions), so the only thing a
   // TTL adds is protection against a burst of identical reads. Without it every
@@ -1439,7 +1418,7 @@ function createHub({
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
     if (req.method === 'GET' && url.pathname === '/api/rates') {
-      return sendJson(res, 200, { ok: true, ...(await getDisplayRates()) });
+      return sendJson(res, 200, { ok: true, ...displayRates.get() });
     }
 
     if (url.pathname === '/api/health') {

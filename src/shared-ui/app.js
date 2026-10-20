@@ -2581,23 +2581,26 @@ async function bootstrapAuthorized() {
   state.error = null;
   render();
   await refreshStats();
-  const capabilities = state.authorization?.capabilities || state.health?.capabilities || {};
   // The stats snapshot is the required boot dependency. Establish the stream
   // and paint the core dashboard immediately; history and management data are
   // useful enhancements and must not keep a healthy snapshot behind a spinner.
   connectStream();
   render();
-  // The desktop client renders neither 账号 nor 消费: those are Hub surfaces, so
-  // proxying ledger and credential reads it never displays is pure traffic.
-  const hubManagement = managementSections().length > 0;
-  void Promise.allSettled([
-    ensureHistory(),
-    hubManagement && capabilities.subscriptions !== false ? loadSubscriptions() : null,
-    hubManagement && capabilities.pricing !== false ? loadPricing() : null,
-    hubManagement && capabilities.hubAccounts !== false ? loadAccounts() : null
-  ]).then(() => {
+  void loadVisibleDocuments().then(() => {
     if (state.stats) render({ quiet: true });
   });
+}
+
+function loadVisibleDocuments() {
+  const capabilities = state.authorization?.capabilities || state.health?.capabilities || {};
+  const hubManagement = managementSections().length > 0 && state.prefs.view === 'settings';
+  const consumption = hubManagement && state.prefs.managementSection === 'consumption';
+  return Promise.allSettled([
+    ['overview', 'trends'].includes(state.prefs.view) ? ensureHistory() : null,
+    consumption && state.prefs.managementTab === 'subscriptions' && capabilities.subscriptions !== false ? loadSubscriptions() : null,
+    consumption && state.prefs.managementTab === 'pricing' && capabilities.pricing !== false ? loadPricing() : null,
+    hubManagement && state.prefs.managementSection === 'accounts' && capabilities.hubAccounts !== false ? loadAccounts() : null
+  ]);
 }
 
 async function tryConnect(secret, remember = true, { persist = false } = {}) {
@@ -2613,9 +2616,7 @@ async function tryConnect(secret, remember = true, { persist = false } = {}) {
       // Desktop credentials are always persisted by the main-process store;
       // `remember` remains an interface-compatible argument for the Hub form.
       await saveSecret(candidateSecret, remember);
-      await fetchJson('/api/stats');
     } else {
-      await fetchJson('/api/stats', { secret: candidateSecret });
       state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
       if (persist) await saveSecret(candidateSecret, remember);
     }
@@ -4087,8 +4088,7 @@ async function init() {
 
   if (isCapable('pwa') && 'serviceWorker' in navigator && window.isSecureContext) {
     try {
-      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-      if (reg?.update) void reg.update();
+      void navigator.serviceWorker.register('/sw.js', { scope: '/' }).then((reg) => reg.update?.()).catch(() => {});
     } catch {
       /* optional when the browser rejects the worker */
     }
@@ -4098,25 +4098,28 @@ async function init() {
   // Display rates keep this dashboard's costs in the same currency units as the
   // device that collected them; the built-in table is only a fallback while the
   // request is in flight or unavailable. A failure must never block boot.
-  const ratesReady = fetchJson('/api/rates').then((payload) => {
+  void fetchJson('/api/rates').then((payload) => {
     if (payload?.rates) configureRates(payload.rates, { source: payload.source, date: payload.date });
+    if (state.stats) render({ quiet: true });
   }).catch(() => { /* keep the built-in rates */ });
   const healthReady = fetchHealth().then((health) => {
     state.health = health;
   }).catch(() => {
     state.health = { secretRequired: true };
   });
-  await Promise.all([ratesReady, healthReady]);
+  // A saved credential can authenticate without waiting for the public health
+  // probe. Rates and Service Worker registration are never boot dependencies.
+  if (state.secret || isCapable('desktopSettings')) {
+    const ok = await tryConnect(state.secret, await secretIsRemembered());
+    if (ok) return;
+  }
+  await healthReady;
 
   if (!state.health.secretRequired) {
     await tryConnect('', true);
     return;
   }
 
-  if (state.secret) {
-    const ok = await tryConnect(state.secret, await secretIsRemembered());
-    if (ok) return;
-  }
   showAuth(true);
 }
 
