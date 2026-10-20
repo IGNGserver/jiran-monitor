@@ -661,6 +661,9 @@ fun ProjectsScreen(stats: StatsDto?, onBack: () -> Unit, onHome: (() -> Unit)? =
 }
 @Composable
 fun PricingScreen(state: HubUiState, viewModel: HubViewModel, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
+  LaunchedEffect(state.authorization?.capabilities?.pricing) {
+    if (state.authorization?.capabilities?.pricing == true) viewModel.refreshPricing()
+  }
   val haptics = rememberAppHaptics()
   val colors = LocalFluentColors.current
   val listState = rememberLazyListState()

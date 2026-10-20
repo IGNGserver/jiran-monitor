@@ -187,8 +187,6 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       when (val result = repository.capabilities()) {
         is HubResult.Success -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(authorization = result.value)
-          if (result.value.capabilities.pricing) refreshPricing()
-          if (result.value.capabilities.hubAccounts != false) refreshAccounts()
         }
         is HubResult.Failure -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(error = result.error.message)
@@ -207,18 +205,13 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     // against it: the trend tab re-asks for history when it opens, and the
     // currency block tolerates a beat of latency. Racing them used to mean the
     // slowest of three requests decided when the spinner stopped.
-    val jobs = mutableListOf(refreshStats())
-    if (_state.value.authorization?.capabilities?.pricing == true) jobs += refreshPricing()
-    if (_state.value.authorization?.capabilities?.hubAccounts != false && _state.value.authorization != null) jobs += refreshAccounts()
+    val jobs = listOf(refreshStats())
     refreshJob = viewModelScope.launch {
       jobs.forEach { it.join() }
       if (isCurrent(generation)) _state.value = _state.value.copy(isRefreshing = false)
     }
     // Secondary documents load behind the first paint rather than in front of it.
-    launchRequest { generation ->
-      refreshRates().join()
-      if (isCurrent(generation) && _state.value.stats != null) refreshHistory()
-    }
+    refreshRates()
     val current = _state.value
     if (current.analyticsPeriod == AnalyticsPeriodKind.Custom && current.customRange != null) {
       val range = current.customRange
@@ -408,8 +401,6 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       when (val result = repository.capabilities()) {
         is HubResult.Success -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(authorization = result.value)
-          if (result.value.capabilities.pricing) refreshPricing()
-          if (result.value.capabilities.hubAccounts != false) refreshAccounts()
         }
         is HubResult.Failure -> if (isCurrent(generation)) _state.value = _state.value.copy(error = result.error.message)
       }
