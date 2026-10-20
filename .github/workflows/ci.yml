@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
   pull_request:
+    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -35,6 +37,14 @@ jobs:
       # product-scope, shared-UI boundary, renderer CSS and Android Fluent guards
       # in addition to lint and the Node test suite.
       - run: npm run verify
+      - name: Build browser assets and validate the offline graph
+        if: github.event_name == 'pull_request'
+        run: npm run build:web && node --test tests/web-build/*.test.js
+      - name: Validate production web image
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: |
+          docker build --target runtime -t jiran-loading:ci .
+          docker run --rm --entrypoint node jiran-loading:ci -e "const assert=require('node:assert/strict'); const fs=require('node:fs'); const root=require('./src/hub/static').DEFAULT_WEB_ROOT; assert.ok(root.endsWith('dist/web')); assert.ok(fs.readFileSync(root+'/index.html','utf8').includes('/assets/app-'));"
 
   # The Android client is a separate toolchain, so it gets its own job rather than
   # a step that can only be reached after npm ci on three OSes. This exists because
@@ -42,6 +52,7 @@ jobs:
   # gate at all: `runUnitTests` only ran on a release tag, so nothing ever compiled
   # the UI layer on a pull request.
   android:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

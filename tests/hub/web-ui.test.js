@@ -96,16 +96,11 @@ test('hub serves the web UI on the same port without a secret', async () => {
     assert.equal(sw.status, 200);
     assert.match(sw.headers.get('content-type') || '', /javascript/);
     const swSource = await sw.text();
-    assert.match(swSource, /jiran-web-v8-fluent/);
-    for (const modulePath of [
-      '/ui/core/viewContext.js',
-      '/ui/views/home.js',
-      '/ui/views/limits.js',
-      '/ui/views/usage.js',
-      '/ui/views/trends.js'
-    ]) {
-      assert.match(swSource, new RegExp(modulePath.replaceAll('/', '\\/')));
-    }
+    assert.match(swSource, /jiran-web-(?:development|[a-f0-9]{20})/);
+    assert.match(swSource, /url\.pathname\.startsWith\('\/api\/'\)/);
+    assert.ok(!/self\.skipWaiting\(/.test(swSource), 'an update must not mix an open tab with a new resource graph');
+    // Built-graph reachability is tested against esbuild's manifest in web-build;
+    // source development intentionally has no offline module precache promise.
 
     const icon = await fetch(`${base}/icons/icon-192.png`);
     assert.equal(icon.status, 200);

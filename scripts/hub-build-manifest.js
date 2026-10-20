@@ -30,6 +30,7 @@ const NODE_RUNTIME_SOURCE_FILES = Object.freeze([
   'package.json',
   'src/hub/accountCrypto.js',
   'src/hub/accountService.js',
+  'src/hub/displayRates.js',
   'src/hub/oauthService.js',
   'src/hub/pricing-upstream.js',
   'src/hub/repository.js',

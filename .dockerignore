@@ -16,3 +16,4 @@ site
 .secrets
 scripts
 !scripts/prune-hub-deps.js
+!scripts/build-web.js
