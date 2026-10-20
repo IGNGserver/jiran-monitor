@@ -81,27 +81,27 @@ test('hidden snapshots avoid DOM work and restore only the latest state', () => 
   assert.equal(html, '101');
 });
 
-test('boot starts rates and health together and retains failure fallbacks', async () => {
+test('boot never waits for optional rates and retains failure fallbacks', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../../src/shared-ui/app.js'), 'utf8');
-  const start = source.indexOf('  const ratesReady =');
+  const start = source.indexOf("  void fetchJson('/api/rates')");
   const end = source.indexOf('  if (!state.health.secretRequired)', start);
   const boot = `(async () => { ${source.slice(start, end)} })()`;
   let finishRates;
   let finishHealth;
   const state = {};
   const pending = vm.runInNewContext(boot, {
-    state, configureRates() {},
+    state, configureRates() {}, isCapable: () => false,
     fetchJson: () => new Promise(resolve => { finishRates = resolve; }),
     fetchHealth: () => new Promise(resolve => { finishHealth = resolve; })
   });
   assert.equal(typeof finishRates, 'function');
   assert.equal(typeof finishHealth, 'function');
   finishHealth({ secretRequired: false });
-  finishRates({});
   await pending;
   assert.equal(state.health.secretRequired, false);
+  finishRates({});
   await vm.runInNewContext(boot, {
-    state, configureRates() { assert.fail('failed rates must not replace defaults'); },
+    state, isCapable: () => false, configureRates() { assert.fail('failed rates must not replace defaults'); },
     fetchJson: async () => { throw new Error('offline'); },
     fetchHealth: async () => { throw new Error('offline'); }
   });

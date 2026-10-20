@@ -712,8 +712,8 @@ export function sessionRows(period, { limit = MAX_SESSION_ROWS } = {}) {
     });
   return {
     rows,
-    total: candidates.length,
-    truncated: candidates.length > max
+    total: Math.max(candidates.length, Number(period?.sessionsTotal || 0)),
+    truncated: Math.max(candidates.length, Number(period?.sessionsTotal || 0)) > max
   };
 }
 

@@ -23,7 +23,7 @@ const {
 } = require('../shared/subscriptionDisplay');
 const { CURRENCY_CODES, normalizeCurrency } = require('../shared/currency');
 const { currentHubBuild } = require('../shared/hubBuildIdentity');
-const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText } = require('../shared/http');
+const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
 const {
   AUTHENTICATED_SCOPE,
   createHubAuthPolicy
@@ -41,7 +41,7 @@ const { calculateUsageEventDeltas, summarizeSessions } = require('./usage-events
 const { createHubAccountService } = require('./accountService');
 const { createOAuthSessionManager } = require('./oauthService');
 const { createOutboundFetch } = require('../shared/outboundFetch');
-const { fetchRates, isCacheStale } = require('../shared/exchangeRates');
+const { createDisplayRatesCache } = require('./displayRates');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRICE_FIELDS = [
@@ -436,28 +436,7 @@ function createHub({
   // Display rates for the dashboard. Fetched at most once per day and kept in
   // memory; a failed fetch falls back to the shared built-in table so cost
   // rendering never breaks because a third-party endpoint is down.
-  let displayRates = null;
-  let displayRatesFetch = null;
-
-  async function getDisplayRates() {
-    const fresh = displayRates && !isCacheStale(displayRates.date);
-    if (fresh) return { rates: displayRates.rates, date: displayRates.date, source: displayRates.source };
-    if (displayRatesFetch) return displayRatesFetch;
-    displayRatesFetch = (async () => {
-      try {
-        const fetched = await fetchRates({ fetchImpl: oauthHttpFetch });
-        displayRates = fetched;
-        return { rates: fetched.rates, date: fetched.date, source: fetched.source };
-      } catch (error) {
-        logger.warn?.(`[hub-rates] live rates unavailable: ${error?.message || error}`);
-        const fallback = displayRates || { rates: null, date: null, source: 'built-in' };
-        return { rates: fallback.rates, date: fallback.date, source: fallback.source || 'built-in' };
-      } finally {
-        displayRatesFetch = null;
-      }
-    })();
-    return displayRatesFetch;
-  }
+  const displayRates = createDisplayRatesCache({ fetchImpl: oauthHttpFetch, logger });
   // Coalescing window for the stats aggregation. `statsCache` is invalidated by
   // every mutation (ingest, rename, delete, subscriptions), so the only thing a
   // TTL adds is protection against a burst of identical reads. Without it every
@@ -1434,11 +1413,12 @@ function createHub({
   }
 
   async function handleRequest(req, res) {
+    startResponseTiming(req);
     if (req.method === 'OPTIONS') return sendText(res, 204, '');
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
     if (req.method === 'GET' && url.pathname === '/api/rates') {
-      return sendJson(res, 200, { ok: true, ...(await getDisplayRates()) });
+      return sendJson(res, 200, { ok: true, ...displayRates.get() });
     }
 
     if (url.pathname === '/api/health') {
@@ -1579,9 +1559,11 @@ function createHub({
       let rows = [];
       for (const periodName of periods) {
         const sessions = stats.periods?.[periodName]?.sessions || {};
-        rows = rows.concat(Object.values(sessions).map((session) => ({ ...session, period: periodName })));
+        rows = rows.concat(Object.entries(sessions).filter(([, session]) => Number(session.totalTokens || 0) > 0)
+          .map(([key, session]) => ({ ...session, key, period: periodName })));
       }
-      rows.sort((left, right) => String(right.lastUsedAt || '').localeCompare(String(left.lastUsedAt || '')));
+      rows.sort((left, right) => Date.parse(right.lastUsedAt || right.startedAt || 0) - Date.parse(left.lastUsedAt || left.startedAt || 0)
+        || Number(right.totalTokens || 0) - Number(left.totalTokens || 0));
       const shown = rows.slice(0, SESSION_LIST_LIMIT);
       return sendJson(res, 200, { total: rows.length, shown: shown.length, sessions: shown });
     }

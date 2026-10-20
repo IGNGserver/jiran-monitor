@@ -91,10 +91,8 @@ test('the desktop host renders no Hub management sections and fetches no Hub led
     'the router must ask the page which sections exist, not keep its own list');
   assert.equal((APP_SOURCE.match(/\['accounts',\s*'consumption',\s*'preferences',\s*'advanced'\]/g) || []).length, 0,
     'app.js must not keep its own copy of the section list');
-  for (const loader of ['loadSubscriptions()', 'loadPricing()', 'loadAccounts()']) {
-    assert.match(APP_SOURCE, new RegExp(`hubManagement && capabilities\\.[A-Za-z]+ !== false \\? ${loader.replace(/[()]/g, '\\$&')} : null`),
-      `the desktop boot must not prefetch ${loader}`);
-  }
+  assert.match(APP_SOURCE, /managementSections\(\)\.length > 0 && state\.prefs\.view === 'settings'/,
+    'management reads require a visible Hub-only management section');
   assert.match(LIMITS_SOURCE, /canRenderManagementSection\('accounts'\)/,
     'the 账号 jump on a failing limit card must ask whether this host renders that section');
 });

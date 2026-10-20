@@ -187,8 +187,6 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       when (val result = repository.capabilities()) {
         is HubResult.Success -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(authorization = result.value)
-          if (result.value.capabilities.pricing) refreshPricing()
-          if (result.value.capabilities.hubAccounts != false) refreshAccounts()
         }
         is HubResult.Failure -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(error = result.error.message)
@@ -207,18 +205,13 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     // against it: the trend tab re-asks for history when it opens, and the
     // currency block tolerates a beat of latency. Racing them used to mean the
     // slowest of three requests decided when the spinner stopped.
-    val jobs = mutableListOf(refreshStats())
-    if (_state.value.authorization?.capabilities?.pricing == true) jobs += refreshPricing()
-    if (_state.value.authorization?.capabilities?.hubAccounts != false && _state.value.authorization != null) jobs += refreshAccounts()
+    val jobs = listOf(refreshStats())
     refreshJob = viewModelScope.launch {
       jobs.forEach { it.join() }
       if (isCurrent(generation)) _state.value = _state.value.copy(isRefreshing = false)
     }
     // Secondary documents load behind the first paint rather than in front of it.
-    launchRequest { generation ->
-      refreshRates().join()
-      if (isCurrent(generation) && _state.value.stats != null) refreshHistory()
-    }
+    refreshRates()
     val current = _state.value
     if (current.analyticsPeriod == AnalyticsPeriodKind.Custom && current.customRange != null) {
       val range = current.customRange
@@ -262,7 +255,8 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
     // list it was replacing was still on screen.
     val coldStart = _state.value.stats == null
     _state.value = _state.value.copy(isLoading = coldStart, error = null)
-    val staged = _state.value.authorization?.capabilities?.statsSummary == true
+    // Try summary before capability discovery; only an unsupported route falls back.
+    val staged = _state.value.authorization?.capabilities?.statsSummary != false
     when (val result = repository.stats(staged)) {
       is HubResult.Success -> if (isCurrent(generation)) {
         if (frameVersion == statsFrameVersion) {
@@ -407,8 +401,6 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       when (val result = repository.capabilities()) {
         is HubResult.Success -> if (isCurrent(generation)) {
           _state.value = _state.value.copy(authorization = result.value)
-          if (result.value.capabilities.pricing) refreshPricing()
-          if (result.value.capabilities.hubAccounts != false) refreshAccounts()
         }
         is HubResult.Failure -> if (isCurrent(generation)) _state.value = _state.value.copy(error = result.error.message)
       }
@@ -635,7 +627,7 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
       var backoffMs = 1_000L
       while (isActive && isCurrent(generation)) {
         _state.value = _state.value.copy(realtime = RealtimeStatus.Reconnecting)
-        runCatching {
+        val streamResult = runCatching {
           repository.statsEvents().collect { event ->
             if (isCurrent(generation)) {
               event.stats?.let { stats ->
@@ -670,9 +662,15 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
         }.onFailure {
           if (isActive && isCurrent(generation)) _state.value = _state.value.copy(realtime = RealtimeStatus.Disconnected)
         }
+        if (streamResult.exceptionOrNull() is com.igng.tokenmonitor.android.data.repository.SseAuthorizationException) {
+          if (isCurrent(generation)) _state.value = _state.value.copy(error = "未授权：请检查共享密钥。")
+          return@launch
+        }
         if (isActive && isCurrent(generation)) {
           _state.value = _state.value.copy(realtime = RealtimeStatus.Reconnecting)
-          delay(backoffMs)
+          // Buffered SSE must not prevent lightweight REST from recovering data.
+          if (backoffMs >= 4_000L) refreshStats().join()
+          delay((backoffMs * kotlin.random.Random.nextLong(800L, 1201L) / 1000L).coerceAtMost(30_000L))
           backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
         }
       }

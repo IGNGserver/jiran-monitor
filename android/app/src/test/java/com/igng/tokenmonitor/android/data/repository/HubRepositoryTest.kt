@@ -5,6 +5,8 @@ import com.igng.tokenmonitor.android.data.local.ConnectionStorage
 import com.igng.tokenmonitor.android.data.remote.HubApiFactory
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -56,18 +58,19 @@ class HubRepositoryTest {
     assertEquals("Bearer new-secret", server.takeRequest().getHeader("Authorization"))
   }
 
-  @Test fun testConnectionVerifiesHealthAndAuthenticatedStats() = runBlocking {
+  @Test fun testConnectionVerifiesHealthAndAuthenticatedCapabilitiesWithoutFullStats() = runBlocking {
     server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"role":"hub","version":1}"""))
-    server.enqueue(MockResponse().setResponseCode(200).setBody("""{"periods":{}}"""))
     server.enqueue(MockResponse().setResponseCode(200).setBody("""{"apiVersion":3,"capabilities":{"stats":true,"usageRange":false,"pricing":false},"authenticated":true}"""))
 
     val result = repository.testConnection(store.read())
 
     assertTrue(result is HubResult.Success)
     assertEquals("hub", (result as HubResult.Success).value.role)
-    assertEquals("Bearer shared-secret", server.takeRequest().getHeader("Authorization"))
-    assertEquals("Bearer shared-secret", server.takeRequest().getHeader("Authorization"))
-    assertEquals("Bearer shared-secret", server.takeRequest().getHeader("Authorization"))
+    assertEquals("/api/health", server.takeRequest().path)
+    val protected = server.takeRequest()
+    assertEquals("/api/capabilities", protected.path)
+    assertEquals("Bearer shared-secret", protected.getHeader("Authorization"))
+    assertEquals(2, server.requestCount)
   }
 
   @Test fun testConnectionRejectsASecretThatCannotReadStats() = runBlocking {
@@ -142,6 +145,53 @@ class HubRepositoryTest {
 
     assertTrue(result is HubResult.Success)
     assertEquals("/api/stats", server.takeRequest().path)
+  }
+
+  @Test fun coldSummaryFallsBackOnlyWhenOldHubDoesNotSupportTheRoute() = runBlocking {
+    for (status in listOf(404, 405)) {
+      server.enqueue(MockResponse().setResponseCode(status))
+      server.enqueue(MockResponse().setResponseCode(200).setBody("""{"periods":{"today":{"totalTokens":7}},"devices":[]}"""))
+      val result = repository.stats(staged = true)
+      assertTrue(result is HubResult.Success)
+      assertEquals("/api/stats/summary", server.takeRequest().path)
+      assertEquals("/api/stats", server.takeRequest().path)
+    }
+  }
+
+  @Test fun summaryFailureDoesNotMultiplyUnauthorizedOrServerRequests() = runBlocking {
+    for (status in listOf(401, 500)) {
+      server.enqueue(MockResponse().setResponseCode(status))
+      assertTrue(repository.stats(staged = true) is HubResult.Failure)
+      assertEquals("/api/stats/summary", server.takeRequest().path)
+    }
+    assertEquals(2, server.requestCount)
+  }
+
+  @Test fun sseUnauthorizedIsTerminalAndDoesNotFallBackToAnAnonymousStream() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(401))
+    var unauthorized = false
+    try {
+      withTimeout(2_000L) { repository.statsEvents().first() }
+    } catch (_: SseAuthorizationException) {
+      unauthorized = true
+    }
+    assertTrue(unauthorized)
+    assertEquals(1, server.requestCount)
+    assertEquals("/api/stats/stream?detail=slim", server.takeRequest().path)
+  }
+
+  @Test fun sseHeadersWithoutBodyProgressHitTheIdleDeadline() = runBlocking {
+    val bounded = HubRepository(store, HubApiFactory.forTesting(json, 150, 150), json)
+    server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream")
+      .setBody("event: heartbeat\ndata: {}\n\n").setBodyDelay(1, TimeUnit.SECONDS))
+    var timedOut = false
+    try {
+      withTimeout(2_000L) { bounded.statsEvents().first() }
+    } catch (_: java.io.IOException) {
+      timedOut = true
+    }
+    assertTrue(timedOut)
+    assertEquals(1, server.requestCount)
   }
 
   @Test fun deviceDetailReturnsTheSingleDevice() = runBlocking {

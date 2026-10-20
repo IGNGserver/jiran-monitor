@@ -23,6 +23,8 @@ import {
   writeRoute
 } from './transport/index.js';
 import { applyI18n, resolveLocale, t } from './core/i18n.js';
+import { markLoadingStage } from './core/loadingPerformance.js';
+import { createDetailCache, detailRequest, withStatsDetail } from './core/stagedStats.js';
 import {
   isPresetRangePeriod,
   localDayKey,
@@ -452,8 +454,11 @@ function tr(key, params) {
   return t(state.locale, key, params);
 }
 
+const statsDetails = createDetailCache((path, options) => fetchJson(path, { ...options, secret: state.secret }));
+
 function viewStats() {
-  const stats = state.stats || EMPTY_STATS_MODEL;
+  const spec = detailRequest(state.stats, state.prefs);
+  const stats = withStatsDetail(state.stats || EMPTY_STATS_MODEL, spec, statsDetails.get(spec)?.data);
   const deviceId = String(state.prefs.deviceFilter || '').trim();
   if (!deviceId) return stats;
   const device = (stats.devices || []).find((entry) => String(entry?.deviceId || '') === deviceId);
@@ -1875,6 +1880,11 @@ async function saveWebSettingsForm(form) {
 }
 
 function signOutFromHub() {
+  statsDetails.clear();
+  state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
+  state.statsRequest = null;
+  state.stats = null;
+  state.history = null;
   clearSecret();
   state.secret = '';
   if (state.stopStream) state.stopStream();
@@ -2005,6 +2015,19 @@ function render({ quiet = false } = {}) {
   }
   let html;
   try {
+    // Headline figures remain available while an explicitly selected detail loads.
+    if (typeof statsDetails !== 'undefined') {
+      const spec = detailRequest(state.stats, state.prefs);
+      if (spec && !statsDetails.get(spec)) {
+        void statsDetails.load(spec).then(() => render({ quiet: true }));
+      }
+      if (spec && !statsDetails.get(spec)?.data) {
+        renderHero();
+        const error = statsDetails.get(spec)?.error;
+        writeContentHtml(error ? managementError(tr('error.title'), error, 'retry-dashboard') : loadingHtml(), renderState);
+        return;
+      }
+    }
     // Keep the hero update before the view render: it is useful to show the
     // latest aggregate even when a secondary view has a local rendering bug.
     renderHero();
@@ -2116,6 +2139,7 @@ async function ensureHistory({ force = false, deviceId = state.prefs.deviceFilte
 
 function applyStatsSnapshot(stats, meta = null) {
   if (!stats || typeof stats !== 'object') return;
+  markLoadingStage('snapshot');
   const previous = state.stats;
   const historyChanged = Boolean(previous)
     && (previous.historyRevision !== stats.historyRevision
@@ -2150,14 +2174,25 @@ function applyStatsSnapshot(stats, meta = null) {
 }
 
 async function refreshStats() {
+  if (state.statsRequest) return state.statsRequest;
   state.error = null;
-  const stats = await fetchJson('/api/stats', { secret: state.secret });
-  let meta = null;
-  if (isCapable('desktopSettings')) {
-    try { meta = await getTransport().desktop?.getSnapshotMeta?.(); } catch (_) {}
-  }
-  applyStatsSnapshot(stats, meta);
-  return stats;
+  const version = state.statsFrameVersion || 0;
+  const secret = state.secret;
+  const request = (async () => {
+    const staged = state.authorization?.capabilities?.statsSummary === true;
+    const stats = await fetchJson(staged ? '/api/stats/summary' : '/api/stats', { secret });
+    if (staged && !stats.detail) stats.detail = 'summary';
+    let meta = null;
+    if (isCapable('desktopSettings')) {
+      try { meta = await getTransport().desktop?.getSnapshotMeta?.(); } catch (_) {}
+    }
+    // A late REST response may not overwrite a newer live frame or another login.
+    if (secret === state.secret && version === (state.statsFrameVersion || 0)) applyStatsSnapshot(stats, meta);
+    return stats;
+  })();
+  state.statsRequest = request;
+  try { return await request; }
+  finally { if (state.statsRequest === request) state.statsRequest = null; }
 }
 
 function connectStream() {
@@ -2166,9 +2201,13 @@ function connectStream() {
     state.stopStream = null;
   }
   state.stopStream = openStatsStream({
+    detail: state.authorization?.capabilities?.statsSummary === true ? 'slim' : 'full',
     secret: state.secret,
     onStatus: setStreamStatus,
     onStats: (stats, _event, meta) => {
+      state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
+      markLoadingStage('live');
+      if (!stats.detail && state.authorization?.capabilities?.statsSummary === true) stats.detail = 'summary';
       if (meta?.lastEventAt) state.dataAsOf = meta.lastEventAt;
       applyStatsSnapshot(stats, meta);
     },
@@ -2182,6 +2221,9 @@ function connectStream() {
       renderDesktopSyncStatus();
     },
     onRetry: (delay) => {
+      // A proxy may buffer SSE indefinitely while ordinary REST still works.
+      // The transport's bounded backoff also bounds this lightweight fallback.
+      if (delay >= 4000 && !document.hidden) void refreshStats().catch(() => {});
       if (state.stream !== 'live') setStreamStatus('retrying');
       if (delay) els.streamStatus.title = `${tr('status.retrying')} · ${Math.ceil(delay / 1000)}s`;
     }
@@ -2572,28 +2614,32 @@ async function deleteAccount(accountId) {
 }
 
 async function bootstrapAuthorized() {
+  markLoadingStage('authorized');
   showAuth(false);
   state.loading = true;
   state.error = null;
   render();
   await refreshStats();
-  const capabilities = state.authorization?.capabilities || state.health?.capabilities || {};
   // The stats snapshot is the required boot dependency. Establish the stream
   // and paint the core dashboard immediately; history and management data are
   // useful enhancements and must not keep a healthy snapshot behind a spinner.
   connectStream();
   render();
-  // The desktop client renders neither 账号 nor 消费: those are Hub surfaces, so
-  // proxying ledger and credential reads it never displays is pure traffic.
-  const hubManagement = managementSections().length > 0;
-  void Promise.allSettled([
-    ensureHistory(),
-    hubManagement && capabilities.subscriptions !== false ? loadSubscriptions() : null,
-    hubManagement && capabilities.pricing !== false ? loadPricing() : null,
-    hubManagement && capabilities.hubAccounts !== false ? loadAccounts() : null
-  ]).then(() => {
+  void loadVisibleDocuments().then(() => {
     if (state.stats) render({ quiet: true });
   });
+}
+
+function loadVisibleDocuments() {
+  const capabilities = state.authorization?.capabilities || state.health?.capabilities || {};
+  const hubManagement = managementSections().length > 0 && state.prefs.view === 'settings';
+  const consumption = hubManagement && state.prefs.managementSection === 'consumption';
+  return Promise.allSettled([
+    ['overview', 'trends'].includes(state.prefs.view) ? ensureHistory() : null,
+    consumption && state.prefs.managementTab === 'subscriptions' && capabilities.subscriptions !== false ? loadSubscriptions() : null,
+    consumption && state.prefs.managementTab === 'pricing' && capabilities.pricing !== false ? loadPricing() : null,
+    hubManagement && state.prefs.managementSection === 'accounts' && capabilities.hubAccounts !== false ? loadAccounts() : null
+  ]);
 }
 
 async function tryConnect(secret, remember = true, { persist = false } = {}) {
@@ -2602,6 +2648,13 @@ async function tryConnect(secret, remember = true, { persist = false } = {}) {
   // Electron's main process owns the credential. Keep it out of renderer state;
   // a newly entered value is validated through the dedicated bridge before it is
   // persisted, because ordinary IPC requests intentionally ignore `secret`.
+  if (state.secret !== candidateSecret && typeof statsDetails !== 'undefined') {
+    statsDetails.clear();
+    state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
+    state.statsRequest = null;
+    state.stats = null;
+    state.history = null;
+  }
   state.secret = desktopOwnsSecret ? '' : candidateSecret;
   try {
     if (desktopOwnsSecret && candidateSecret) {
@@ -2609,9 +2662,7 @@ async function tryConnect(secret, remember = true, { persist = false } = {}) {
       // Desktop credentials are always persisted by the main-process store;
       // `remember` remains an interface-compatible argument for the Hub form.
       await saveSecret(candidateSecret, remember);
-      await fetchJson('/api/stats');
     } else {
-      await fetchJson('/api/stats', { secret: candidateSecret });
       state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
       if (persist) await saveSecret(candidateSecret, remember);
     }
@@ -3290,6 +3341,7 @@ function bindEvents() {
       return;
     }
     const retryDashboard = event.target.closest('[data-retry-dashboard]');
+    if (retryDashboard) statsDetails.clear();
     if (retryDashboard) {
       void bootstrapAuthorized().catch((error) => {
         state.error = error;
@@ -3307,6 +3359,10 @@ function bindEvents() {
     }
     const managementRetry = event.target.closest('[data-management-retry]');
     if (managementRetry) {
+      if (managementRetry.dataset.managementRetry === 'retry-dashboard') {
+        statsDetails.clear();
+        render();
+      }
       if (managementRetry.dataset.managementRetry === 'subscriptions-retry') void loadSubscriptions({ force: true });
       if (managementRetry.dataset.managementRetry === 'pricing-retry') void loadPricing({ force: true });
       if (managementRetry.dataset.managementRetry === 'accounts-retry') void loadAccounts({ force: true });
@@ -4079,11 +4135,11 @@ async function init() {
   // Paint the shell before any remote request. On desktop this is what keeps
   // Settings and local navigation available during a Hub timeout.
   render();
+  markLoadingStage('shell');
 
   if (isCapable('pwa') && 'serviceWorker' in navigator && window.isSecureContext) {
     try {
-      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-      if (reg?.update) void reg.update();
+      void navigator.serviceWorker.register('/sw.js', { scope: '/' }).then((reg) => reg.update?.()).catch(() => {});
     } catch {
       /* optional when the browser rejects the worker */
     }
@@ -4093,25 +4149,28 @@ async function init() {
   // Display rates keep this dashboard's costs in the same currency units as the
   // device that collected them; the built-in table is only a fallback while the
   // request is in flight or unavailable. A failure must never block boot.
-  const ratesReady = fetchJson('/api/rates').then((payload) => {
+  void fetchJson('/api/rates').then((payload) => {
     if (payload?.rates) configureRates(payload.rates, { source: payload.source, date: payload.date });
+    if (state.stats) render({ quiet: true });
   }).catch(() => { /* keep the built-in rates */ });
   const healthReady = fetchHealth().then((health) => {
     state.health = health;
   }).catch(() => {
     state.health = { secretRequired: true };
   });
-  await Promise.all([ratesReady, healthReady]);
+  // A saved credential can authenticate without waiting for the public health
+  // probe. Rates and Service Worker registration are never boot dependencies.
+  if (state.secret || isCapable('desktopSettings')) {
+    const ok = await tryConnect(state.secret, await secretIsRemembered());
+    if (ok) return;
+  }
+  await healthReady;
 
   if (!state.health.secretRequired) {
     await tryConnect('', true);
     return;
   }
 
-  if (state.secret) {
-    const ok = await tryConnect(state.secret, await secretIsRemembered());
-    if (ok) return;
-  }
   showAuth(true);
 }
 

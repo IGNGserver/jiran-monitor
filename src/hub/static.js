@@ -3,9 +3,12 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { corsHeaders } = require('../shared/http');
+const zlib = require('node:zlib');
+const { pipeline } = require('node:stream');
+const { corsHeaders, responseTimingHeaders, negotiateEncoding } = require('../shared/http');
 
-const DEFAULT_WEB_ROOT = path.join(__dirname, 'web');
+const BUILT_WEB_ROOT = path.join(__dirname, '../../dist/web');
+const DEFAULT_WEB_ROOT = fs.existsSync(path.join(BUILT_WEB_ROOT, 'index.html')) ? BUILT_WEB_ROOT : path.join(__dirname, 'web');
 // The dashboard's UI lives in a shared package so the Electron desktop client
 // renders the exact same code. Only the shell, PWA assets and the boot module
 // stay under src/hub/web; everything reusable is served from here.
@@ -40,6 +43,7 @@ function contentTypeFor(filePath) {
 }
 
 function cacheControlFor(filePath, { revalidate = false } = {}) {
+  if (/[/\\]assets[/\\][\w-]+-[A-Z0-9]{8}\.(js|css)$/.test(filePath)) return 'public, max-age=31536000, immutable';
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.html' || ext === '.webmanifest' || path.basename(filePath) === 'sw.js') {
     return 'no-cache';
@@ -131,15 +135,29 @@ async function resolveStaticAsset(webRoot, pathname) {
 }
 
 function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = {}) {
+  const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+  const compressible = /\.(?:html|js|css|json|svg|webmanifest)$/.test(filePath);
+  const encoding = compressible && stat.size >= 1024 ? negotiateEncoding(res) : null;
   const headers = corsHeaders({
     ...SECURITY_HEADERS,
+    ...responseTimingHeaders(res),
     'content-type': contentTypeFor(filePath),
-    'content-length': stat.size,
+    etag,
+    vary: 'accept-encoding',
+    ...(encoding ? { 'content-encoding': encoding } : { 'content-length': stat.size }),
     'cache-control': cacheControlFor(filePath, { revalidate })
   });
 
   if (path.basename(filePath) === 'sw.js') {
     headers['service-worker-allowed'] = '/';
+  }
+
+  const validators = String(res.req?.headers?.['if-none-match'] || '').split(',').map((value) => value.trim());
+  if (validators.includes(etag) || validators.includes('*')) {
+    delete headers['content-length'];
+    res.writeHead(304, headers);
+    res.end();
+    return true;
   }
 
   if (method === 'HEAD') {
@@ -159,7 +177,14 @@ function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = 
     }
     res.end();
   });
-  stream.pipe(res);
+  if (encoding) {
+    const compressor = encoding === 'br'
+      ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
+      : zlib.createGzip();
+    pipeline(stream, compressor, res, () => {});
+  } else {
+    pipeline(stream, res, () => {});
+  }
   return true;
 }
 
@@ -186,7 +211,12 @@ async function tryServeStatic(req, res, { webRoot = DEFAULT_WEB_ROOT } = {}) {
     return false;
   }
 
-  const asset = await resolveStaticAsset(webRoot, url.pathname);
+  let asset = await resolveStaticAsset(webRoot, url.pathname);
+  // A tab with pre-bundle cached HTML still asks for the stable boot entry.
+  // Keep that compatibility route alongside the hashed production graph.
+  if (!asset && url.pathname === '/js/boot.js') {
+    asset = await resolveStaticAsset(path.join(__dirname, 'web'), url.pathname);
+  }
   if (!asset) return false;
   return sendFile(res, asset.filePath, asset.stat, {
     method: req.method,

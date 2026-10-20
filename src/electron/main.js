@@ -1913,12 +1913,20 @@ async function fetchHubStatsSnapshot(options = {}) {
     }
     throw error;
   }
-  const url = `${hubUrl.replace(/\/$/, '')}/api/stats`;
+  const base = hubUrl.replace(/\/$/, '');
+  const staged = latestHubStats?.capabilities?.statsSummary !== false;
+  const url = `${base}/api/stats${staged ? '/summary' : ''}`;
   try {
-    const response = await fetchBufferedWithTimeout(fetch, url, {
+    const requestOptions = {
       headers: secret ? { authorization: `Bearer ${secret}` } : {},
       ...(options.signal ? { signal: options.signal } : {})
-    }, HUB_REQUEST_TIMEOUT_MS);
+    };
+    let response = await fetchBufferedWithTimeout(fetch, url, requestOptions, HUB_REQUEST_TIMEOUT_MS);
+    let receivedSummary = staged;
+    if (staged && [404, 405].includes(response.status)) {
+      receivedSummary = false;
+      response = await fetchBufferedWithTimeout(fetch, `${base}/api/stats`, requestOptions, HUB_REQUEST_TIMEOUT_MS);
+    }
     if (!response.ok) {
       const error = new Error(`Hub stats request failed (${response.status})`);
       error.status = response.status;
@@ -1926,6 +1934,8 @@ async function fetchHubStatsSnapshot(options = {}) {
       throw error;
     }
     const stats = await response.json();
+    if (receivedSummary) stats.detail = 'summary';
+    else if (staged) stats.capabilities = { ...stats.capabilities, statsSummary: false };
     if (!isCurrent()) return null;
     latestHubStats = stats;
     latestHubStatsLive = true;
@@ -2028,7 +2038,7 @@ async function startStatsStream(options = {}) {
   }
   mode = 'sync';
   clearSyncRestPoll();
-  const url = `${hubUrl.replace(/\/$/, '')}/api/stats/stream`;
+  const url = `${hubUrl.replace(/\/$/, '')}/api/stats/stream?detail=slim`;
   const controller = new AbortController();
   let idleTimedOut = false;
   sseAbortController = controller;
@@ -2071,11 +2081,11 @@ async function startStatsStream(options = {}) {
       failureCode: null,
       status: null
     };
-    sendStatus(true, { state: 'live' });
     armSseIdleWatchdog(controller, timeoutStream);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const splitFrames = createSseFrameSplitter();
+    let hasStatsFrame = false;
     for (;;) {
       const { value, done } = await reader.read();
       if (!isCurrent()) return { ok: false, superseded: true };
@@ -2101,7 +2111,12 @@ async function startStatsStream(options = {}) {
           publishSyncHealth();
           continue;
         }
-        if (parsed.event === 'stats' && parsed.data?.stats) {
+        if ((parsed.event === 'stats' || parsed.event === 'snapshot') && parsed.data?.stats) {
+          if (!hasStatsFrame) {
+            hasStatsFrame = true;
+            sendStatus(true, { state: 'live' });
+          }
+          if (parsed.data.stats.capabilities?.statsSummary === true) parsed.data.stats.detail = 'summary';
           latestHubStats = parsed.data.stats;
           latestHubStatsLive = true;
           cacheHubSnapshot();
@@ -3130,6 +3145,9 @@ function localCapabilitiesForRenderer() {
     role: clientMode ? 'client' : 'local',
       capabilities: {
       stats: true,
+      statsSummary: clientMode && latestHubStats?.detail === 'summary',
+      deviceDetail: true,
+      sessionList: true,
       history: true,
       statsStream: clientMode,
       subscriptions: clientMode && hubCaps.subscriptions !== false,
@@ -3212,6 +3230,17 @@ async function validateHubSecret(secret) {
 const desktopRouter = createRequestRouter({
   getSettings: () => settingsForRenderer(),
   getStats: (options) => fetchStats(options),
+  getDevice: async (deviceId) => {
+    if (settings?.hubMode === 'client') return requestHubRoute(`/api/devices/${encodeURIComponent(deviceId)}`);
+    const stats = await fetchStats();
+    return { device: stats.devices?.find((device) => device.deviceId === deviceId) };
+  },
+  getSessions: async (period) => {
+    if (settings?.hubMode === 'client') return requestHubRoute(`/api/sessions?period=${encodeURIComponent(period)}`);
+    const stats = await fetchStats();
+    const sessions = Object.values(stats.periods?.[period]?.sessions || {});
+    return { total: sessions.length, shown: sessions.length, sessions };
+  },
   getHistory: (options) => getDashboardHistory(options),
   getCustomRange: (options) => fetchCustomRangeStats(options?.body || options),
   getSessionDetail: (args) => fetchSessionDetail(args),

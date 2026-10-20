@@ -18,9 +18,10 @@ import javax.inject.Singleton
 class HubApiFactory private constructor(
   private val json: Json,
   private val requestTimeoutMs: Long,
-  private val globalAllowInsecureHttp: Boolean
+  private val globalAllowInsecureHttp: Boolean,
+  private val streamIdleTimeoutMs: Long
 ) {
-  @Inject constructor(json: Json) : this(json, 20_000L, false)
+  @Inject constructor(json: Json) : this(json, 20_000L, false, 90_000L)
 
   private data class CachedClients(
     val config: ConnectionConfig,
@@ -47,7 +48,9 @@ class HubApiFactory private constructor(
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(HubApi::class.java),
-          restClient.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS)
+          // Hub heartbeats arrive every 15s. A finite idle read deadline detects
+          // a blackholed proxy without imposing a maximum healthy stream lifetime.
+          restClient.newBuilder().readTimeout(streamIdleTimeoutMs, TimeUnit.MILLISECONDS)
             .pingInterval(15_000L, TimeUnit.MILLISECONDS).build()
         )
         cached = value
@@ -64,7 +67,7 @@ class HubApiFactory private constructor(
   fun statsRequest(config: ConnectionConfig): Request = Request.Builder()
     // `detail=slim` asks for the first-paint frame. Without it the Hub keeps
     // sending the full fleet document on every ingest broadcast, which is what the
-    // shared web/desktop renderer needs but a phone does not — the phone re-fetches
+    // legacy clients need — current clients re-fetch
     // the omitted documents via the staged endpoints when its revisions move.
     .url("${checkedUrl(config.hubUrl, config.allowInsecureHttp)}api/stats/stream?detail=slim")
     .header("Accept", "text/event-stream")
@@ -96,7 +99,8 @@ class HubApiFactory private constructor(
       return if (withScheme.endsWith('/')) withScheme else "$withScheme/"
     }
 
-    fun forTesting(json: Json, requestTimeoutMs: Long = 100L): HubApiFactory = HubApiFactory(json, requestTimeoutMs, true)
+    fun forTesting(json: Json, requestTimeoutMs: Long = 100L, streamIdleTimeoutMs: Long = 90_000L): HubApiFactory =
+      HubApiFactory(json, requestTimeoutMs, true, streamIdleTimeoutMs)
   }
 
   private fun normalizeUrl(raw: String): String = Companion.normalizeUrl(raw)

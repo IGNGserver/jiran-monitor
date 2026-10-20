@@ -6,6 +6,7 @@
 // "live" badge). Only the request target became injectable.
 
 const STORAGE_SECRET = 'token-monitor.hub.secret';
+import { createSseFrameSplitter } from '../core/sseFrames.js';
 const STORAGE_SECRET_SESSION = 'token-monitor.hub.secret.session';
 const STORAGE_PREFS = 'token-monitor.hub.prefs';
 
@@ -192,7 +193,7 @@ export function createHttpTransport(options = {}) {
     }
   }
 
-  function openStream({ secret, onStats, onStatus, onRetry } = {}) {
+  function openStream({ secret, detail = 'full', onStats, onStatus, onRetry } = {}) {
     const controller = new AbortController();
     let closed = false;
     let retryTimer = null;
@@ -203,7 +204,7 @@ export function createHttpTransport(options = {}) {
     let lastEventAt = null;
 
     function retryDelay(attempt) {
-      return Math.min(30_000, 1_000 * (2 ** Math.min(attempt, 5)));
+      return Math.min(30_000, Math.round(1_000 * (2 ** Math.min(attempt, 5)) * (0.8 + Math.random() * 0.4)));
     }
 
     /** Abort the current socket after `timeoutMs` without progress. */
@@ -221,6 +222,7 @@ export function createHttpTransport(options = {}) {
     async function run() {
       while (!closed) {
         onStatus?.(retryAttempt ? 'retrying' : 'connecting');
+        let cleanupAttempt = () => {};
         try {
           // Bound the handshake too: a proxy that accepts the TCP connection but
           // never responds would otherwise hang here forever with the UI stuck on
@@ -230,16 +232,21 @@ export function createHttpTransport(options = {}) {
           const connectTimer = setTimeout(abortAttempt, SSE_CONNECT_TIMEOUT_MS);
           const onOuterAbort = () => abortAttempt();
           controller.signal.addEventListener('abort', onOuterAbort, { once: true });
+          if (controller.signal.aborted) abortAttempt();
+          cleanupAttempt = () => {
+            clearTimeout(connectTimer);
+            controller.signal.removeEventListener('abort', onOuterAbort);
+            abortAttempt();
+          };
           let res;
           try {
-            res = await fetch(resolveUrl('/api/stats/stream'), {
+            res = await fetch(resolveUrl(`/api/stats/stream${detail === 'slim' ? '?detail=slim' : ''}`), {
               headers: authHeaders(secret !== undefined ? secret : getSecret(), { accept: 'text/event-stream' }),
               signal: attempt.signal,
               cache: 'no-store'
             });
           } finally {
             clearTimeout(connectTimer);
-            controller.signal.removeEventListener('abort', onOuterAbort);
           }
           if (res.status === 401) {
             onStatus?.('unauthorized');
@@ -250,18 +257,17 @@ export function createHttpTransport(options = {}) {
             error.status = res.status;
             throw error;
           }
-          retryAttempt = 0;
           lastEventAt = Date.now();
           // Status is only 'live' once a frame has actually arrived: the old code
           // announced live on the response headers alone.
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
-          let buffer = '';
+          const splitFrames = createSseFrameSplitter();
           const idle = watchdog(SSE_IDLE_TIMEOUT_MS, (clear) => {
             clear();
             onStatus?.('idle-timeout', { lastEventAt });
-            try { reader.cancel(); } catch { /* already closed */ }
-            try { controller.abort(new Error('stream idle timeout')); } catch { /* ignore */ }
+            void reader.cancel().catch(() => {});
+            abortAttempt();
           });
           try {
             while (!closed) {
@@ -269,11 +275,8 @@ export function createHttpTransport(options = {}) {
               if (done) break;
               idle.reset();
               lastEventAt = Date.now();
-              buffer += decoder.decode(value, { stream: true });
-              const chunks = buffer.split('\n\n');
-              buffer = chunks.pop() || '';
-              for (const chunk of chunks) {
-                const lines = chunk.split('\n');
+              for (const chunk of splitFrames(decoder.decode(value, { stream: true }))) {
+                const lines = chunk.split(/\r?\n/);
                 let event = 'message';
                 const dataLines = [];
                 for (const line of lines) {
@@ -287,6 +290,7 @@ export function createHttpTransport(options = {}) {
                 try {
                   const payload = JSON.parse(dataLines.join('\n'));
                   if (event === 'snapshot' || event === 'stats' || payload?.stats) {
+                    retryAttempt = 0;
                     onStats?.(payload.stats || payload, event, { at: payload.at || null, lastEventAt });
                     onStatus?.('live', { lastEventAt });
                   }
@@ -297,6 +301,7 @@ export function createHttpTransport(options = {}) {
             }
           } finally {
             idle.clear();
+            void reader.cancel().catch(() => {});
           }
           if (closed) return;
           onStatus?.('disconnected');
@@ -304,6 +309,8 @@ export function createHttpTransport(options = {}) {
           if (closed || controller.signal.aborted) return;
           onStatus?.(error?.status === 401 ? 'unauthorized' : 'error');
           if (error?.status === 401) return;
+        } finally {
+          cleanupAttempt();
         }
 
         if (closed) return;

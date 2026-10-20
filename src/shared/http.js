@@ -11,6 +11,18 @@ const COMPRESSION_MIN_BYTES = 1024;
 // fraction of the CPU, and the Hub must not block its single event loop on
 // compressing a multi-megabyte fleet snapshot.
 const BROTLI_QUALITY = 4;
+const REQUEST_STARTED_AT = Symbol('jiran.requestStartedAt');
+
+function startResponseTiming(req) {
+  req[REQUEST_STARTED_AT] = performance.now();
+}
+
+function responseTimingHeaders(res) {
+  const started = res?.req?.[REQUEST_STARTED_AT];
+  return Number.isFinite(started)
+    ? { 'server-timing': `app;dur=${Math.max(0, performance.now() - started).toFixed(1)}` }
+    : {};
+}
 
 /**
  * The single encoding to use for a response body, or null to send it as-is.
@@ -64,6 +76,7 @@ function sendBuffer(res, statusCode, body, contentType, extraHeaders = {}) {
     'content-type': contentType,
     'cache-control': 'no-store',
     vary: 'accept-encoding',
+    ...responseTimingHeaders(res),
     ...extraHeaders
   });
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
@@ -138,7 +151,11 @@ async function fetchWithTimeout(fetchFn, url, options = {}, timeoutMs = DEFAULT_
     }, deadline);
   });
   const requestPromise = Promise.resolve().then(async () => {
-    const response = await fetchFn(url, { ...options, signal: controller.signal });
+    // The caller's cancellation must remain wired after SSE headers arrive.
+    // The temporary deadline listener below is disposed at that point, but an
+    // AbortSignal.any relationship lasts for the whole response body lifetime.
+    const signal = externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal;
+    const response = await fetchFn(url, { ...options, signal });
     if (!bufferBody || !response || typeof response.arrayBuffer !== 'function') return response;
 
     // fetch() resolves when response headers arrive. Ordinary Hub calls need the
@@ -252,6 +269,8 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES) {
 }
 
 module.exports = {
+  startResponseTiming,
+  responseTimingHeaders,
   COMPRESSION_MIN_BYTES,
   DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
   MAX_JSON_BODY_BYTES,

@@ -1,10 +1,47 @@
 'use strict';
 
+// Stream cancellation must outlive the short handshake timeout.
+
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
 const test = require('node:test');
 
 const transportPath = pathToFileURL(require('node:path').resolve(__dirname, '../../src/shared-ui/transport/httpTransport.js')).href;
+
+test('stopping a live slim stream aborts the underlying fetch after headers', async () => {
+  const { createHttpTransport } = await import(transportPath);
+  const original = global.fetch;
+  let signal;
+  let url;
+  let cancelled = false;
+  let live;
+  const ready = new Promise((resolve) => { live = resolve; });
+  global.fetch = async (target, options) => {
+    url = target;
+    signal = options.signal;
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: stats\r\ndata: {"stats":{"devices":[]}}\r\n\r\n'));
+        signal.addEventListener('abort', () => { try { controller.close(); } catch {} });
+      },
+      cancel() { cancelled = true; }
+    }));
+  };
+  let stop;
+  try {
+    stop = createHttpTransport({ storage: storage() }).openStream({ detail: 'slim', onStatus: (status) => { if (status === 'live') live(); } });
+    await ready;
+    assert.equal(url, '/api/stats/stream?detail=slim');
+    assert.equal(signal.aborted, false);
+    stop();
+    assert.equal(signal.aborted, true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(cancelled || signal.aborted);
+  } finally {
+    stop?.();
+    global.fetch = original;
+  }
+});
 
 function storage() {
   const values = new Map();

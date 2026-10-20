@@ -136,6 +136,9 @@ fun AccountsScreen(
   val colors = LocalFluentColors.current
   val haptics = rememberAppHaptics()
   val owner = state.authorization?.authenticated == true
+  LaunchedEffect(owner, state.authorization?.capabilities?.hubAccounts) {
+    if (owner && state.authorization?.capabilities?.hubAccounts != false) viewModel.refreshAccounts()
+  }
   var editing by remember { mutableStateOf<HubAccountDto?>(null) }
   var creating by remember { mutableStateOf(false) }
 
