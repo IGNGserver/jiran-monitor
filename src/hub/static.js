@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { corsHeaders } = require('../shared/http');
+const { corsHeaders, responseTimingHeaders } = require('../shared/http');
 
 const DEFAULT_WEB_ROOT = path.join(__dirname, 'web');
 // The dashboard's UI lives in a shared package so the Electron desktop client
@@ -133,6 +133,7 @@ async function resolveStaticAsset(webRoot, pathname) {
 function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = {}) {
   const headers = corsHeaders({
     ...SECURITY_HEADERS,
+    ...responseTimingHeaders(res),
     'content-type': contentTypeFor(filePath),
     'content-length': stat.size,
     'cache-control': cacheControlFor(filePath, { revalidate })

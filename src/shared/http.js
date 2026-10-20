@@ -11,6 +11,18 @@ const COMPRESSION_MIN_BYTES = 1024;
 // fraction of the CPU, and the Hub must not block its single event loop on
 // compressing a multi-megabyte fleet snapshot.
 const BROTLI_QUALITY = 4;
+const REQUEST_STARTED_AT = Symbol('jiran.requestStartedAt');
+
+function startResponseTiming(req) {
+  req[REQUEST_STARTED_AT] = performance.now();
+}
+
+function responseTimingHeaders(res) {
+  const started = res?.req?.[REQUEST_STARTED_AT];
+  return Number.isFinite(started)
+    ? { 'server-timing': `app;dur=${Math.max(0, performance.now() - started).toFixed(1)}` }
+    : {};
+}
 
 /**
  * The single encoding to use for a response body, or null to send it as-is.
@@ -64,6 +76,7 @@ function sendBuffer(res, statusCode, body, contentType, extraHeaders = {}) {
     'content-type': contentType,
     'cache-control': 'no-store',
     vary: 'accept-encoding',
+    ...responseTimingHeaders(res),
     ...extraHeaders
   });
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
@@ -252,6 +265,8 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES) {
 }
 
 module.exports = {
+  startResponseTiming,
+  responseTimingHeaders,
   COMPRESSION_MIN_BYTES,
   DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
   MAX_JSON_BODY_BYTES,

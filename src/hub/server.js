@@ -23,7 +23,7 @@ const {
 } = require('../shared/subscriptionDisplay');
 const { CURRENCY_CODES, normalizeCurrency } = require('../shared/currency');
 const { currentHubBuild } = require('../shared/hubBuildIdentity');
-const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText } = require('../shared/http');
+const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
 const {
   AUTHENTICATED_SCOPE,
   createHubAuthPolicy
@@ -1434,6 +1434,7 @@ function createHub({
   }
 
   async function handleRequest(req, res) {
+    startResponseTiming(req);
     if (req.method === 'OPTIONS') return sendText(res, 204, '');
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 

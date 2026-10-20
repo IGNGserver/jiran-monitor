@@ -23,6 +23,7 @@ import {
   writeRoute
 } from './transport/index.js';
 import { applyI18n, resolveLocale, t } from './core/i18n.js';
+import { markLoadingStage } from './core/loadingPerformance.js';
 import {
   isPresetRangePeriod,
   localDayKey,
@@ -2116,6 +2117,7 @@ async function ensureHistory({ force = false, deviceId = state.prefs.deviceFilte
 
 function applyStatsSnapshot(stats, meta = null) {
   if (!stats || typeof stats !== 'object') return;
+  markLoadingStage('snapshot');
   const previous = state.stats;
   const historyChanged = Boolean(previous)
     && (previous.historyRevision !== stats.historyRevision
@@ -2169,6 +2171,7 @@ function connectStream() {
     secret: state.secret,
     onStatus: setStreamStatus,
     onStats: (stats, _event, meta) => {
+      markLoadingStage('live');
       if (meta?.lastEventAt) state.dataAsOf = meta.lastEventAt;
       applyStatsSnapshot(stats, meta);
     },
@@ -2572,6 +2575,7 @@ async function deleteAccount(accountId) {
 }
 
 async function bootstrapAuthorized() {
+  markLoadingStage('authorized');
   showAuth(false);
   state.loading = true;
   state.error = null;
@@ -4079,6 +4083,7 @@ async function init() {
   // Paint the shell before any remote request. On desktop this is what keeps
   // Settings and local navigation available during a Hub timeout.
   render();
+  markLoadingStage('shell');
 
   if (isCapable('pwa') && 'serviceWorker' in navigator && window.isSecureContext) {
     try {
