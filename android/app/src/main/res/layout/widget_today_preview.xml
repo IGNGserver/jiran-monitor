@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher picker preview only. The live receiver inflates
+     widget_today_medium directly; this wrapper supplies the opaque sample card
+     the picker cannot paint from the runtime Canvas surface. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/widget_preview_surface">
+
+  <include layout="@layout/widget_today_medium" />
+</FrameLayout>

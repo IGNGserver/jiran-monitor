@@ -20,4 +20,6 @@ class PreferencesViewModel @Inject constructor(
   fun setThemeMode(mode: ThemeMode) = store.setThemeMode(mode)
   fun setHapticsMode(mode: HapticsMode) = store.setHapticsMode(mode)
   fun setHomeLimitAccountCount(count: Int) = store.setHomeLimitAccountCount(count)
+  fun setWidgetRefreshMinutes(minutes: Int) = store.setWidgetRefreshMinutes(minutes)
+  fun setWidgetHideCost(hidden: Boolean) = store.setWidgetHideCost(hidden)
 }

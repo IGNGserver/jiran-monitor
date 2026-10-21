@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Today widget. updatePeriodMillis is deliberately 0: the system's periodic
+  alarm cannot go below 30 minutes and is not the scheduling authority here.
+  WidgetRefreshScheduler owns the cadence through WorkManager, so keeping both
+  alive would double every wake-up.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:configure="com.igng.tokenmonitor.android.widget.WidgetConfigActivity"
+  android:description="@string/widget_today_description"
+  android:initialLayout="@layout/widget_today_small"
+  android:maxResizeHeight="240dp"
+  android:maxResizeWidth="360dp"
+  android:minHeight="110dp"
+  android:minWidth="110dp"
+  android:previewLayout="@layout/widget_today_preview"
+  android:resizeMode="horizontal|vertical"
+  android:targetCellHeight="2"
+  android:targetCellWidth="2"
+  android:updatePeriodMillis="0"
+  android:widgetCategory="home_screen"
+  android:widgetFeatures="reconfigurable" />

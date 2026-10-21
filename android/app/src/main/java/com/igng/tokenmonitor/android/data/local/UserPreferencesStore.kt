@@ -74,7 +74,16 @@ data class UserPreferences(
   val currency: DisplayCurrency = DisplayCurrency.Usd,
   val themeMode: ThemeMode = ThemeMode.System,
   val hapticsMode: HapticsMode = HapticsMode.Standard,
-  val homeLimitAccountCount: Int = 3
+  val homeLimitAccountCount: Int = 3,
+  /**
+   * WorkManager's floor is 15 minutes. The widget scheduler reads this value and
+   * reschedules on change; the platform may still defer a run under Doze, which
+   * is why every widget states how old its snapshot is instead of pretending to
+   * be a live clock.
+   */
+  val widgetRefreshMinutes: Int = 30,
+  /** Privacy switch for every widget: hide costs, keep token counts. */
+  val widgetHideCost: Boolean = false
 )
 
 @Singleton
@@ -90,7 +99,9 @@ class UserPreferencesStore @Inject constructor(
     currency = DisplayCurrency.fromStorage(prefs.getString(KEY_CURRENCY, DisplayCurrency.Usd.storageKey)),
     themeMode = ThemeMode.fromStorage(prefs.getString(KEY_THEME_MODE, ThemeMode.System.storageKey)),
     hapticsMode = HapticsMode.fromStorage(prefs.getString(KEY_HAPTICS, HapticsMode.Standard.storageKey)),
-    homeLimitAccountCount = clampHomeLimitAccountCount(prefs.getInt(KEY_HOME_LIMIT_ACCOUNT_COUNT, 3))
+    homeLimitAccountCount = clampHomeLimitAccountCount(prefs.getInt(KEY_HOME_LIMIT_ACCOUNT_COUNT, 3)),
+    widgetRefreshMinutes = clampWidgetRefreshMinutes(prefs.getInt(KEY_WIDGET_REFRESH_MINUTES, 30)),
+    widgetHideCost = prefs.getBoolean(KEY_WIDGET_HIDE_COST, false)
   )
 
   fun setThemeSeed(seed: ThemeSeedId) {
@@ -119,6 +130,17 @@ class UserPreferencesStore @Inject constructor(
     _preferences.value = _preferences.value.copy(homeLimitAccountCount = next)
   }
 
+  fun setWidgetRefreshMinutes(minutes: Int) {
+    val next = clampWidgetRefreshMinutes(minutes)
+    prefs.edit().putInt(KEY_WIDGET_REFRESH_MINUTES, next).apply()
+    _preferences.value = _preferences.value.copy(widgetRefreshMinutes = next)
+  }
+
+  fun setWidgetHideCost(hidden: Boolean) {
+    prefs.edit().putBoolean(KEY_WIDGET_HIDE_COST, hidden).apply()
+    _preferences.value = _preferences.value.copy(widgetHideCost = hidden)
+  }
+
   private companion object {
     const val PREFS_NAME = "token_monitor_prefs"
     const val KEY_THEME_SEED = "theme_seed"
@@ -126,8 +148,12 @@ class UserPreferencesStore @Inject constructor(
     const val KEY_THEME_MODE = "theme_mode"
     const val KEY_HAPTICS = "haptics_mode"
     const val KEY_HOME_LIMIT_ACCOUNT_COUNT = "home_limit_account_count"
+    const val KEY_WIDGET_REFRESH_MINUTES = "widget_refresh_minutes"
+    const val KEY_WIDGET_HIDE_COST = "widget_hide_cost"
   }
 }
 
 fun clampHomeLimitAccountCount(value: Int): Int = value.coerceIn(1, 12)
+
+fun clampWidgetRefreshMinutes(value: Int): Int = value.coerceIn(15, 180)
 

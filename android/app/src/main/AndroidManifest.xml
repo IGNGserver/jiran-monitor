@@ -15,11 +15,77 @@
     android:theme="@style/Theme.TokenMonitor">
     <activity
       android:name=".MainActivity"
-      android:exported="true">
+      android:exported="true"
+      android:launchMode="singleTop">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <!-- Widget configuration is launched by the launcher for the add flow and by
+         the host's long-press "Edit" affordance on Android 12+. It must be
+         exported because the launcher starts it explicitly. -->
+    <activity
+      android:name=".widget.WidgetConfigActivity"
+      android:excludeFromRecents="true"
+      android:exported="true"
+      android:label="@string/widget_config_title"
+      android:theme="@style/Theme.TokenMonitor" />
+
+    <receiver
+      android:name=".widget.TodayWidgetProvider"
+      android:exported="true"
+      android:label="@string/widget_today_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/widget_today_info" />
+    </receiver>
+
+    <receiver
+      android:name=".widget.QuotaWidgetProvider"
+      android:exported="true"
+      android:label="@string/widget_quota_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/widget_quota_info" />
+    </receiver>
+
+    <receiver
+      android:name=".widget.TrendWidgetProvider"
+      android:exported="true"
+      android:label="@string/widget_trend_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/widget_trend_info" />
+    </receiver>
+
+    <receiver
+      android:name=".widget.DashboardWidgetProvider"
+      android:exported="true"
+      android:label="@string/widget_dashboard_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/widget_dashboard_info" />
+    </receiver>
+
+    <!-- Refresh / metric-toggle actions come only from our own PendingIntents, so
+         this receiver stays private: another app cannot spend the owner key's
+         network or change what a widget displays. -->
+    <receiver
+      android:name=".widget.WidgetActionReceiver"
+      android:exported="false" />
   </application>
 </manifest>
