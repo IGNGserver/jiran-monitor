@@ -84,6 +84,7 @@ test('hub serves the web UI on the same port without a secret', async () => {
     const html = await home.text();
     assert.match(html, /Jiran/);
     assert.match(html, /manifest\.webmanifest/);
+    assert.match(html, /apple-touch-icon-180\.png/);
 
     const manifest = await fetch(`${base}/manifest.webmanifest`);
     assert.equal(manifest.status, 200);
@@ -102,10 +103,30 @@ test('hub serves the web UI on the same port without a secret', async () => {
     // Built-graph reachability is tested against esbuild's manifest in web-build;
     // source development intentionally has no offline module precache promise.
 
-    const icon = await fetch(`${base}/icons/icon-192.png`);
-    assert.equal(icon.status, 200);
-    assert.match(icon.headers.get('content-type') || '', /image\/png/);
-    assert.ok((await icon.arrayBuffer()).byteLength > 0);
+    // Safari only uses opaque, full-bleed icons for Home Screen / Dock web
+    // apps. The 1024px pair is the high-resolution source macOS reads; the
+    // 180/167/152 files back the apple-touch-icon links.
+    const iconFiles = [
+      ['/icons/icon-1024.png', 1024],
+      ['/icons/icon-1024-maskable.png', 1024],
+      ['/icons/icon-512.png', 512],
+      ['/icons/icon-512-maskable.png', 512],
+      ['/icons/icon-192.png', 192],
+      ['/icons/icon-192-maskable.png', 192],
+      ['/icons/apple-touch-icon-180.png', 180],
+      ['/icons/apple-touch-icon-167.png', 167],
+      ['/icons/apple-touch-icon-152.png', 152]
+    ];
+    for (const [iconPath, size] of iconFiles) {
+      const icon = await fetch(`${base}${iconPath}`);
+      assert.equal(icon.status, 200, iconPath);
+      assert.match(icon.headers.get('content-type') || '', /image\/png/, iconPath);
+      const bytes = Buffer.from(await icon.arrayBuffer());
+      assert.equal(bytes.toString('ascii', 1, 4), 'PNG', iconPath);
+      assert.equal(bytes.readUInt32BE(16), size, `${iconPath} width`);
+      assert.equal(bytes.readUInt32BE(20), size, `${iconPath} height`);
+      assert.equal(bytes[25], 2, `${iconPath} must be opaque RGB without an alpha channel`);
+    }
 
     // The UI is served from the shared package; the shell keeps its own boot
     // module and the client icons keep their historical public path.
@@ -135,7 +156,11 @@ test('hub serves the web UI on the same port without a secret', async () => {
     assert.ok(Array.isArray(manifestBody.icons));
     assert.ok(manifestBody.icons.some((icon) => String(icon.purpose || '').includes('maskable')));
     assert.ok(manifestBody.icons.some((icon) => String(icon.purpose || '').includes('any')));
-    assert.ok(manifestBody.icons.some((icon) => icon.sizes === '180x180' && icon.src.includes('apple-touch-icon')));
+    // macOS Safari requires a 1024px opaque full-bleed icon for Add to Dock;
+    // 512 alone makes it fall back to the generated monogram.
+    assert.ok(manifestBody.icons.some((icon) => icon.sizes === '1024x1024' && icon.purpose === 'any'));
+    assert.ok(manifestBody.icons.some((icon) => icon.sizes === '1024x1024' && icon.purpose === 'maskable'));
+    assert.ok(manifestBody.icons.some((icon) => icon.sizes === '180x180' && icon.src.includes('apple-touch-icon-180')));
 
     // API routes remain JSON and still work beside the UI.
     const health = await (await fetch(`${base}/api/health`)).json();
