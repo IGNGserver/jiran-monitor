@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:configure="com.igng.tokenmonitor.android.widget.WidgetConfigActivity"
+  android:description="@string/widget_quota_description"
+  android:initialLayout="@layout/widget_quota_small"
+  android:maxResizeHeight="280dp"
+  android:maxResizeWidth="360dp"
+  android:minHeight="110dp"
+  android:minWidth="110dp"
+  android:previewLayout="@layout/widget_quota_preview"
+  android:resizeMode="horizontal|vertical"
+  android:targetCellHeight="2"
+  android:targetCellWidth="2"
+  android:updatePeriodMillis="0"
+  android:widgetCategory="home_screen"
+  android:widgetFeatures="reconfigurable" />

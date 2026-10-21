@@ -20,6 +20,7 @@ import com.igng.tokenmonitor.android.data.model.StatsDto
 import com.igng.tokenmonitor.android.data.model.UsageRangeDto
 import com.igng.tokenmonitor.android.data.repository.HubRepository
 import com.igng.tokenmonitor.android.data.repository.HubResult
+import com.igng.tokenmonitor.android.widget.WidgetUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -134,12 +135,17 @@ data class HubUiState(
 )
 
 @HiltViewModel
-class HubViewModel @Inject constructor(private val repository: HubRepository) : ViewModel() {
+class HubViewModel @Inject constructor(
+  private val repository: HubRepository,
+  private val widgetUpdater: WidgetUpdater
+) : ViewModel() {
   private val _state = MutableStateFlow(HubUiState())
   val state = _state.asStateFlow()
   private var sseJob: Job? = null
   private var rangeJob: Job? = null
   private var refreshJob: Job? = null
+  // Debounced so a burst of SSE frames writes one snapshot, not one per frame.
+  private var widgetPublishJob: Job? = null
   private var hasObservedForeground = false
   private var statsFrameVersion = 0L
 
@@ -235,6 +241,7 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
         if (document != null) {
           hasObservedHistory = true
           _state.value = _state.value.copy(history = document, historyError = null)
+          scheduleWidgetPublish()
         }
       }
       is HubResult.Failure -> if (isCurrent(generation)) {
@@ -268,6 +275,7 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
         } else {
           _state.value = _state.value.copy(isLoading = false)
         }
+        scheduleWidgetPublish()
       }
       is HubResult.Failure -> if (isCurrent(generation)) {
         _state.value = _state.value.copy(
@@ -275,6 +283,34 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
           error = if (frameVersion == statsFrameVersion) result.error.message else _state.value.error
         )
       }
+    }
+  }
+
+  /**
+   * Publish the documents the foreground already paid for. The worker exists for
+   * when the app is closed; while it is open, a card should follow the screen the
+   * user just pulled to refresh instead of waiting for the next WorkManager tick.
+   */
+  private fun scheduleWidgetPublish() {
+    if (_state.value.stats == null) return
+    widgetPublishJob?.cancel()
+    widgetPublishJob = viewModelScope.launch {
+      delay(1200)
+      val current = _state.value
+      val stats = current.stats ?: return@launch
+      // A widget snapshot is a cache, not the screen's source of truth; a disk
+      // failure must not take down the dashboard the user is reading.
+      runCatching { widgetUpdater.publish(stats, current.history, current.rates) }
+    }
+  }
+
+  /** A display-currency change must rewrite the snapshot's rate, not just repaint. */
+  fun publishWidgetsNow() {
+    val current = _state.value
+    val stats = current.stats ?: return
+    widgetPublishJob?.cancel()
+    widgetPublishJob = viewModelScope.launch {
+      runCatching { widgetUpdater.publish(stats, current.history, current.rates) }
     }
   }
 
@@ -380,6 +416,8 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
    *  new Hub happened to answer — presenting one deployment's numbers as another's.
    */
   fun onConnectionChanged() {
+    widgetPublishJob?.cancel()
+    viewModelScope.launch { runCatching { widgetUpdater.clearForConnectionChange() } }
     connectionGeneration += 1
     val generation = connectionGeneration
     rangeJob?.cancel()
@@ -900,10 +938,13 @@ class HubViewModel @Inject constructor(private val repository: HubRepository) : 
 
   fun refreshRates() = launchRequest { generation ->
     when (val result = repository.rates()) {
-      is HubResult.Success -> if (isCurrent(generation)) _state.value = _state.value.copy(
-        rates = result.value.rates,
-        ratesDate = result.value.date
-      )
+      is HubResult.Success -> if (isCurrent(generation)) {
+        _state.value = _state.value.copy(
+          rates = result.value.rates,
+          ratesDate = result.value.date
+        )
+        scheduleWidgetPublish()
+      }
       is HubResult.Failure -> Unit
     }
   }

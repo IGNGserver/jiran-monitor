@@ -4,4 +4,32 @@
        locale ships the romanized brand. Keep in sync with the brand.name i18n
        key family in the shared renderer. -->
   <string name="app_name">Jiran</string>
+
+  <!-- Widget labels are what the launcher's widget picker shows. The native
+       client is Chinese-only today, so these follow the in-app language rather
+       than the brand-only app_name above. -->
+  <string name="widget_today_label">计然 · 今日</string>
+  <string name="widget_today_description">今日 token、费用与最近七日用量</string>
+  <string name="widget_quota_label">计然 · 额度</string>
+  <string name="widget_quota_description">最紧急的账号额度、重置时间与异常状态</string>
+  <string name="widget_trend_label">计然 · 趋势</string>
+  <string name="widget_trend_description">最近七日的 token 或费用走势</string>
+  <string name="widget_dashboard_label">计然 · 仪表盘</string>
+  <string name="widget_dashboard_description">今日用量、趋势、额度与在线设备一屏全览</string>
+
+  <string name="widget_config_title">配置小组件</string>
+  <string name="widget_config_done">完成</string>
+  <string name="widget_config_cancel">取消</string>
+  <string name="widget_config_trend_metric">默认指标</string>
+  <string name="widget_config_trend_tokens">Token</string>
+  <string name="widget_config_trend_cost">费用</string>
+  <string name="widget_config_accounts">展示账号</string>
+  <string name="widget_config_accounts_hint">按紧迫度排序，最多展示 4 个。未选择时自动取最紧急的几个。</string>
+  <string name="widget_config_hide_cost">隐藏费用</string>
+  <string name="widget_config_hide_cost_hint">所有计然小组件只显示 token，不显示金额。</string>
+  <string name="widget_config_unavailable">还没有额度快照，先打开计然刷新一次再配置。</string>
+  <string name="widget_config_missing_id">这个小组件已不存在，请从桌面重新添加。</string>
+
+  <string name="widget_refresh">刷新</string>
+  <string name="widget_open">打开计然</string>
 </resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static sample bars for the launcher's widget picker. Runtime rendering
+     replaces the bitmap; these never represent live data. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="100dp"
+  android:height="54dp"
+  android:viewportWidth="100"
+  android:viewportHeight="54">
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M2,28h10v24h-10z" />
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M16,20h10v32h-10z" />
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M30,34h10v18h-10z" />
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M44,24h10v28h-10z" />
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M58,14h10v38h-10z" />
+  <path android:fillColor="@android:color/darker_gray" android:pathData="M72,22h10v30h-10z" />
+  <path android:fillColor="@android:color/holo_blue_dark" android:pathData="M86,6h10v46h-10z" />
+</vector>

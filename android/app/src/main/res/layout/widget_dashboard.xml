@@ -1,0 +1,463 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent">
+
+  <ImageView
+    android:id="@+id/widget_surface"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:contentDescription="@null"
+    android:scaleType="fitXY" />
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:gravity="center_vertical"
+      android:orientation="horizontal">
+
+      <ImageView
+        android:id="@+id/widget_brand_mark"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:background="@drawable/widget_mark_bg"
+        android:contentDescription="@null" />
+
+      <TextView
+        android:id="@+id/widget_eyebrow"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
+        android:letterSpacing="0.08"
+        android:maxLines="1"
+        android:text="计然 · 仪表盘"
+        android:textColor="@android:color/black"
+        android:textSize="9sp" />
+
+      <ImageView
+        android:id="@+id/widget_status_dot"
+        android:layout_width="5dp"
+        android:layout_height="5dp"
+        android:layout_marginEnd="5dp"
+        android:contentDescription="@null" />
+
+      <TextView
+        android:id="@+id/widget_freshness"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif"
+        android:fontFeatureSettings="tnum"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="1 分钟前"
+        android:textColor="@android:color/darker_gray"
+        android:textSize="7.5sp" />
+
+      <ImageView
+        android:id="@+id/widget_refresh"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:layout_marginStart="3dp"
+        android:contentDescription="@string/widget_refresh"
+        android:padding="4dp"
+        android:src="@drawable/fluent_arrow_clockwise" />
+    </LinearLayout>
+
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="12dp"
+      android:gravity="bottom"
+      android:orientation="horizontal">
+
+      <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:fontFamily="sans-serif-medium"
+          android:includeFontPadding="false"
+          android:letterSpacing="0.10"
+          android:text="今日用量"
+          android:textColor="@android:color/darker_gray"
+          android:textSize="7.5sp" />
+
+        <LinearLayout
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="3dp"
+          android:gravity="bottom"
+          android:orientation="horizontal">
+
+          <TextView
+            android:id="@+id/dash_tokens"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="486K"
+            android:textColor="@android:color/black"
+            android:textSize="31sp" />
+
+          <TextView
+            android:id="@+id/dash_unit"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_marginBottom="3dp"
+            android:fontFamily="sans-serif"
+            android:includeFontPadding="false"
+            android:text="token"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="8sp" />
+        </LinearLayout>
+
+        <LinearLayout
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="5dp"
+          android:gravity="center_vertical"
+          android:orientation="horizontal">
+
+          <TextView
+            android:id="@+id/dash_cost"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="US$8.92"
+            android:textColor="@android:color/holo_blue_dark"
+            android:textSize="12sp" />
+
+          <TextView
+            android:id="@+id/dash_delta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:fontFamily="sans-serif"
+            android:fontFeatureSettings="tnum"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="↑ 12.4% 较昨日"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="8sp" />
+        </LinearLayout>
+      </LinearLayout>
+
+      <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="vertical">
+
+        <TextView
+          android:id="@+id/dash_month"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:fontFamily="sans-serif"
+          android:fontFeatureSettings="tnum"
+          android:gravity="end"
+          android:includeFontPadding="false"
+          android:maxLines="1"
+          android:text="本月 12.4M"
+          android:textColor="@android:color/darker_gray"
+          android:textSize="7.5sp" />
+
+        <TextView
+          android:id="@+id/dash_all"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="3dp"
+          android:fontFamily="sans-serif"
+          android:fontFeatureSettings="tnum"
+          android:gravity="end"
+          android:includeFontPadding="false"
+          android:maxLines="1"
+          android:text="全部 186M"
+          android:textColor="@android:color/darker_gray"
+          android:textSize="7.5sp" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <View
+      android:id="@+id/dash_divider"
+      android:layout_width="match_parent"
+      android:layout_height="1dp"
+      android:layout_marginTop="10dp"
+      android:background="@android:color/darker_gray" />
+
+    <ImageView
+      android:id="@+id/dash_chart"
+      android:layout_width="match_parent"
+      android:layout_height="46dp"
+      android:layout_marginTop="9dp"
+      android:contentDescription="最近七日趋势"
+      android:scaleType="fitXY"
+      android:src="@drawable/widget_preview_bars" />
+
+    <LinearLayout
+      android:id="@+id/dash_quota_block"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_marginTop="9dp"
+      android:orientation="vertical">
+
+      <LinearLayout
+        android:id="@+id/dash_row_1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+          android:id="@+id/dash_icon_1"
+          android:layout_width="15dp"
+          android:layout_height="15dp"
+          android:contentDescription="@null" />
+
+        <LinearLayout
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_marginStart="6dp"
+          android:layout_weight="1"
+          android:orientation="vertical">
+
+          <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="bottom"
+            android:orientation="horizontal">
+
+            <TextView
+              android:id="@+id/dash_name_1"
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:ellipsize="end"
+              android:fontFamily="sans-serif-medium"
+              android:includeFontPadding="false"
+              android:maxLines="1"
+              android:text="Cursor"
+              android:textColor="@android:color/black"
+              android:textSize="8.5sp" />
+
+            <TextView
+              android:id="@+id/dash_plan_1"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_weight="1"
+              android:ellipsize="end"
+              android:fontFamily="sans-serif"
+              android:includeFontPadding="false"
+              android:maxLines="1"
+              android:text="Pro · 月度"
+              android:textColor="@android:color/darker_gray"
+              android:textSize="7sp" />
+          </LinearLayout>
+
+          <ImageView
+            android:id="@+id/dash_bar_1"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="3dp"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/widget_preview_bar" />
+        </LinearLayout>
+
+        <LinearLayout
+          android:layout_width="64dp"
+          android:layout_height="wrap_content"
+          android:layout_marginStart="6dp"
+          android:gravity="end"
+          android:orientation="vertical">
+
+          <TextView
+            android:id="@+id/dash_remaining_1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:gravity="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="剩余 8%"
+            android:textColor="@android:color/black"
+            android:textSize="9sp" />
+
+          <TextView
+            android:id="@+id/dash_reset_1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="sans-serif"
+            android:fontFeatureSettings="tnum"
+            android:gravity="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="11月01日"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="6.5sp" />
+        </LinearLayout>
+      </LinearLayout>
+
+      <LinearLayout
+        android:id="@+id/dash_row_2"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="7dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+          android:id="@+id/dash_icon_2"
+          android:layout_width="15dp"
+          android:layout_height="15dp"
+          android:contentDescription="@null" />
+
+        <LinearLayout
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_marginStart="6dp"
+          android:layout_weight="1"
+          android:orientation="vertical">
+
+          <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="bottom"
+            android:orientation="horizontal">
+
+            <TextView
+              android:id="@+id/dash_name_2"
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:ellipsize="end"
+              android:fontFamily="sans-serif-medium"
+              android:includeFontPadding="false"
+              android:maxLines="1"
+              android:text="Codex"
+              android:textColor="@android:color/black"
+              android:textSize="8.5sp" />
+
+            <TextView
+              android:id="@+id/dash_plan_2"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_marginStart="4dp"
+              android:layout_weight="1"
+              android:ellipsize="end"
+              android:fontFamily="sans-serif"
+              android:includeFontPadding="false"
+              android:maxLines="1"
+              android:text="Plus · 每周"
+              android:textColor="@android:color/darker_gray"
+              android:textSize="7sp" />
+          </LinearLayout>
+
+          <ImageView
+            android:id="@+id/dash_bar_2"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="3dp"
+            android:contentDescription="@null"
+            android:scaleType="fitXY"
+            android:src="@drawable/widget_preview_bar" />
+        </LinearLayout>
+
+        <LinearLayout
+          android:layout_width="64dp"
+          android:layout_height="wrap_content"
+          android:layout_marginStart="6dp"
+          android:gravity="end"
+          android:orientation="vertical">
+
+          <TextView
+            android:id="@+id/dash_remaining_2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:gravity="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="剩余 43%"
+            android:textColor="@android:color/black"
+            android:textSize="9sp" />
+
+          <TextView
+            android:id="@+id/dash_reset_2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="sans-serif"
+            android:fontFeatureSettings="tnum"
+            android:gravity="end"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="周四 09:00"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="6.5sp" />
+        </LinearLayout>
+      </LinearLayout>
+    </LinearLayout>
+
+    <Space
+      android:layout_width="match_parent"
+      android:layout_height="0dp"
+      android:layout_weight="1" />
+
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:gravity="center_vertical"
+      android:orientation="horizontal">
+
+      <TextView
+        android:id="@+id/dash_online"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="sans-serif-medium"
+        android:fontFeatureSettings="tnum"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="2/2 台在线"
+        android:textColor="@android:color/darker_gray"
+        android:textSize="7.5sp" />
+
+      <TextView
+        android:id="@+id/widget_state_line"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif"
+        android:fontFeatureSettings="tnum"
+        android:gravity="end"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="更新于 1 分钟前"
+        android:textColor="@android:color/darker_gray"
+        android:textSize="7sp" />
+    </LinearLayout>
+  </LinearLayout>
+</FrameLayout>

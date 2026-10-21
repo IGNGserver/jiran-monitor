@@ -30,6 +30,9 @@ import androidx.compose.ui.draw.clip
 import com.igng.tokenmonitor.android.ui.theme.LocalFluentAdaptation
 import com.igng.tokenmonitor.android.ui.theme.FluentSpacingDefaults
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +66,9 @@ import com.igng.tokenmonitor.android.ui.more.SessionsScreen
 import com.igng.tokenmonitor.android.ui.more.SettingsScreen
 import com.igng.tokenmonitor.android.ui.more.StatusScreen
 import com.igng.tokenmonitor.android.ui.overview.OverviewScreen
+import com.igng.tokenmonitor.android.ui.widgets.WidgetsScreen
+import com.igng.tokenmonitor.android.widget.WidgetRefreshScheduler
+import com.igng.tokenmonitor.android.widget.WidgetRenderer
 import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -106,7 +112,9 @@ private fun useNavigationRail(): Boolean = !LocalFluentAdaptation.current.isComp
 fun TokenMonitorApp(
   hubViewModel: HubViewModel = hiltViewModel(),
   connectionViewModel: ConnectionViewModel = hiltViewModel(),
-  preferencesViewModel: PreferencesViewModel = hiltViewModel()
+  preferencesViewModel: PreferencesViewModel = hiltViewModel(),
+  initialDestination: String? = null,
+  onDestinationConsumed: () -> Unit = {}
 ) {
   val navController = rememberNavController()
   val hubState by hubViewModel.state.collectAsStateWithLifecycle()
@@ -114,6 +122,29 @@ fun TokenMonitorApp(
   ActivityForegroundEffect { foreground -> hubViewModel.setForeground(foreground) }
   val connectionState by connectionViewModel.state.collectAsStateWithLifecycle()
   val prefs by preferencesViewModel.preferences.collectAsStateWithLifecycle()
+  val context = LocalContext.current
+  // Widget work is scheduled only while at least one card exists. Doing this on
+  // every relevant preference change also repaints the cards when the user picks
+  // a new accent / dark mode / currency, instead of waiting for the next poll.
+  LaunchedEffect(
+    prefs.widgetRefreshMinutes,
+    prefs.widgetHideCost,
+    prefs.themeSeed,
+    prefs.themeMode,
+    prefs.currency
+  ) {
+    withContext(Dispatchers.IO) {
+      runCatching {
+        WidgetRefreshScheduler.ensureScheduled(context)
+        WidgetRenderer.updateAll(context)
+      }
+    }
+  }
+  // A currency change needs a new rate in the snapshot, not just a repaint;
+  // otherwise the card would keep printing the previous symbol until the poll.
+  LaunchedEffect(prefs.currency) {
+    hubViewModel.publishWidgetsNow()
+  }
   val snackbarHost = remember { SnackbarHostState() }
   val navBackStack by navController.currentBackStackEntryAsState()
   val currentRoute = navBackStack?.destination?.route
@@ -218,6 +249,8 @@ fun TokenMonitorApp(
             hubViewModel = hubViewModel,
             connectionViewModel = connectionViewModel,
             navigateHome = navigateHome,
+            initialDestination = initialDestination,
+            onDestinationConsumed = onDestinationConsumed,
             modifier = hostModifier.contentWidthCapped()
           )
         }
@@ -234,6 +267,8 @@ fun TokenMonitorApp(
           hubViewModel = hubViewModel,
           connectionViewModel = connectionViewModel,
           navigateHome = navigateHome,
+          initialDestination = initialDestination,
+          onDestinationConsumed = onDestinationConsumed,
           modifier = Modifier.contentWidthCapped()
         )
       }
@@ -290,6 +325,8 @@ private fun AppNavHost(
   hubViewModel: HubViewModel,
   connectionViewModel: ConnectionViewModel,
   navigateHome: () -> Unit,
+  initialDestination: String?,
+  onDestinationConsumed: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   // Read the flag here: the transition lambdas below are not composable scope,
@@ -441,6 +478,16 @@ private fun AppNavHost(
         }
       )
     }
+    composable("widgets") {
+      WidgetsScreen(
+        onBack = {
+          if (!navController.popBackStack()) {
+            navController.navigate("overview") { launchSingleTop = true }
+          }
+        },
+        onHome = navigateHome
+      )
+    }
     composable("session/{key}") { backStack ->
       SessionDetailScreen(
         stats = hubState.stats,
@@ -498,7 +545,25 @@ private fun AppNavHost(
       )
     }
   }
+
+  // A widget tap carries a route, not a deep link URI. Apply it only once the
+  // NavHost has installed its graph; before that there is no destination table.
+  LaunchedEffect(initialDestination) {
+    val route = initialDestination ?: return@LaunchedEffect
+    if (route in WIDGET_DESTINATIONS) {
+      navController.navigate(route) { launchSingleTop = true }
+    }
+    onDestinationConsumed()
+  }
 }
+
+private val WIDGET_DESTINATIONS = setOf(
+  "overview",
+  "analytics",
+  "status",
+  "settings",
+  "widgets"
+)
 
 /**
  * Maps the bar's direction policy onto the transition's own side vocabulary.  The

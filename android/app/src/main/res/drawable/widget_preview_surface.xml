@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Preview-only fallback: the live widget paints an opaque RemoteViews bitmap
+     over this, while the launcher's picker has no runtime to paint one. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+  android:shape="rectangle">
+  <solid android:color="@android:color/white" />
+  <corners android:radius="20dp" />
+</shape>

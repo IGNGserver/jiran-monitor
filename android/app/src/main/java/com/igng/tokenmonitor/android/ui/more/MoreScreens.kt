@@ -136,7 +136,7 @@ fun MoreHubScreen(
   ) {
     FluentPageHeader(
       title = "更多",
-      subtitle = "会话、项目、配额账号、订阅、定价与连接设置"
+      subtitle = "会话、项目、配额账号、订阅、定价、小组件与连接设置"
     )
 
     Spacer(Modifier.height(FluentSpacingDefaults.s))
@@ -219,7 +219,7 @@ fun MoreHubScreen(
     // Group 3: 系统与配置 (System & Configuration)
     FluentSection(
       title = "系统与配置",
-      subtitle = "定价同步与应用设置"
+      subtitle = "定价同步、小组件与应用设置"
     ) {
       FluentCardList(modifier = Modifier.padding(horizontal = FluentSpacingDefaults.l)) {
         // `dividerAbove` is decided from what is actually above the row, not from a
@@ -241,10 +241,20 @@ fun MoreHubScreen(
           )
         }
         MoreNavRow(
+          title = "小组件",
+          subtitle = "桌面卡片、刷新间隔与费用隐私",
+          icon = FluentIcons.BoardSplit,
+          dividerAbove = showPricing,
+          onClick = {
+            haptics.perform(HapticEvent.Tap)
+            navController.navigate("widgets")
+          }
+        )
+        MoreNavRow(
           title = "设置",
           subtitle = "外观、触感、币种与 Hub 连接",
           icon = FluentIcons.Settings,
-          dividerAbove = showPricing,
+          dividerAbove = true,
           onClick = {
             haptics.perform(HapticEvent.Tap)
             navController.navigate("settings")
