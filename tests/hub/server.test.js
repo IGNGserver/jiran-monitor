@@ -497,3 +497,133 @@ test('rate limiting isolates peer IPs when trustProxy is enabled', async () => {
     await hub.stop();
   }
 });
+
+function cookieFromResponse(response) {
+  const values = response.headers.getSetCookie?.() || [response.headers.get('set-cookie') || ''];
+  const value = values.find((entry) => entry && entry.trim());
+  return value ? value.split(';')[0] : '';
+}
+
+test('device sessions: cookie login, listing, and logout', async () => {
+  const { hub } = createMemoryHub({ secret: 'owner-secret' });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    const base = `http://127.0.0.1:${port}`;
+    const login = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: 'owner-secret', mode: 'cookie', platform: 'web', deviceName: 'Browser' })
+    });
+    assert.equal(login.status, 200);
+    const payload = await login.json();
+    assert.equal(payload.session.deviceName, 'Browser');
+    const cookie = cookieFromResponse(login);
+    assert.match(cookie, /^jiran_session=jrs_/);
+
+    const capabilities = await fetch(`${base}/api/capabilities`, { headers: { cookie } });
+    assert.equal(capabilities.status, 200);
+    const current = await fetch(`${base}/api/auth/session`, { headers: { cookie } });
+    assert.equal(current.status, 200);
+    assert.equal((await current.json()).session.deviceName, 'Browser');
+
+    const list = await fetch(`${base}/api/auth/sessions`, { headers: { cookie } });
+    assert.equal(list.status, 200);
+    const sessions = (await list.json()).sessions;
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].current, true);
+
+    const logout = await fetch(`${base}/api/auth/session`, { method: 'DELETE', headers: { cookie } });
+    assert.equal(logout.status, 200);
+    const after = await fetch(`${base}/api/capabilities`, { headers: { cookie } });
+    assert.equal(after.status, 401);
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('device sessions: a token can be revoked by another device', async () => {
+  const { hub } = createMemoryHub({ secret: 'owner-secret' });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    const base = `http://127.0.0.1:${port}`;
+    const login = async (name) => {
+      const response = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secret: 'owner-secret', mode: 'token', platform: 'android', deviceName: name })
+      });
+      assert.equal(response.status, 200);
+      return (await response.json()).token;
+    };
+    const phone = await login('Phone');
+    const laptop = await login('Laptop');
+    assert.ok(phone && laptop);
+
+    const phoneSession = await fetch(`${base}/api/auth/session`, {
+      headers: { authorization: `Bearer ${phone}` }
+    }).then((response) => response.json());
+    assert.equal(phoneSession.legacy, false);
+
+    const revoke = await fetch(`${base}/api/auth/sessions/${phoneSession.session.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${laptop}` }
+    });
+    assert.equal(revoke.status, 200);
+
+    const revoked = await fetch(`${base}/api/capabilities`, {
+      headers: { authorization: `Bearer ${phone}` }
+    });
+    assert.equal(revoked.status, 401);
+    const stillValid = await fetch(`${base}/api/capabilities`, {
+      headers: { authorization: `Bearer ${laptop}` }
+    });
+    assert.equal(stillValid.status, 200);
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('device sessions: changing the owner secret revokes old sessions', async () => {
+  const repository = new MemoryRepository();
+  const first = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    secret: 'first-secret',
+    repository,
+    logger: { error() {}, warn() {} }
+  });
+  await first.start();
+  let token;
+  try {
+    const { port } = first.server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: 'first-secret', mode: 'token', platform: 'desktop', deviceName: 'Laptop' })
+    });
+    token = (await response.json()).token;
+    assert.ok(token);
+  } finally {
+    await first.stop();
+  }
+
+  const second = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    secret: 'second-secret',
+    repository,
+    logger: { error() {}, warn() {} }
+  });
+  await second.start();
+  try {
+    const { port } = second.server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/capabilities`, {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await second.stop();
+  }
+});

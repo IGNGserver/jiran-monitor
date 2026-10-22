@@ -97,9 +97,20 @@ test('desktop secret input is not retained in shared renderer state', () => {
   assert.match(app, /els\.settingsSecret\.value = ''/);
 });
 
+test('the desktop exchanges the owner secret for a revocable device session', () => {
+  const main = read(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'));
+  const credentials = read(path.join(__dirname, '..', '..', 'src', 'shared', 'credentialStore.js'));
+  assert.match(main, /async function loginHubSession\(secret\)/);
+  assert.match(main, /settings\.sessionToken/);
+  assert.match(main, /async function ensureHubSession\(\)/);
+  assert.match(main, /void ensureHubSession\(\)/, 'client-mode startup must migrate an existing secret');
+  assert.match(main, /previousToken\) await revokeHubToken\(previousToken\)/);
+  assert.match(credentials, /sessionToken: \['hub', 'sessionToken'\]/);
+});
+
 test('the preload bridge exposes the transport contract the shared UI requires', () => {
   const preload = read(path.join(__dirname, '..', '..', 'src', 'electron', 'preload.js'));
-  for (const member of ['request:', 'validateSecret:', 'getSettings:', 'hasSecret:', 'prefsFromSettings', 'prefsToSettingsPatch', 'confirm:', 'onStatsPush:']) {
+  for (const member of ['request:', 'validateSecret:', 'connectHub:', 'logoutHub:', 'getSettings:', 'hasSecret:', 'prefsFromSettings', 'prefsToSettingsPatch', 'confirm:', 'onStatsPush:']) {
     assert.ok(preload.includes(member), `preload must expose ${member}`);
   }
   // The prefs mapping is what lets one shared preference model survive in both

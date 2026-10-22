@@ -78,7 +78,7 @@ class HubApiFactory private constructor(
     .readTimeout(requestTimeoutMs, TimeUnit.MILLISECONDS)
     .addInterceptor { chain ->
       val request = chain.request().newBuilder().apply {
-        if (config.secret.isNotBlank()) header("Authorization", "Bearer ${config.secret}")
+        if (config.credential.isNotBlank()) header("Authorization", "Bearer ${config.credential}")
       }.build()
       chain.proceed(request)
     }

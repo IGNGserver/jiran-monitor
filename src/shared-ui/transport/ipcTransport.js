@@ -137,9 +137,20 @@ function createIpcTransport(bridge) {
         // "Remember" is meaningless on the desktop: the credential store always
         // persists. Keep the parameter for interface parity with the Hub.
         void remember;
-        await bridge.updateSettings({ secret: String(secret || '') });
+        if (typeof bridge.connectHub !== 'function') {
+          await bridge.updateSettings({ secret: String(secret || '') });
+          return;
+        }
+        const result = await bridge.connectHub(String(secret || ''));
+        if (!result?.ok) throw toError(result?.error);
+        return result.data;
       },
       async clear() {
+        if (typeof bridge.logoutHub === 'function') {
+          const result = await bridge.logoutHub();
+          if (!result?.ok) throw toError(result?.error);
+          return result.data;
+        }
         await bridge.updateSettings({ secret: '' });
       },
       async isRemembered() {

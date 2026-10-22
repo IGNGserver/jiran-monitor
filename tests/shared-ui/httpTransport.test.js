@@ -79,6 +79,51 @@ test('Hub HTTP requests abort with a stable timeout error', async () => {
   }
 });
 
+test('Hub login exchanges the secret for a cookie without storing it in script storage', async () => {
+  const { createHttpTransport } = await import(transportPath);
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return new Response(JSON.stringify({
+      ok: true,
+      session: { id: 'session-1', deviceName: 'Browser', platform: 'web' }
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const transport = createHttpTransport({ storage: storage() });
+    const session = await transport.login('owner-secret', true);
+    assert.equal(session.session.id, 'session-1');
+    assert.equal(calls[0].url, '/api/auth/login');
+    assert.equal(calls[0].options.method, 'POST');
+    assert.equal(calls[0].options.credentials, 'same-origin');
+    const body = JSON.parse(calls[0].options.body);
+    assert.equal(body.secret, 'owner-secret');
+    assert.equal(body.mode, 'cookie');
+    assert.equal(transport.secret.load(), '');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('Hub login reports an old Hub so the caller can fall back to the secret', async () => {
+  const { createHttpTransport } = await import(transportPath);
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ error: 'not_found' }), {
+    status: 404,
+    headers: { 'content-type': 'application/json' }
+  });
+  try {
+    const transport = createHttpTransport({ storage: storage() });
+    await assert.rejects(
+      transport.login('owner-secret', true),
+      (error) => error?.code === 'session_auth_unsupported' && error?.status === 404
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('Hub HTTP transport still honors an explicit caller abort', async () => {
   const { createHttpTransport } = await import(transportPath);
   const originalFetch = global.fetch;

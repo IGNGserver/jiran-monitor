@@ -4,17 +4,23 @@ import {
   clearSecret,
   confirmAction,
   copyText,
+  currentSession,
   fetchHealth,
   fetchJson,
   getTransport,
   isCapable,
+  listSessions,
   loadPrefs,
   loadSecret,
+  login,
+  logout,
+  logoutAll,
   openExternal,
   openStatsStream,
   promptAction,
   readFlag,
   readRoute,
+  revokeSession,
   savePrefs,
   saveSecret,
   secretIsRemembered,
@@ -351,6 +357,10 @@ const state = {
     limitTab: initialRoute.limitTab || 'limits'
   },
   secret: '',
+  session: null,
+  sessions: null,
+  sessionsLoading: false,
+  sessionsError: null,
   locale: 'en',
   health: null,
   authorization: null,
@@ -1879,18 +1889,63 @@ async function saveWebSettingsForm(form) {
   return true;
 }
 
-function signOutFromHub() {
+async function signOutFromHub() {
+  try {
+    await logout();
+  } catch (_) {
+    // A failed server-side logout must still clear this browser's copy; the
+    // device list on another session remains the recovery path.
+  }
+  try { await clearSecret(); } catch (_) { /* best effort */ }
   statsDetails.clear();
   state.statsFrameVersion = (state.statsFrameVersion || 0) + 1;
   state.statsRequest = null;
   state.stats = null;
   state.history = null;
-  clearSecret();
   state.secret = '';
+  state.session = null;
+  state.sessions = null;
   if (state.stopStream) state.stopStream();
   state.stopStream = null;
   setStreamStatus('offline');
   showAuth(true);
+}
+
+async function revokeDeviceSession(sessionId) {
+  if (!sessionId) return;
+  if (!(await confirmAction(tr('settings.sessionRevokeConfirm')))) return;
+  try {
+    if (state.secret) {
+      await fetchJson(`/api/auth/sessions/${encodeURIComponent(sessionId)}`, {
+        secret: state.secret,
+        method: 'DELETE'
+      });
+    } else {
+      await revokeSession(sessionId);
+    }
+    if (state.session?.id === sessionId) {
+      await signOutFromHub();
+      return;
+    }
+    await loadSessions();
+  } catch (error) {
+    showToast(error?.message || tr('error.generic'));
+  }
+}
+
+async function revokeAllDeviceSessions() {
+  if (!(await confirmAction(tr('settings.sessionRevokeAllConfirm')))) return;
+  try {
+    if (state.secret) {
+      await fetchJson('/api/auth/logout-all', { secret: state.secret, method: 'POST' });
+    } else {
+      await logoutAll();
+    }
+  } catch (error) {
+    showToast(error?.message || tr('error.generic'));
+    return;
+  }
+  await signOutFromHub();
 }
 
 
@@ -2613,6 +2668,26 @@ async function deleteAccount(accountId) {
   }
 }
 
+async function loadSessions() {
+  if (isCapable('desktopSettings') || !isCapable('sessionAuth')) return;
+  if (state.authorization?.capabilities?.sessionAuth !== true) return;
+  if (state.sessionsLoading) return;
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+  try {
+    const payload = state.secret
+      ? await fetchJson('/api/auth/sessions', { secret: state.secret })
+      : await listSessions();
+    state.sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+  } catch (error) {
+    state.sessionsError = error?.message || tr('error.generic');
+    if (error?.status === 401) showAuth(true);
+  } finally {
+    state.sessionsLoading = false;
+    if (state.prefs.view === 'settings') render({ quiet: true });
+  }
+}
+
 async function bootstrapAuthorized() {
   markLoadingStage('authorized');
   showAuth(false);
@@ -2625,6 +2700,7 @@ async function bootstrapAuthorized() {
   // useful enhancements and must not keep a healthy snapshot behind a spinner.
   connectStream();
   render();
+  if (state.authorization?.capabilities?.sessionAuth === true) void loadSessions();
   void loadVisibleDocuments().then(() => {
     if (state.stats) render({ quiet: true });
   });
@@ -2642,7 +2718,7 @@ function loadVisibleDocuments() {
   ]);
 }
 
-async function tryConnect(secret, remember = true, { persist = false } = {}) {
+async function tryConnect(secret, remember = true, { persist = false, silent = false } = {}) {
   const candidateSecret = String(secret || '').trim();
   const desktopOwnsSecret = isCapable('desktopSettings');
   // Electron's main process owns the credential. Keep it out of renderer state;
@@ -2657,26 +2733,82 @@ async function tryConnect(secret, remember = true, { persist = false } = {}) {
   }
   state.secret = desktopOwnsSecret ? '' : candidateSecret;
   try {
-    if (desktopOwnsSecret && candidateSecret) {
-      state.authorization = await testSecret(candidateSecret);
-      // Desktop credentials are always persisted by the main-process store;
-      // `remember` remains an interface-compatible argument for the Hub form.
-      await saveSecret(candidateSecret, remember);
-    } else {
-      state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
-      if (persist) await saveSecret(candidateSecret, remember);
-    }
     if (desktopOwnsSecret) {
-      els.secretInput.value = '';
-      if (els.settingsSecret) els.settingsSecret.value = '';
+      if (candidateSecret) {
+        state.authorization = await testSecret(candidateSecret);
+        // Desktop credentials are always persisted by the main-process store;
+        // `remember` remains an interface-compatible argument for the Hub form.
+        await saveSecret(candidateSecret, remember);
+      }
+    } else if (candidateSecret) {
+      // The browser exchanges the owner secret once. The returned credential is
+      // an HttpOnly cookie, so no long-lived token ever enters script storage.
+      state.secret = '';
+      if (isCapable('sessionAuth')) {
+        const previousSessionId = state.session?.id
+          || await currentSession().then((payload) => payload?.session?.id || '').catch(() => '');
+        try {
+          const loginResult = await login(candidateSecret, remember);
+          // Once the HttpOnly cookie exists the legacy copy must go, even on a
+          // boot-time migration where `persist` is false. Otherwise every launch
+          // would find the old secret and mint another device session.
+          await Promise.resolve(clearSecret()).catch(() => {});
+          if (previousSessionId) await revokeSession(previousSessionId).catch(() => {});
+          state.session = await currentSession().then((payload) => payload?.session || null).catch(() => null);
+          if (state.session) {
+            state.authorization = await fetchJson('/api/capabilities');
+          } else {
+            // The server accepted the secret but this browser did not retain the
+            // cookie (cookies disabled or an old proxy stripped Set-Cookie).
+            // Preserve the previous behaviour rather than locking the user out.
+            if (loginResult?.session?.id) {
+              await fetchJson(`/api/auth/sessions/${encodeURIComponent(loginResult.session.id)}`, {
+                secret: candidateSecret,
+                method: 'DELETE'
+              }).catch(() => {});
+            }
+            state.secret = candidateSecret;
+            state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
+            if (persist || remember) await saveSecret(candidateSecret, remember);
+          }
+        } catch (error) {
+          if (error.code === 'session_auth_unsupported' || error.status === 404 || error.status === 405 || error.status === 501) {
+            // Mixed-version window: an older Hub has no session endpoint, so keep
+            // the original localStorage/sessionStorage secret behaviour.
+            state.secret = candidateSecret;
+            state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
+            if (persist) await saveSecret(candidateSecret, remember);
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        state.authorization = await fetchJson('/api/capabilities', { secret: candidateSecret });
+        if (persist) await saveSecret(candidateSecret, remember);
+      }
+    } else {
+      state.secret = '';
+      if (isCapable('sessionAuth')
+        && (state.health?.sessionAuth === true || state.authorization?.capabilities?.sessionAuth === true)) {
+        const payload = await currentSession();
+        state.session = payload?.session || null;
+      }
+      state.authorization = await fetchJson('/api/capabilities');
     }
+    els.secretInput.value = '';
+    if (els.settingsSecret) els.settingsSecret.value = '';
     els.authError.classList.add('hidden');
     await bootstrapAuthorized();
     return true;
   } catch (error) {
-    if (error.status === 401) {
-      els.authError.textContent = tr('auth.error');
-      els.authError.classList.remove('hidden');
+    if (error.status === 401 || error.status === 429) {
+      state.secret = desktopOwnsSecret ? '' : candidateSecret;
+      if (!silent) {
+        els.authError.textContent = error.status === 429
+          ? (error.message || tr('error.generic'))
+          : tr('auth.error');
+        els.authError.classList.remove('hidden');
+      }
       showAuth(true);
       return false;
     }
@@ -3149,6 +3281,7 @@ function switchView(viewId, { updateHistory = true, replace = false, tab = '', s
   if (validView === 'settings' && managementSection === 'consumption' && managementTab === 'subscriptions') void loadSubscriptions().then(() => render({ quiet: true }));
   if (validView === 'settings' && managementSection === 'consumption' && managementTab === 'pricing') void loadPricing().then(() => render({ quiet: true }));
   if (validView === 'settings' && managementSection === 'accounts') void loadAccounts().then(() => render({ quiet: true }));
+  if (validView === 'settings') void loadSessions();
   if (validView === 'trends' || validView === 'overview') {
     void ensureHistory().then(() => render({ quiet: true }));
     return;
@@ -3327,9 +3460,19 @@ function bindEvents() {
       switchView(view, { tab: jumpView.dataset.jumpUsageTab || '', section: jumpView.dataset.jumpSection || '' });
       return;
     }
+    const sessionRevoke = event.target.closest('[data-session-revoke]');
+    if (sessionRevoke) {
+      void revokeDeviceSession(sessionRevoke.dataset.sessionRevoke);
+      return;
+    }
+    const sessionRevokeAll = event.target.closest('[data-session-revoke-all]');
+    if (sessionRevokeAll) {
+      void revokeAllDeviceSessions();
+      return;
+    }
     const webSignOut = event.target.closest('[data-web-signout]');
     if (webSignOut) {
-      signOutFromHub();
+      void signOutFromHub();
       return;
     }
     const pwaInstall = event.target.closest('[data-pwa-install]');
@@ -3912,7 +4055,7 @@ function bindEvents() {
   });
   els.signOutBtn?.addEventListener('click', () => {
     openSettings(false);
-    signOutFromHub();
+    void signOutFromHub();
   });
 
   els.authForm.addEventListener('submit', async (event) => {
@@ -4017,16 +4160,28 @@ async function runDesktopAction(action, element) {
       }
       case 'save-hub-secret': {
         const input = element?.closest('[data-desktop-settings]')?.querySelector('[data-hub-secret-input]');
-        await saveDesktopSettings({ secret: String(input?.value || '').trim() });
-        if (input) input.value = '';
-        render();
-        showToast(tr('toast.saved'));
+        try {
+          // This path must use the session bridge, not the generic settings
+          // writer: the owner secret is exchanged and never persisted as-is.
+          await saveSecret(String(input?.value || '').trim(), true);
+          state.desktopSettings = await desktop.getSettings();
+          if (input) input.value = '';
+          render();
+          showToast(tr('toast.saved'));
+        } catch (error) {
+          showToast(error?.status === 401 ? tr('auth.error') : (error?.message || tr('auth.error')));
+        }
         break;
       }
       case 'clear-hub-secret':
-        await saveDesktopSettings({ secret: '' });
-        render();
-        showToast(tr('toast.saved'));
+        try {
+          await clearSecret();
+          state.desktopSettings = await desktop.getSettings();
+          render();
+          showToast(tr('toast.saved'));
+        } catch (error) {
+          showToast(error?.message || tr('error.generic'));
+        }
         break;
       case 'recover-sync': {
         element?.setAttribute('disabled', 'disabled');
@@ -4169,6 +4324,15 @@ async function init() {
   if (!state.health.secretRequired) {
     await tryConnect('', true);
     return;
+  }
+
+  // A browser keeps its device session in an HttpOnly cookie, which is invisible
+  // to JS. Probe it once after the public health document tells us this Hub
+  // supports sessions; silence the failure because "no cookie yet" is the normal
+  // first visit, not a bad secret.
+  if (isCapable('sessionAuth') && state.health.sessionAuth === true) {
+    const ok = await tryConnect('', true, { silent: true });
+    if (ok) return;
   }
 
   showAuth(true);

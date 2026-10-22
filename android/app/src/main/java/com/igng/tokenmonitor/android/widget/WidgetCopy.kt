@@ -376,7 +376,7 @@ object WidgetCopy {
       val suffix = if (hasData) " · 上次更新 ${age(nowMs, snapshot.capturedAtMs)}" else ""
       return when (snapshot.lastErrorKind) {
         "NotConfigured" -> "尚未连接 Hub"
-        "Unauthorized" -> "密钥无效 · 打开应用检查"
+        "Unauthorized" -> "登录失效 · 打开应用检查"
         "Network" -> if (hasData) "离线$suffix" else "连接失败 · 点按重试"
         else -> if (hasData) "连接异常$suffix" else "连接异常 · 点按重试"
       }

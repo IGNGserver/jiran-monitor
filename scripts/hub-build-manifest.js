@@ -22,6 +22,7 @@ const CORE_SOURCE_FILES = Object.freeze([
   'src/shared/currency.js',
   'src/shared/hubBuildIdentity.js',
   'src/shared/hubAuth.js',
+  'src/shared/hubSessions.js',
   'src/shared/hubCapabilities.js',
   'src/shared/hubRateLimit.js',
   'src/shared/wireValidation.js'
@@ -35,6 +36,7 @@ const NODE_RUNTIME_SOURCE_FILES = Object.freeze([
   'src/hub/pricing-upstream.js',
   'src/hub/repository.js',
   'src/hub/server.js',
+  'src/hub/sessionService.js',
   'src/hub/static.js',
   'src/hub/updates.js',
   'src/hub/usage-events.js',
@@ -53,6 +55,7 @@ const NODE_RUNTIME_SOURCE_FILES = Object.freeze([
   'src/shared/copilotLimits.js',
   'src/shared/http.js',
   'src/shared/hubAuth.js',
+  'src/shared/hubSessions.js',
   'src/shared/hubCapabilities.js',
   'src/shared/hubRateLimit.js',
   'src/shared/config.js',

@@ -70,6 +70,63 @@ function pageIntro(description) {
   return `<section class="page-intro settings-page-intro"><div><div class="eyebrow">${escapeHtml(tr('settings.appTitle'))}</div><h2>${escapeHtml(pageLabel)}</h2><p>${escapeHtml(description)}</p></div></section>`;
 }
 
+function formatSessionTime(value) {
+  const ms = Date.parse(String(value || ''));
+  if (!Number.isFinite(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat(appState().locale || undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(new Date(ms));
+  } catch (_) {
+    return new Date(ms).toISOString();
+  }
+}
+
+function renderSessions() {
+  if (isCapable('desktopSettings')) return '';
+  const state = appState();
+  if (state.authorization?.capabilities?.sessionAuth !== true) return '';
+  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const current = state.session || sessions.find((entry) => entry.current) || null;
+  const currentId = current?.id || '';
+  let body;
+  if (state.sessionsLoading && sessions.length === 0) {
+    body = `<p class="muted tiny">${escapeHtml(tr('settings.sessionLoading'))}</p>`;
+  } else if (sessions.length === 0) {
+    body = `<p class="muted tiny">${escapeHtml(state.sessionsError || tr('settings.sessionEmpty'))}</p>`;
+  } else {
+    body = `<div class="settings-session-list">${sessions.map((session) => {
+      const name = session.deviceName || session.platform || tr('settings.sessionUnknownDevice');
+      const meta = [
+        session.platform || '',
+        session.lastSeenAt ? tr('settings.sessionLastSeen', { time: formatSessionTime(session.lastSeenAt) }) : '',
+        session.createdAt ? tr('settings.sessionCreated', { time: formatSessionTime(session.createdAt) }) : ''
+      ].filter(Boolean).join(' · ');
+      const isCurrent = Boolean(currentId && session.id === currentId) || session.current === true;
+      return `<div class="settings-session-row">
+        <div class="settings-session-copy">
+          <strong>${escapeHtml(name)}</strong>
+          ${isCurrent ? `<span class="settings-session-current">${escapeHtml(tr('settings.sessionCurrent'))}</span>` : ''}
+          <span class="row-sub">${escapeHtml(meta)}</span>
+        </div>
+        <fluent-button appearance="transparent" type="button" class="ghost-btn" data-session-revoke="${escapeHtml(session.id)}">${escapeHtml(tr('settings.sessionRevoke'))}</fluent-button>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  return `<div class="settings-sessions" data-settings-sessions>
+    <div class="settings-sessions-head">
+      <strong>${escapeHtml(tr('settings.sessions'))}</strong>
+      <span class="muted tiny">${escapeHtml(tr('settings.sessionsHint'))}</span>
+    </div>
+    ${state.sessionsError && sessions.length > 0 ? `<p class="form-error">${escapeHtml(state.sessionsError)}</p>` : ''}
+    ${body}
+    <div class="settings-sessions-actions">
+      <fluent-button appearance="transparent" type="button" class="ghost-btn" data-session-revoke-all>${escapeHtml(tr('settings.sessionRevokeAll'))}</fluent-button>
+    </div>
+  </div>`;
+}
+
 // Web host only: the desktop equivalent of these choices is the 显示 group.
 function renderPreferences({ active = false } = {}) {
   const settingsDescription = tr('settings.pageDescription');
@@ -86,6 +143,7 @@ function renderPreferences({ active = false } = {}) {
           <fluent-text-input class="field field-wide" name="secret" type="password" autocomplete="off" spellcheck="false" value="${escapeHtml(appState().secret || '')}">${tr('settings.secret')}</fluent-text-input>
         </div>
         <p class="muted tiny settings-form-hint">${escapeHtml(tr('settings.authHint'))}</p>
+        ${renderSessions()}
         <div class="drawer-actions settings-actions"><fluent-button appearance="primary" type="submit" class="primary-btn" data-settings-submit disabled>${escapeHtml(tr('settings.savePage'))}</fluent-button><fluent-button appearance="transparent" type="button" class="ghost-btn" data-web-signout>${escapeHtml(tr('settings.signOut'))}</fluent-button></div>
       </form>`;
 }

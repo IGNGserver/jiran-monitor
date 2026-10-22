@@ -111,6 +111,20 @@ function createSecretStore(storage) {
   };
 }
 
+function webDeviceName() {
+  if (typeof navigator === 'undefined') return 'Web';
+  const platform = String(navigator.userAgentData?.platform || navigator.platform || '').trim();
+  return platform ? `${platform} browser` : 'Web browser';
+}
+
+function authResponseError(payload, status) {
+  const error = new Error(payload?.message || payload?.error || `http_${status}`);
+  error.status = status;
+  error.payload = payload || null;
+  if (payload?.error) error.code = payload.error;
+  return error;
+}
+
 function createFlagStore(storage) {
   return {
     read(key) {
@@ -152,6 +166,10 @@ export function createHttpTransport(options = {}) {
         method,
         signal: requestSignal.signal,
         cache: 'no-store',
+        // Session authentication is an HttpOnly same-origin cookie. An explicit
+        // secret still rides in the Authorization header for old Hubs and for the
+        // migration window.
+        credentials: 'same-origin',
         headers: authHeaders(secret !== undefined ? secret : getSecret(), body ? { 'content-type': 'application/json' } : {}),
         body: body ? JSON.stringify(body) : undefined
       });
@@ -182,7 +200,7 @@ export function createHttpTransport(options = {}) {
   async function health() {
     const requestSignal = createRequestSignal(undefined, HTTP_REQUEST_TIMEOUT_MS);
     try {
-      const res = await fetch(resolveUrl('/api/health'), { cache: 'no-store', signal: requestSignal.signal });
+      const res = await fetch(resolveUrl('/api/health'), { cache: 'no-store', credentials: 'same-origin', signal: requestSignal.signal });
       if (!res.ok) throw new Error(`health_${res.status}`);
       return await res.json();
     } catch (error) {
@@ -243,7 +261,8 @@ export function createHttpTransport(options = {}) {
             res = await fetch(resolveUrl(`/api/stats/stream${detail === 'slim' ? '?detail=slim' : ''}`), {
               headers: authHeaders(secret !== undefined ? secret : getSecret(), { accept: 'text/event-stream' }),
               signal: attempt.signal,
-              cache: 'no-store'
+              cache: 'no-store',
+              credentials: 'same-origin'
             });
           } finally {
             clearTimeout(connectTimer);
@@ -341,11 +360,65 @@ export function createHttpTransport(options = {}) {
     };
   }
 
+  async function login(secret, remember = true) {
+    const requestSignal = createRequestSignal(undefined, HTTP_REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(resolveUrl('/api/auth/login'), {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: requestSignal.signal,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          secret: String(secret || '').trim(),
+          remember: remember !== false,
+          mode: 'cookie',
+          platform: 'web',
+          deviceName: webDeviceName()
+        })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 404 || res.status === 405 || res.status === 501 || payload?.error === 'session_auth_unavailable') {
+        const error = authResponseError(payload, res.status);
+        error.code = 'session_auth_unsupported';
+        throw error;
+      }
+      if (!res.ok) throw authResponseError(payload, res.status);
+      return payload;
+    } catch (error) {
+      if (requestSignal.didTimeout()) throw timeoutError();
+      throw error;
+    } finally {
+      requestSignal.dispose();
+    }
+  }
+
+  async function currentSession() {
+    return request('/api/auth/session');
+  }
+
+  async function listSessions() {
+    return request('/api/auth/sessions');
+  }
+
+  async function revokeSession(sessionId) {
+    return request(`/api/auth/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  }
+
+  async function logout() {
+    return request('/api/auth/session', { method: 'DELETE' });
+  }
+
+  async function logoutAll() {
+    return request('/api/auth/logout-all', { method: 'POST' });
+  }
+
   return {
     capabilities: {
       // The Hub dashboard is a normal web page: it can use browser dialogs,
       // window.open and the clipboard directly.
       pwa: true,
+      sessionAuth: true,
       nativeDialogs: false,
       externalOpen: 'window',
       clipboard: 'navigator',
@@ -362,6 +435,12 @@ export function createHttpTransport(options = {}) {
     fetchJson: request,
     health,
     openStream,
+    login,
+    logout,
+    logoutAll,
+    currentSession,
+    listSessions,
+    revokeSession,
     prefs: createPrefsStore(storage),
     secret: createSecretStore(storage),
     flags: createFlagStore(storage),

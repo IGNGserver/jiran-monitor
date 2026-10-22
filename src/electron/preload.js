@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('tokenMonitor', {
   // --- Shared-UI transport surface -----------------------------------------
   request: (path, options) => ipcRenderer.invoke('transport:request', path, options),
   validateSecret: (secret) => ipcRenderer.invoke('hub:validate-secret', secret),
+  connectHub: (secret) => ipcRenderer.invoke('hub:connect', secret),
+  logoutHub: () => ipcRenderer.invoke('hub:logout'),
   readFlag: (key) => ipcRenderer.invoke('transport:flag:read', key),
   writeFlag: (key, value) => ipcRenderer.invoke('transport:flag:write', key, value),
   confirm: (message, options) => ipcRenderer.invoke('ui:confirm', message, options),

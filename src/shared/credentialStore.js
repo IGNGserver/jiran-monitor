@@ -10,7 +10,10 @@ const LEGACY_LOCAL_LIMIT_CREDENTIALS_MIGRATION_VERSION = 1;
 const REMOVED_HUB_CREDENTIALS_MIGRATION_VERSION = 1;
 
 const CREDENTIAL_SETTING_PATHS = Object.freeze({
-  secret: ['hub', 'clientSecret']
+  secret: ['hub', 'clientSecret'],
+  // The long-lived, revocable device session. It is a credential but not the
+  // owner secret, so losing this file no longer hands over the whole Hub.
+  sessionToken: ['hub', 'sessionToken']
 });
 
 const REMOVED_HUB_CREDENTIAL_SETTING_KEYS = Object.freeze([

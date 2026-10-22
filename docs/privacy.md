@@ -21,7 +21,7 @@ When enabled, sync can send device identifiers and metadata; aggregate token and
 
 Sync also carries manually recorded subscription metadata when any exists: the plan name, amount, currency, billing cadence, dates you entered, and the account each record is bound to. These are values you typed in, never read from a provider, and they are stored once per hub rather than per device. The public stats endpoints never expose them.
 
-Sync does not send raw AI logs, prompts, source code, conversation content, OAuth credentials, access or refresh tokens, provider cookies, API keys, or raw provider responses. See the [API documentation](API.md) for the current wire format and public-endpoint redactions.
+Sync does not send raw AI logs, prompts, source code, conversation content, OAuth credentials, access or refresh tokens, provider cookies, API keys, or raw provider responses. The revocable device-session token is sent only to the configured Hub as an authentication header (or the browser host's HttpOnly cookie); it is not sent to the project maintainer or any third party. See the [API documentation](API.md) for the current wire format and public-endpoint redactions.
 
 Data retention and access on a synchronized deployment are controlled by the operator of that hub and its infrastructure provider.
 

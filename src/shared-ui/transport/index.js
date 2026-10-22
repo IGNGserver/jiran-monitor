@@ -103,6 +103,44 @@ export function secretIsRemembered() {
   return typeof store.isRemembered === 'function' ? store.isRemembered() : false;
 }
 
+// --- Device sessions (Hub browser host) ------------------------------------
+
+export function login(secret, remember) {
+  const transport = getTransport();
+  if (typeof transport.login !== 'function') throw new Error('Session login is unavailable');
+  return transport.login(secret, remember);
+}
+
+export function currentSession() {
+  const transport = getTransport();
+  if (typeof transport.currentSession !== 'function') throw new Error('Session lookup is unavailable');
+  return transport.currentSession();
+}
+
+export function listSessions() {
+  const transport = getTransport();
+  if (typeof transport.listSessions !== 'function') throw new Error('Session listing is unavailable');
+  return transport.listSessions();
+}
+
+export function revokeSession(sessionId) {
+  const transport = getTransport();
+  if (typeof transport.revokeSession !== 'function') throw new Error('Session revocation is unavailable');
+  return transport.revokeSession(sessionId);
+}
+
+export function logout() {
+  const transport = getTransport();
+  if (typeof transport.logout !== 'function') return Promise.resolve(null);
+  return transport.logout();
+}
+
+export function logoutAll() {
+  const transport = getTransport();
+  if (typeof transport.logoutAll !== 'function') throw new Error('Session revocation is unavailable');
+  return transport.logoutAll();
+}
+
 // --- Host-local flags (PWA install banner, dismissals) ----------------------
 
 export function readFlag(key) {

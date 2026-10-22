@@ -701,7 +701,7 @@ class HubViewModel @Inject constructor(
           if (isActive && isCurrent(generation)) _state.value = _state.value.copy(realtime = RealtimeStatus.Disconnected)
         }
         if (streamResult.exceptionOrNull() is com.igng.tokenmonitor.android.data.repository.SseAuthorizationException) {
-          if (isCurrent(generation)) _state.value = _state.value.copy(error = "未授权：请检查共享密钥。")
+          if (isCurrent(generation)) _state.value = _state.value.copy(error = "未授权：请重新登录或检查 Hub 密钥。")
           return@launch
         }
         if (isActive && isCurrent(generation)) {

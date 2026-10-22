@@ -365,6 +365,50 @@ class HubRepositoryTest {
     assertTrue(path, path.contains("to="))
   }
 
+  @Test fun saveConnectionExchangesTheOwnerSecretForADeviceToken() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"token":"jrs_phone","session":{"id":"session-1","deviceName":"Pixel"}}"""))
+
+    val result = repository.saveConnection(ConnectionConfig(server.url("/").toString(), "shared-secret"))
+
+    assertTrue(result is HubResult.Success)
+    val request = server.takeRequest()
+    assertEquals("/api/auth/login", request.path)
+    assertTrue(request.body.readUtf8().contains("\"secret\":\"shared-secret\""))
+    val saved = store.read()
+    assertEquals("jrs_phone", saved.sessionToken)
+    assertEquals("", saved.secret)
+    assertEquals("jrs_phone", saved.credential)
+
+    server.enqueue(MockResponse().setResponseCode(200).setBody("""{"periods":{}}"""))
+    HubApiFactory.forTesting(json).create(saved).stats()
+    assertEquals("Bearer jrs_phone", server.takeRequest().getHeader("Authorization"))
+  }
+
+  @Test fun saveConnectionKeepsTheSecretWhenTheHubHasNoSessionEndpoint() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not_found"}"""))
+
+    val result = repository.saveConnection(ConnectionConfig(server.url("/").toString(), "shared-secret"))
+
+    assertTrue(result is HubResult.Success)
+    val saved = store.read()
+    assertEquals("shared-secret", saved.secret)
+    assertEquals("", saved.sessionToken)
+  }
+
+  @Test fun clearConnectionRevokesTheDeviceTokenBeforeClearingIt() = runBlocking {
+    store.save(ConnectionConfig(server.url("/").toString(), "", sessionToken = "jrs_phone"))
+    server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true}"""))
+
+    val result = repository.clearConnection()
+
+    assertTrue(result is HubResult.Success)
+    val request = server.takeRequest()
+    assertEquals("DELETE", request.method)
+    assertEquals("/api/auth/session", request.path)
+    assertEquals("Bearer jrs_phone", request.getHeader("Authorization"))
+    assertTrue(!store.read().isComplete)
+  }
+
   private class FakeConnectionStorage(private var config: ConnectionConfig) : ConnectionStorage {
     override fun read(): ConnectionConfig = config
     override fun save(config: ConnectionConfig) { this.config = config }

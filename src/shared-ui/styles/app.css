@@ -1498,6 +1498,28 @@ html[data-theme="dark"] .heat.heat-cost.lvl-4 { fill: rgba(251, 191, 36, 0.92); 
 .settings-section-body { display: grid; gap: 14px; padding-top: 4px; }
 .settings-section-toolbar { display: flex; justify-content: flex-end; }
 .settings-form-hint { margin: 0; max-width: 70ch; }
+.settings-sessions { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.settings-sessions-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; align-items: baseline; }
+.settings-sessions-head .muted { max-width: 52ch; }
+.settings-session-list { display: grid; gap: 8px; }
+.settings-session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+}
+.settings-session-copy { display: grid; gap: 2px; min-width: 0; }
+.settings-session-copy strong { overflow-wrap: anywhere; }
+.settings-session-current {
+  justify-self: start;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.settings-sessions-actions { display: flex; justify-content: flex-end; }
 .settings-side-stack { display: grid; gap: 14px; }
 .settings-info-panel, .settings-boundary-panel { box-shadow: none; }
 .settings-definition-list { display: grid; gap: 9px; margin: 16px 0 0; }

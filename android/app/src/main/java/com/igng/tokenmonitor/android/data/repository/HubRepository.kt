@@ -1,10 +1,12 @@
 package com.igng.tokenmonitor.android.data.repository
 
+import android.os.Build
 import com.igng.tokenmonitor.android.data.local.ConnectionConfig
 import com.igng.tokenmonitor.android.data.local.ConnectionStorage
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
 import com.igng.tokenmonitor.android.data.model.AccountsResponseDto
 import com.igng.tokenmonitor.android.data.model.AppUpdateDto
+import com.igng.tokenmonitor.android.data.model.LoginRequestDto
 import com.igng.tokenmonitor.android.data.model.OAuthExchangeRequestDto
 import com.igng.tokenmonitor.android.data.model.OAuthStartDto
 import com.igng.tokenmonitor.android.data.model.RatesResponseDto
@@ -70,11 +72,79 @@ class HubRepository @Inject constructor(
   private val json: Json
 ) {
   fun connection(): ConnectionConfig = store.read()
-  fun saveConnection(config: ConnectionConfig) = store.save(config)
-  fun clearConnection() = store.clear()
+
+  /**
+   * Persist a connection. A newly entered owner secret is exchanged for a
+   * revocable device session; an older Hub that has no `/api/auth/login` keeps
+   * the legacy secret behaviour.
+   */
+  suspend fun saveConnection(config: ConnectionConfig): HubResult<Unit> = safeCall {
+    if (!config.isComplete) {
+      throw IllegalArgumentException("请填写 Hub 密钥。")
+    }
+    val previous = withContext(Dispatchers.IO) { store.read() }
+    var stored = config
+    var revokeAfterSave: ConnectionConfig? = null
+    if (config.secret.isNotBlank()) {
+      try {
+        val login = apiFactory.create(config.copy(sessionToken = "")).login(
+          LoginRequestDto(
+            secret = config.secret,
+            mode = "token",
+            platform = "android",
+            deviceName = Build.MODEL.orEmpty()
+          )
+        )
+        val token = login.token.orEmpty()
+        if (token.isNotBlank()) {
+          // Drop the owner secret once the device has its own revocable token.
+          stored = config.copy(secret = "", sessionToken = token)
+          if (previous.sessionToken.isNotBlank() && previous.sessionToken != token) {
+            revokeAfterSave = previous
+          }
+        } else {
+          stored = config.copy(sessionToken = "")
+        }
+      } catch (error: HttpException) {
+        if (error.code() != 404 && error.code() != 405 && error.code() != 501) throw error
+        // Old Hub: /api/auth/login does not exist. Keep the newly entered
+        // legacy secret and never keep a stale session token as the active one.
+        stored = config.copy(sessionToken = "")
+      }
+    }
+    withContext(Dispatchers.IO) { store.save(stored) }
+    val oldSession = revokeAfterSave
+    if (oldSession != null) {
+      try {
+        apiFactory.create(oldSession).logout()
+      } catch (error: CancellationException) {
+        throw error
+      } catch (_: Exception) {
+        // The old session can be revoked later from the device list.
+      }
+    }
+  }
+
+  /** Revoke this device's session when possible, then clear local credentials. */
+  suspend fun clearConnection(): HubResult<Unit> = safeCall {
+    val current = withContext(Dispatchers.IO) { store.read() }
+    if (current.sessionToken.isNotBlank() && current.hubUrl.isNotBlank()) {
+      try {
+        apiFactory.create(current).logout()
+      } catch (error: CancellationException) {
+        throw error
+      } catch (_: Exception) {
+        // Local sign-out must succeed even when the Hub is unreachable.
+      }
+    }
+    withContext(Dispatchers.IO) { store.clear() }
+  }
 
   suspend fun testConnection(config: ConnectionConfig): HubResult<HealthDto> = safeCall {
-    val api = apiFactory.create(config)
+    // A newly typed owner secret must be what "test connection" validates even
+    // when this device already holds a session for the old one.
+    val testConfig = if (config.secret.isNotBlank()) config.copy(sessionToken = "") else config
+    val api = apiFactory.create(testConfig)
     val health = api.health()
     require(health.ok && health.role.equals("hub", ignoreCase = true)) {
       "地址没有返回可用的 Hub。"
@@ -156,7 +226,7 @@ class HubRepository @Inject constructor(
       return HubResult.Failure(HubError("无法读取本机连接设置，请重新保存连接信息。", HubError.Kind.Api))
     }
     if (!config.isComplete) {
-      return HubResult.Failure(HubError("请先在设置中保存 Hub 地址和共享密钥。", HubError.Kind.NotConfigured))
+      return HubResult.Failure(HubError("请先在设置中保存 Hub 地址和密钥。", HubError.Kind.NotConfigured))
     }
     return try {
       val response = apiFactory.create(config).historyConditional(deviceId, etag)
@@ -166,7 +236,7 @@ class HubRepository @Inject constructor(
       ))
     } catch (error: HttpException) {
       val message = when (error.code()) {
-        401 -> "未授权：请检查共享密钥。"
+        401 -> "未授权：请重新登录或检查 Hub 密钥。"
         else -> "Hub 返回 HTTP ${error.code()}。"
       }
       HubResult.Failure(HubError(message, if (error.code() == 401) HubError.Kind.Unauthorized else HubError.Kind.Api))
@@ -259,7 +329,7 @@ class HubRepository @Inject constructor(
     } catch (_: Exception) {
       return HubResult.Failure(HubError("无法读取本机连接设置，请重新保存连接信息。", HubError.Kind.Api))
     }
-    return if (!config.isComplete) HubResult.Failure(HubError("请先在设置中保存 Hub 地址和共享密钥。", HubError.Kind.NotConfigured))
+    return if (!config.isComplete) HubResult.Failure(HubError("请先在设置中保存 Hub 地址和密钥。", HubError.Kind.NotConfigured))
     else safeCall(notFoundMessage) { call(config) }
   }
 
@@ -270,7 +340,7 @@ class HubRepository @Inject constructor(
     HubResult.Success(call())
   } catch (error: HttpException) {
     val message = when (error.code()) {
-      401 -> "未授权：请检查共享密钥。"
+      401 -> "未授权：请重新登录或检查 Hub 密钥。"
       404 -> notFoundMessage
         ?: "请求未完成：${error.response()?.errorBody()?.string().orEmpty().ifBlank { "模型没有可用的上游定价。" }}"
       422 -> "请求未完成：${error.response()?.errorBody()?.string().orEmpty().ifBlank { "模型没有可用的上游定价。" }}"

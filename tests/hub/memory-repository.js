@@ -46,6 +46,7 @@ class MemoryRepository {
     this.hubCredentials = new Map();
     this.hubSnapshots = new Map();
     this.hubAudit = [];
+    this.hubSessions = new Map();
   }
 
   async transaction(work) { return work(this); }
@@ -201,6 +202,46 @@ class MemoryRepository {
       details: clone(details),
       createdAt: new Date().toISOString()
     });
+  }
+
+  async listHubSessions() {
+    return [...this.hubSessions.values()]
+      .map(clone)
+      .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)));
+  }
+
+  async createHubSession(session) {
+    this.hubSessions.set(session.sessionId, clone(session));
+    return clone(session);
+  }
+
+  async touchHubSession(sessionId, patch = {}) {
+    const current = this.hubSessions.get(String(sessionId || ''));
+    if (!current || current.revokedAt) return false;
+    this.hubSessions.set(current.sessionId, {
+      ...current,
+      ...(patch.lastSeenAt !== undefined ? { lastSeenAt: patch.lastSeenAt } : {}),
+      ...(patch.expiresAt !== undefined ? { expiresAt: patch.expiresAt } : {})
+    });
+    return true;
+  }
+
+  async revokeHubSession(sessionId) {
+    const current = this.hubSessions.get(String(sessionId || ''));
+    if (!current || current.revokedAt) return false;
+    current.revokedAt = new Date().toISOString();
+    return true;
+  }
+
+  async revokeAllHubSessions() {
+    let count = 0;
+    const at = new Date().toISOString();
+    for (const session of this.hubSessions.values()) {
+      if (session.revokedAt) continue;
+      session.revokedAt = at;
+      count += 1;
+    }
+    return count;
   }
 
   async getPricing(models) {
