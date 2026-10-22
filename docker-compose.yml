@@ -59,6 +59,8 @@ services:
       # Legacy credential-encryption override and the Google OAuth client secret
       # used by the Antigravity account adapter.
       TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-}
+      # 0 keeps device sessions until revoked; >0 adds a sliding idle expiry.
+      TOKEN_MONITOR_SESSION_IDLE_DAYS: ${TOKEN_MONITOR_SESSION_IDLE_DAYS:-${JIRAN_SESSION_IDLE_DAYS:-0}}
       AGY_OAUTH_CLIENT_SECRET: ${AGY_OAUTH_CLIENT_SECRET:-}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306

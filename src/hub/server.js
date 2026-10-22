@@ -26,8 +26,11 @@ const { currentHubBuild } = require('../shared/hubBuildIdentity');
 const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
 const {
   AUTHENTICATED_SCOPE,
-  createHubAuthPolicy
+  createHubAuthPolicy,
+  secretMatches
 } = require('../shared/hubAuth');
+const { sessionTokenFromRequest } = require('../shared/hubSessions');
+const { createHubSessionService } = require('./sessionService');
 const { HUB_API_VERSION, hubCapabilities } = require('../shared/hubCapabilities');
 const { createFixedWindowRateLimiter } = require('../shared/hubRateLimit');
 const { validateDeviceRecordPayload } = require('../shared/wireValidation');
@@ -115,6 +118,53 @@ function resolveBindHost(host, secret) {
   const requested = String(host || '').trim() || '0.0.0.0';
   if (secret) return requested;
   return LOOPBACK_HOSTS.has(requested.toLowerCase()) ? requested : '127.0.0.1';
+}
+
+function requestPeer(req, trustProxy) {
+  let peer = String(req.socket?.remoteAddress || 'unknown');
+  // Forwarded client-IP headers are only trustworthy behind a proxy that
+  // overwrites them. The `cf-connecting-ip` branch used to run even when
+  // trustProxy was off, so an unauthenticated caller could pick its own
+  // rate-limit bucket per request (rotating it also evicted other clients'
+  // counters) and the documented auth-failure throttle never fired.
+  if (!trustProxy) return peer;
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (typeof xForwardedFor === 'string' && xForwardedFor.trim()) {
+    const clientIp = xForwardedFor.split(',')[0].trim();
+    if (clientIp) peer = clientIp;
+  } else if (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) {
+    peer = req.headers['x-real-ip'].trim();
+  } else if (typeof req.headers['cf-connecting-ip'] === 'string' && req.headers['cf-connecting-ip'].trim()) {
+    peer = req.headers['cf-connecting-ip'].trim();
+  }
+  return peer;
+}
+
+function requestIsSecure(req, tlsOptions, trustProxy) {
+  if (tlsOptions) return true;
+  if (req.socket?.encrypted) return true;
+  if (!trustProxy) return false;
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https';
+}
+
+function sameOriginRequest(req) {
+  const origin = String(req.headers.origin || '').trim();
+  if (origin) {
+    // A TLS-terminating proxy commonly rewrites Host to the upstream address;
+    // x-forwarded-host preserves the public host. A cross-site form cannot set
+    // this header, so using it does not widen the CSRF surface.
+    const host = String(
+      req.headers['x-forwarded-host'] || req.headers.host || ''
+    ).split(',')[0].trim();
+    try {
+      return new URL(origin).host === host;
+    } catch (_) {
+      return false;
+    }
+  }
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  return !fetchSite || fetchSite === 'same-origin' || fetchSite === 'none';
 }
 
 function number(value) {
@@ -334,6 +384,11 @@ function createHub({
   authFailureLimit = 30,
   maxSseClients: maxSseClientsOption = DEFAULT_MAX_SSE_CLIENTS,
   ingestRateLimit = 240,
+  // Device sessions default to no expiry: the operator's deployments are
+  // single-owner installs, and the requirement is that every platform keeps its
+  // current (unlimited) retention. Set JIRAN_SESSION_IDLE_DAYS to add an idle
+  // safety net without changing active devices.
+  sessionIdleDays = 0,
   accountsEnabled = true,
   accountCredentialKey = '',
   accountRefreshMs = 5 * 60 * 1000,
@@ -354,10 +409,31 @@ function createHub({
   const resolvedFleetTimeZone = normalizeTimeZone(
     fleetTimeZone || process.env.TOKEN_MONITOR_FLEET_TIMEZONE || ''
   );
+  const resolvedSessionIdleDays = Math.max(
+    0,
+    Number(
+      sessionIdleDays
+      || process.env.JIRAN_SESSION_IDLE_DAYS
+      || process.env.TOKEN_MONITOR_SESSION_IDLE_DAYS
+      || 0
+    ) || 0
+  );
+  // Older/custom repositories may not implement session storage. Keeping this
+  // optional means such a Hub still starts and falls back to the owner secret
+  // instead of failing every request at boot.
+  const sessionService = typeof store.createHubSession === 'function'
+    ? createHubSessionService({
+      store,
+      ownerSecret,
+      idleDays: resolvedSessionIdleDays,
+      logger
+    })
+    : null;
   let auth = authPolicy || createHubAuthPolicy({
     ownerSecret,
     viewerSecret,
-    ingestCredentials
+    ingestCredentials,
+    resolveSession: sessionService ? (token) => sessionService.resolve(token) : null
   });
   const resolvedAccountCredentialKey = String(
     accountCredentialKey
@@ -409,7 +485,10 @@ function createHub({
     })
     : null;
   const oauthManager = createOAuthSessionManager();
-  const capabilities = hubCapabilities('node-hub', { hubAccounts: Boolean(accountService) });
+  const capabilities = Object.freeze({
+    ...hubCapabilities('node-hub', { hubAccounts: Boolean(accountService) }),
+    sessionAuth: Boolean(sessionService && auth.configured)
+  });
   const maxSseClients = Math.max(1, Math.floor(Number(maxSseClientsOption) || DEFAULT_MAX_SSE_CLIENTS));
   const authFailures = createFixedWindowRateLimiter({ limit: authFailureLimit, windowMs: 60_000 });
   const ingestRequests = createFixedWindowRateLimiter({ limit: ingestRateLimit, windowMs: 60_000 });
@@ -924,6 +1003,10 @@ function createHub({
   const sseClients = new Set();
   const sseHeartbeats = new Map();
   const sseStates = new Map();
+  // A stream is authenticated once at open. Keep the owning session id so
+  // revoking a device can close its already-open stream instead of letting it
+  // keep receiving fleet data until the client reconnects.
+  const sseSessionIds = new Map();
   // Per-client frame shape. `/api/stats/stream?detail=slim` asks for the
   // first-paint projection; a client that omits it keeps receiving the full
   // document it has always received, which is what the shared web/desktop renderer
@@ -940,6 +1023,7 @@ function createHub({
   function dropSseClient(res) {
     sseClients.delete(res);
     sseShapes.delete(res);
+    sseSessionIds.delete(res);
     const heartbeat = sseHeartbeats.get(res);
     if (heartbeat) clearInterval(heartbeat);
     sseHeartbeats.delete(res);
@@ -948,6 +1032,14 @@ function createHub({
     if (state?.drainHandler) res.off('drain', state.drainHandler);
     sseStates.delete(res);
     try { res.end(); } catch (_) { /* the socket may already be closed */ }
+  }
+
+  function closeSseSession(sessionId) {
+    const id = String(sessionId || '');
+    if (!id) return;
+    for (const res of [...sseClients]) {
+      if (sseSessionIds.get(res) === id) dropSseClient(res);
+    }
   }
 
   function queueLatestSse(state, payload, kind) {
@@ -1449,6 +1541,8 @@ function createHub({
          hubBuild: currentHubBuild('node-hub'),
          deviceCount: await store.countDevices(),
          secretRequired: auth.secretRequired,
+         sessionAuth: Boolean(sessionService && auth.configured),
+         sessionIdleDays: resolvedSessionIdleDays,
          ...(resolvedFleetTimeZone ? { fleetTimeZone: resolvedFleetTimeZone } : {}),
          now: new Date().toISOString()
       });
@@ -1461,6 +1555,15 @@ function createHub({
     const authorize = (scope, options = {}) => {
       const result = auth.authorize(req, scope, options);
       if (result.ok) {
+        // Cookie-authenticated mutations need a same-origin check even with
+        // SameSite=Lax: the cookie is ambient, while a native client's bearer
+        // token is not. GET/HEAD streams are read-only and are left alone.
+        if (result.principal?.session
+          && !['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())
+          && !sameOriginRequest(req)) {
+          sendJson(res, 403, { error: 'cross_origin_forbidden' });
+          return null;
+        }
         if (options.ingest && options.consumeRateLimit !== false) {
           const limited = ingestRequests.take(result.principal.id);
           if (!limited.ok) {
@@ -1470,24 +1573,7 @@ function createHub({
         }
         return result;
       }
-      let peer = String(req.socket?.remoteAddress || 'unknown');
-      // Forwarded client-IP headers are only trustworthy behind a proxy that
-      // overwrites them. The `cf-connecting-ip` branch used to run even when
-      // trustProxy was off, so an unauthenticated caller could pick its own
-      // rate-limit bucket per request (rotating it also evicted other clients'
-      // counters) and the documented auth-failure throttle never fired.
-      if (isTrustProxy) {
-        const xForwardedFor = req.headers['x-forwarded-for'];
-        if (typeof xForwardedFor === 'string' && xForwardedFor.trim()) {
-          const clientIp = xForwardedFor.split(',')[0].trim();
-          if (clientIp) peer = clientIp;
-        } else if (typeof req.headers['x-real-ip'] === 'string' && req.headers['x-real-ip'].trim()) {
-          peer = req.headers['x-real-ip'].trim();
-        } else if (typeof req.headers['cf-connecting-ip'] === 'string' && req.headers['cf-connecting-ip'].trim()) {
-          peer = req.headers['cf-connecting-ip'].trim();
-        }
-      }
-      const limited = authFailures.take(peer);
+      const limited = authFailures.take(requestPeer(req, isTrustProxy));
       if (!limited.ok) {
         sendJson(res, 429, { error: 'rate_limited' }, { 'retry-after': String(Math.max(1, Math.ceil(limited.retryAfterMs / 1000))) });
         return null;
@@ -1503,6 +1589,129 @@ function createHub({
         target: String(target || '')
       })}`);
     };
+    const secureRequest = () => requestIsSecure(req, tlsOptions, isTrustProxy);
+
+    if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+      if (!sessionService) {
+        return sendJson(res, 501, {
+          error: 'session_auth_unavailable',
+          message: 'This Hub does not have device-session storage available.'
+        });
+      }
+      if (!auth.configured) {
+        return sendJson(res, 400, { error: 'auth_not_configured' });
+      }
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        return sendJson(res, 400, { error: error.code || 'invalid_request', message: error.message });
+      }
+      const candidate = String(body?.secret || '').trim();
+      if (!candidate || !secretMatches(candidate, ownerSecret)) {
+        const limited = authFailures.take(requestPeer(req, isTrustProxy));
+        if (!limited.ok) {
+          return sendJson(res, 429, { error: 'rate_limited' }, {
+            'retry-after': String(Math.max(1, Math.ceil(limited.retryAfterMs / 1000)))
+          });
+        }
+        return sendJson(res, 401, { error: 'unauthorized' });
+      }
+      const platform = String(body?.platform || '').trim().toLowerCase();
+      const mode = String(body?.mode || (platform === 'web' ? 'cookie' : 'token')).trim().toLowerCase();
+      const remember = body?.remember !== false;
+      try {
+        const created = await sessionService.create({
+          deviceName: String(body?.deviceName || '').trim(),
+          platform: platform || 'unknown',
+          userAgent: String(req.headers['user-agent'] || ''),
+          persistent: remember
+        });
+        audit({ id: 'owner' }, 'auth.login', created.session.id);
+        const headers = mode === 'cookie'
+          ? { 'set-cookie': sessionService.cookieHeader(created.token, { secure: secureRequest(), remember }) }
+          : {};
+        return sendJson(res, 200, {
+          ok: true,
+          ...(mode === 'cookie' ? {} : { token: created.token }),
+          session: created.session
+        }, headers);
+      } catch (error) {
+        return sendJson(res, 500, {
+          error: error.code || 'session_create_failed',
+          message: errorMessageForApi(error)
+        });
+      }
+    }
+
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/auth/session') {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      const session = owner.principal?.session || null;
+      if (!session) {
+        return sendJson(res, 200, { ok: true, authenticated: true, legacy: true, session: null });
+      }
+      const token = sessionTokenFromRequest(req);
+      const headers = token
+        ? { 'set-cookie': sessionService.cookieHeader(token, { secure: secureRequest(), remember: session.persistent !== false }) }
+        : {};
+      return sendJson(res, 200, {
+        ok: true,
+        authenticated: true,
+        legacy: false,
+        session: sessionService.publicSession(session, session.sessionId)
+      }, headers);
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/api/auth/session') {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      const session = owner.principal?.session || null;
+      if (session) {
+        await sessionService.revoke(session.sessionId);
+        closeSseSession(session.sessionId);
+        audit(owner.principal, 'auth.logout', session.sessionId);
+      }
+      return sendJson(res, 200, { ok: true }, sessionService
+        ? { 'set-cookie': sessionService.clearCookieHeader({ secure: secureRequest() }) }
+        : {});
+    }
+
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/auth/sessions') {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      if (!sessionService) return sendJson(res, 501, { error: 'session_auth_unavailable' });
+      const currentId = owner.principal?.session?.sessionId || '';
+      return sendJson(res, 200, { ok: true, sessions: sessionService.list(currentId) });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/auth/logout-all') {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      if (!sessionService) return sendJson(res, 501, { error: 'session_auth_unavailable' });
+      await sessionService.revokeAll();
+      for (const sse of [...sseClients]) dropSseClient(sse);
+      audit(owner.principal, 'auth.logout_all', 'all');
+      return sendJson(res, 200, { ok: true }, {
+        'set-cookie': sessionService.clearCookieHeader({ secure: secureRequest() })
+      });
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/auth/sessions/')) {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      if (!sessionService) return sendJson(res, 501, { error: 'session_auth_unavailable' });
+      const sessionId = decodeURIComponent(url.pathname.slice('/api/auth/sessions/'.length));
+      if (!sessionId || sessionId.includes('/')) {
+        return sendJson(res, 400, { error: 'session_id_required' });
+      }
+      const revoked = await sessionService.revoke(sessionId);
+      if (!revoked) return sendJson(res, 404, { error: 'session_not_found' });
+      closeSseSession(sessionId);
+      audit(owner.principal, 'auth.revoke', sessionId);
+      return sendJson(res, 200, { ok: true, sessionId });
+    }
+
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/capabilities') {
       const result = authorize(AUTHENTICATED_SCOPE);
       if (!result) return;
@@ -1563,7 +1772,11 @@ function createHub({
       // exact match above so this prefix cannot swallow it.
       || /^\/api\/devices\/[^/]+$/.test(url.pathname)
     );
-    if (readRoute && !authorize(AUTHENTICATED_SCOPE)) return;
+    let readAuth = null;
+    if (readRoute) {
+      readAuth = authorize(AUTHENTICATED_SCOPE);
+      if (!readAuth) return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/api/stats/summary') {
       return sendJson(res, 200, await getStatsSummary());
@@ -1857,6 +2070,7 @@ function createHub({
         }, { 'retry-after': '30' });
       }
       sseClients.add(res);
+      sseSessionIds.set(res, readAuth?.principal?.session?.sessionId || '');
       sseShapes.set(res, url.searchParams.get('detail') === 'slim' ? 'slim' : 'full');
       sseStates.set(res, {
         ready: false,
@@ -2058,6 +2272,7 @@ function createHub({
     // Fail before opening the listening socket when migrations have not run or
     // MySQL credentials are unusable. The Docker entrypoint runs migrations first.
     await store.countDevices();
+    await sessionService?.load();
     if (accountService) await store.listHubAccounts();
     return new Promise((resolve, reject) => {
       const onError = (err) => { server.off('listening', onListening); reject(err); };
@@ -2079,6 +2294,7 @@ function createHub({
     for (const heartbeat of sseHeartbeats.values()) clearInterval(heartbeat);
     sseHeartbeats.clear();
     sseStates.clear();
+    sseSessionIds.clear();
     // Drop keep-alive / half-drained sockets so close() cannot hang (e.g. fetch
     // clients that never read a static body, or browsers that linger).
     if (typeof server.closeAllConnections === 'function') {
@@ -2119,6 +2335,7 @@ function createHub({
     fetchUpstreamPricing,
     fetchAllUpstreamPricing,
     accountService,
+    sessionService,
     replaceAuthPolicy,
     bindHost,
     protocol,
@@ -2162,6 +2379,13 @@ if (require.main === module) {
       || 4),
     allowInsecureHttp: args.allowInsecureHttp || args['allow-insecure-http'] || process.env.TOKEN_MONITOR_ALLOW_INSECURE_HTTP,
     trustProxy: args.trustProxy || args['trust-proxy'] || process.env.TOKEN_MONITOR_TRUST_PROXY,
+    sessionIdleDays: Number(
+      args.sessionIdleDays
+      || args['session-idle-days']
+      || process.env.JIRAN_SESSION_IDLE_DAYS
+      || process.env.TOKEN_MONITOR_SESSION_IDLE_DAYS
+      || 0
+    ) || 0,
     staleAfterMs
   });
   hub.start()

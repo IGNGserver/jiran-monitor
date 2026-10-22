@@ -1221,7 +1221,11 @@ fun SettingsScreen(
           onValueChange = viewModel::updateSecret,
           label = "共享密钥",
           isPassword = state.secret.isNotEmpty(),
-          supportingText = "用于 Hub 的 Bearer 鉴权；保存后不会回显。"
+          supportingText = if (state.connectedWithSession) {
+            "此设备已使用独立会话登录；共享密钥未保存在本机。重新输入可换发新会话。"
+          } else {
+            "用于换取此设备的独立会话；保存后不会回显。"
+          }
         )
         Spacer(Modifier.height(FluentSpacingDefaults.l))
         // The row is a `FluentListRow` with no `onClick`, so the toggle is the only

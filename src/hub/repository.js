@@ -137,6 +137,23 @@ function hubAccountSnapshotRow(row) {
   };
 }
 
+function hubSessionRow(row) {
+  if (!row) return null;
+  return {
+    sessionId: String(row.session_id || ''),
+    tokenHash: String(row.token_hash || ''),
+    secretFingerprint: String(row.secret_fingerprint || ''),
+    deviceName: String(row.device_name || ''),
+    platform: String(row.platform || ''),
+    userAgent: String(row.user_agent || ''),
+    persistent: Number(row.persistent) === 1,
+    createdAt: row.created_at ? iso(row.created_at) : null,
+    lastSeenAt: row.last_seen_at ? iso(row.last_seen_at) : null,
+    expiresAt: row.expires_at ? iso(row.expires_at) : null,
+    revokedAt: row.revoked_at ? iso(row.revoked_at) : null
+  };
+}
+
 function allPeriodModels(record) {
   const models = new Set();
   for (const period of Object.values(record?.periods || {})) {
@@ -435,6 +452,65 @@ function createRepository(pool) {
       String(actor || '').slice(0, 255),
       json(details)
     ]);
+  }
+
+  async function listHubSessions(executor = pool) {
+    const [rows] = await executor.query('SELECT * FROM hub_sessions ORDER BY last_seen_at DESC');
+    return rows.map(hubSessionRow);
+  }
+
+  async function createHubSession(session, executor = pool) {
+    await executor.execute(`INSERT INTO hub_sessions (
+      session_id, token_hash, secret_fingerprint, device_name, platform, user_agent,
+      persistent, created_at, last_seen_at, expires_at, revoked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      session.sessionId,
+      session.tokenHash,
+      session.secretFingerprint,
+      session.deviceName || '',
+      session.platform || '',
+      session.userAgent || '',
+      session.persistent === false ? 0 : 1,
+      date(session.createdAt),
+      date(session.lastSeenAt),
+      session.expiresAt ? date(session.expiresAt) : null,
+      session.revokedAt ? date(session.revokedAt) : null
+    ]);
+    return { ...session, persistent: session.persistent !== false };
+  }
+
+  async function touchHubSession(sessionId, patch = {}, executor = pool) {
+    const assignments = [];
+    const values = [];
+    if (patch.lastSeenAt !== undefined) {
+      assignments.push('last_seen_at = ?');
+      values.push(date(patch.lastSeenAt));
+    }
+    if (patch.expiresAt !== undefined) {
+      assignments.push('expires_at = ?');
+      values.push(patch.expiresAt ? date(patch.expiresAt) : null);
+    }
+    if (!assignments.length) return false;
+    const [result] = await executor.execute(
+      `UPDATE hub_sessions SET ${assignments.join(', ')} WHERE session_id = ? AND revoked_at IS NULL`,
+      [...values, String(sessionId || '')]
+    );
+    return Number(result.affectedRows || 0) > 0;
+  }
+
+  async function revokeHubSession(sessionId, executor = pool) {
+    const [result] = await executor.execute(
+      'UPDATE hub_sessions SET revoked_at = CURRENT_TIMESTAMP(3) WHERE session_id = ? AND revoked_at IS NULL',
+      [String(sessionId || '')]
+    );
+    return Number(result.affectedRows || 0) > 0;
+  }
+
+  async function revokeAllHubSessions(executor = pool) {
+    const [result] = await executor.execute(
+      'UPDATE hub_sessions SET revoked_at = CURRENT_TIMESTAMP(3) WHERE revoked_at IS NULL'
+    );
+    return Number(result.affectedRows || 0);
   }
 
   async function getSubscriptions(executor = pool) {
@@ -743,14 +819,14 @@ function createRepository(pool) {
   return {
     aggregateUsageRange,
     countDevices,
+    createHubSession,
     deleteDevice,
     getDeviceRecord,
-    getIngestBaseline,
-    saveIngestBaseline,
     getHubAccount,
-    getHubAccountForUpdate,
     getHubAccountCredential,
+    getHubAccountForUpdate,
     getHubAccountSnapshot,
+    getIngestBaseline,
     getPricing,
     getSubscriptions,
     insertUsageEvents,
@@ -761,6 +837,7 @@ function createRepository(pool) {
     listHubAccounts,
     listHubAccountSnapshots,
     listDeviceRecords,
+    listHubSessions,
     listKnownModels,
     listPricing,
     lockDevice,
@@ -769,9 +846,13 @@ function createRepository(pool) {
     renameDevice,
     replaceHubAccountCredential,
     replaceSessions,
+    revokeAllHubSessions,
+    revokeHubSession,
     saveHubAccountSnapshot,
     saveDevice,
+    saveIngestBaseline,
     setSubscriptions,
+    touchHubSession,
     transaction,
     updateHubAccount,
     upsertPricing

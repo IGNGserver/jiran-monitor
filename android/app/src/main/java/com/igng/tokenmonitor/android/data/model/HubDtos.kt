@@ -12,7 +12,46 @@ data class HealthDto(
   val capabilities: HubCapabilitiesDto = HubCapabilitiesDto(),
   val deviceCount: Int? = null,
   val secretRequired: Boolean? = null,
+  /** Whether this Hub can issue revocable per-device sessions. */
+  val sessionAuth: Boolean = false,
+  /** 0 means sessions do not expire while idle; clients do not enforce it. */
+  val sessionIdleDays: Int? = null,
   val now: String? = null
+)
+
+@Serializable
+data class LoginRequestDto(
+  val secret: String,
+  val mode: String = "token",
+  val platform: String = "android",
+  val deviceName: String = "",
+  val remember: Boolean = true
+)
+
+@Serializable
+data class AuthSessionDto(
+  val id: String = "",
+  val deviceName: String = "",
+  val platform: String = "",
+  val createdAt: String? = null,
+  val lastSeenAt: String? = null,
+  val expiresAt: String? = null,
+  val current: Boolean = false
+)
+
+@Serializable
+data class LoginResponseDto(
+  val ok: Boolean = false,
+  val token: String? = null,
+  val session: AuthSessionDto? = null
+)
+
+@Serializable
+data class AuthSessionResponseDto(
+  val ok: Boolean = false,
+  val authenticated: Boolean = false,
+  val legacy: Boolean = false,
+  val session: AuthSessionDto? = null
 )
 
 @Serializable
@@ -69,7 +108,9 @@ data class HubCapabilitiesDto(
    * purpose: an older Hub that omits the field still has the endpoint, and hiding
    * account management on a missing key would be a regression, not a safety win.
    */
-  val hubAccounts: Boolean? = true
+  val hubAccounts: Boolean? = true,
+  /** Revocable device-session login (`/api/auth/login`). */
+  val sessionAuth: Boolean = false
 )
 
 @Serializable

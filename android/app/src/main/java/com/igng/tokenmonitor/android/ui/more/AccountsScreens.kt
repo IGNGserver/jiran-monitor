@@ -199,7 +199,7 @@ fun AccountsScreen(
         text = if (owner) {
           "添加一个账号后，Hub 会按它自己的节奏抓取额度，这个页面和「服务状态」都会显示结果。"
         } else {
-          "请先连接 Hub 并使用共享密钥。"
+          "请先连接 Hub 并登录。"
         }
       )
       else -> LazyColumn(

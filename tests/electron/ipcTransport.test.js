@@ -73,12 +73,41 @@ test('the secret is never exposed to the renderer', async () => {
   assert.equal(await empty.secret.isRemembered(), false);
 });
 
-test('saving a secret writes through settings rather than a browser store', async () => {
+test('saving a secret on an old preload writes through settings rather than a browser store', async () => {
   const b = bridge();
   const transport = createIpcTransport(b);
   await transport.secret.save('s3cret', true);
   const write = b.calls.find((c) => c.update);
   assert.deepEqual(write.update, { secret: 's3cret' });
+});
+
+test('saving a secret exchanges it for a device session through the dedicated bridge', async () => {
+  let connected = '';
+  const b = bridge({
+    connectHub: async (secret) => {
+      connected = secret;
+      return { ok: true, data: { legacy: false, session: { id: 'session-1' } } };
+    }
+  });
+  const transport = createIpcTransport(b);
+  const result = await transport.secret.save('s3cret', true);
+  assert.equal(connected, 's3cret');
+  assert.equal(result.legacy, false);
+  assert.equal(b.calls.some((call) => call.update), false, 'the owner secret must not be written as a setting');
+});
+
+test('clearing the desktop credential revokes through the session bridge', async () => {
+  let loggedOut = 0;
+  const b = bridge({
+    logoutHub: async () => {
+      loggedOut += 1;
+      return { ok: true, data: { ok: true } };
+    }
+  });
+  const transport = createIpcTransport(b);
+  await transport.secret.clear();
+  assert.equal(loggedOut, 1);
+  assert.equal(b.calls.some((call) => call.update), false);
 });
 
 test('new secrets use a dedicated validation bridge while normal requests stay secret-free', async () => {

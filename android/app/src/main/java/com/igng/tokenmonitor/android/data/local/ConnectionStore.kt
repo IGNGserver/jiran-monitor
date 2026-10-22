@@ -10,10 +10,14 @@ import javax.inject.Singleton
 
 data class ConnectionConfig(
   val hubUrl: String,
+  /** Legacy owner secret. Cleared once the Hub issues a device session. */
   val secret: String,
-  val allowInsecureHttp: Boolean = false
+  val allowInsecureHttp: Boolean = false,
+  /** Revocable per-device token; preferred over [secret] when present. */
+  val sessionToken: String = ""
 ) {
-  val isComplete: Boolean get() = hubUrl.isNotBlank() && secret.isNotBlank()
+  val credential: String get() = sessionToken.ifBlank { secret }
+  val isComplete: Boolean get() = hubUrl.isNotBlank() && credential.isNotBlank()
 }
 
 interface ConnectionStorage {
@@ -43,7 +47,8 @@ class ConnectionStore @Inject constructor(@ApplicationContext context: Context) 
   override fun read(): ConnectionConfig = ConnectionConfig(
     hubUrl = preferences.getString(HUB_URL, "").orEmpty(),
     secret = preferences.getString(SECRET, "").orEmpty(),
-    allowInsecureHttp = preferences.getBoolean(ALLOW_INSECURE_HTTP, false)
+    allowInsecureHttp = preferences.getBoolean(ALLOW_INSECURE_HTTP, false),
+    sessionToken = preferences.getString(SESSION_TOKEN, "").orEmpty()
   )
 
   override fun save(config: ConnectionConfig) {
@@ -54,6 +59,7 @@ class ConnectionStore @Inject constructor(@ApplicationContext context: Context) 
     preferences.edit()
       .putString(HUB_URL, hubUrl)
       .putString(SECRET, config.secret)
+      .putString(SESSION_TOKEN, config.sessionToken)
       .putBoolean(ALLOW_INSECURE_HTTP, config.allowInsecureHttp)
       .apply()
   }
@@ -63,6 +69,7 @@ class ConnectionStore @Inject constructor(@ApplicationContext context: Context) 
   private companion object {
     const val HUB_URL = "hub_url"
     const val SECRET = "hub_secret"
+    const val SESSION_TOKEN = "hub_session_token"
     const val ALLOW_INSECURE_HTTP = "allow_insecure_http"
   }
 }

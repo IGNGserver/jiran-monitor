@@ -3,7 +3,10 @@ package com.igng.tokenmonitor.android.data.remote
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
 import com.igng.tokenmonitor.android.data.model.AccountsResponseDto
 import com.igng.tokenmonitor.android.data.model.AppUpdateDto
+import com.igng.tokenmonitor.android.data.model.AuthSessionResponseDto
 import com.igng.tokenmonitor.android.data.model.BatchPricingResponseDto
+import com.igng.tokenmonitor.android.data.model.LoginRequestDto
+import com.igng.tokenmonitor.android.data.model.LoginResponseDto
 import com.igng.tokenmonitor.android.data.model.OAuthExchangeRequestDto
 import com.igng.tokenmonitor.android.data.model.OAuthStartDto
 import com.igng.tokenmonitor.android.data.model.RatesResponseDto
@@ -34,6 +37,10 @@ import retrofit2.http.Query
 interface HubApi {
   @GET("api/health") suspend fun health(): HealthDto
   @GET("api/capabilities") suspend fun capabilities(): HubAuthorizationDto
+  /** Exchange the owner secret for a revocable per-device token. */
+  @POST("api/auth/login") suspend fun login(@Body request: LoginRequestDto): LoginResponseDto
+  @GET("api/auth/session") suspend fun authSession(): AuthSessionResponseDto
+  @DELETE("api/auth/session") suspend fun logout(): Response<Unit>
   /**
    * Release metadata for this Android build. The Hub resolves the release
    * channel from [currentVersion] and returns the APK URL and SHA-256; the

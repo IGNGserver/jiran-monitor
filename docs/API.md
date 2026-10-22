@@ -1,6 +1,6 @@
 # API
 
-The hub exposes a JSON HTTP API and serves a same-origin web dashboard (PWA) from the hub root (`/`). Static UI assets and `/api/health` are public; private API routes require the single owner's credential. Remote connections use HTTPS by default. Docker Compose Hub/agent/desktop require `JIRAN_ALLOW_INSECURE_HTTP=1` for an intentional non-loopback HTTP deployment. The Android client supports the same intentional LAN/VPN plain-HTTP Hub behind an explicit opt-in: the platform permits cleartext (so the OS does not silently contradict the in-app switch), while `HubApiFactory` rejects a non-HTTPS URL unless that switch is on. User-installed CAs are trusted in debug builds only.
+The hub exposes a JSON HTTP API and serves a same-origin web dashboard (PWA) from the hub root (`/`). Static UI assets and `/api/health` are public; private API routes require the owner key or a device session issued from it. Remote connections use HTTPS by default. Docker Compose Hub/agent/desktop require `JIRAN_ALLOW_INSECURE_HTTP=1` for an intentional non-loopback HTTP deployment. The Android client supports the same intentional LAN/VPN plain-HTTP Hub behind an explicit opt-in: the platform permits cleartext (so the OS does not silently contradict the in-app switch), while `HubApiFactory` rejects a non-HTTPS URL unless that switch is on. User-installed CAs are trusted in debug builds only.
 
 
 For pricing refreshes, the Hub invokes `tokscale pricing <model> --json` first. If tokscale cannot complete its upstream catalog request, the Hub retries against the configured `TOKSCALE_PRICING_CATALOG_URL` (default `https://models.dev/api.json`), which is a public catalog tokscale also uses. The catalog is cached in the Hub process for six hours; the resulting `model_pricing` row remains durable.
@@ -9,30 +9,43 @@ For pricing refreshes, the Hub invokes `tokscale pricing <model> --json` first. 
 
 For the single-user deployment, configure one key:
 
-- `JIRAN_SECRET`: shared by the Hub and every desktop app / agent. It grants read, ingest, and every administrative mutation, including manually managed Hub accounts.
+- `JIRAN_SECRET`: the owner key. It grants read, ingest, and every administrative mutation, including manually managed Hub accounts. It is also the provisioning credential that issues per-device sessions; current desktop/Android/browser clients store the session, not this key. The headless agent continues to use the key directly.
 
 Old split admin/viewer/device variables are not accepted as alternate users. Existing deployments must migrate to `JIRAN_SECRET`; a configured owner key always has every product capability.
 `JIRAN_HUB_CREDENTIAL_KEY` remains an optional override for encrypting manually added Hub account credentials at rest.
 
 An unconfigured Docker Compose Hub is restricted to loopback. A remote Hub refuses all private routes until at least one unified or split credential is configured.
 
+### Device sessions
+
+The owner key is no longer stored on clients by current builds. After the first sign-in, each client receives an opaque, revocable device session:
+
+- `POST /api/auth/login` with `{ secret, mode, platform, deviceName, remember }`. `mode: "cookie"` (the browser host) sets an `HttpOnly`, `SameSite=Lax` cookie and does not return the token. `mode: "token"` (Android desktop/headless clients) returns `token` (`jrs_...`) in the response. `remember: false` makes the cookie session-only; otherwise it is persistent with a 400-day `Max-Age`.
+- Session credentials are accepted from the cookie above, or as `Authorization: Bearer <token>`. The owner secret remains accepted for provisioning, agents, and older clients.
+- `GET /api/auth/session` validates the current cookie/token and renews the browser cookie without exposing it to JavaScript.
+- `GET /api/auth/sessions` lists this owner's signed-in devices (name, platform, created/last-used time, current marker).
+- `DELETE /api/auth/session` signs out the current device; `DELETE /api/auth/sessions/:id` revokes one device; `POST /api/auth/logout-all` revokes every session, including the caller's.
+- Session tokens are stored hashed in `hub_sessions`; a database dump cannot be replayed. Revoking one device does not affect the others.
+- **Sessions do not expire by default.** This preserves unlimited retention for active use on every platform. The browser's persistent cookie is renewed on each visit and the browser itself caps its lifetime at 400 days. Set `JIRAN_SESSION_IDLE_DAYS` to a positive number to add a sliding idle expiry (an actively used device keeps extending it); `0` (the default) means never.
+- Changing `JIRAN_SECRET` changes the session fingerprint, so every old session becomes invalid. It also changes the default account-credential encryption key; set `JIRAN_HUB_CREDENTIAL_KEY` to the previous effective key before rotating if the stored provider accounts must remain readable.
+
 Use either:
 
 ```http
-Authorization: Bearer <secret>
+Authorization: Bearer <owner-secret-or-session-token>
 ```
 
 or:
 
 ```http
-X-Jiran-Secret: <secret>
+X-Jiran-Secret: <owner-secret>
 ```
 
 The historical `X-Jiran-Secret` header is still accepted so devices that predate the 计然 / Jiran rename keep working against a renamed Hub.
 
-Credentials in query strings are rejected. Secrets can appear in browser, proxy, CDN, or diagnostic logs, so clients must send the owner key in a header.
+Credentials in query strings are rejected. Secrets can appear in browser, proxy, CDN, or diagnostic logs, so clients must send the owner key or session token in a header (or the web host's HttpOnly cookie).
 
-The Hub rate-limits repeated authentication failures per source and ingest bursts per authenticated principal. Successful administrative mutations emit structured `[hub-audit]` records containing the time, principal ID, action, and target; secret values are never logged.
+The Hub rate-limits repeated authentication failures per source and ingest bursts per authenticated principal. Successful administrative mutations emit structured `[hub-audit]` records containing the time, principal ID, action, and target; secret and session values are never logged.
 
 ## `GET /api/health`
 
@@ -58,10 +71,13 @@ Example response:
     "publicStats": false,
     "hubAccounts": true,
     "centralLimits": true,
-    "limitsAuthority": "hub"
+    "limitsAuthority": "hub",
+    "sessionAuth": true
   },
   "deviceCount": 2,
   "secretRequired": true,
+  "sessionAuth": true,
+  "sessionIdleDays": 0,
   "fleetTimeZone": "Asia/Shanghai",
   "now": "2026-05-18T00:00:00.000Z"
 }
@@ -73,7 +89,7 @@ Example response:
 
 ## `GET /api/capabilities`
 
-Requires the owner key and returns the server feature set plus `authenticated: true`. Clients use this endpoint to validate a saved token; feature availability is described by `capabilities`, not user roles.
+Requires an authenticated device session or the owner key and returns the server feature set plus `authenticated: true`. Clients use this endpoint to validate a saved token; feature availability is described by `capabilities`, not user roles.
 
 ```json
 {
@@ -87,6 +103,30 @@ Staged reads are advertised as `statsSummary`, `deviceDetail`, and `sessionList`
 (see `GET /api/stats/summary`). They are additive: a Hub that omits them has only
 `/api/stats`, so a client must treat absence as "not available" and fall back
 rather than call an endpoint that may not exist.
+
+`sessionAuth` advertises the device-session endpoints below. An older Hub omits
+it and only accepts the owner secret, so clients must keep that fallback.
+
+## Device-session endpoints
+
+`POST /api/auth/login` is public except for the owner-secret check in its body.
+The response for cookie mode sets `Set-Cookie` and contains no token; token mode
+returns `{ ok, token, session }`. A login from a browser uses `mode: "cookie"`;
+native clients use `mode: "token"`.
+
+`GET /api/auth/session` returns the current session and renews the browser
+cookie. `GET /api/auth/sessions` returns `{ ok, sessions: [...] }`; each row has
+`id`, `deviceName`, `platform`, `createdAt`, `lastSeenAt`, `expiresAt`, and
+`current`. `DELETE /api/auth/session` signs out the caller,
+`DELETE /api/auth/sessions/:id` revokes one device, and
+`POST /api/auth/logout-all` revokes all sessions. Revoking a session also closes
+its open SSE stream.
+
+Cookie-authenticated mutating requests must be same-origin (`Origin` or
+`Sec-Fetch-Site`); a bearer session token from a native client is not an ambient
+credential and is not subject to that check. When TLS terminates at a reverse
+proxy, enable `TOKEN_MONITOR_TRUST_PROXY` so the Hub can see
+`X-Forwarded-Proto: https` and mark the cookie `Secure`.
 
 ## `POST /api/ingest`
 

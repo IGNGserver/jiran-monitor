@@ -1,5 +1,7 @@
 'use strict';
 
+const { sessionTokenFromRequest } = require('./hubSessions');
+
 // 计然 / Jiran has one operator. `AUTHENTICATED_SCOPE` is an internal route
 // guard, not a user role or a permission level.
 const AUTHENTICATED_SCOPE = 'authenticated';
@@ -72,6 +74,7 @@ function createHubAuthPolicy(options = {}) {
   );
   const deprecatedViewerSecret = normalizedSecret(options.viewerSecret);
   const deprecatedIngestCredentials = ingestCredentialEntries(options.ingestCredentials);
+  const resolveSession = typeof options.resolveSession === 'function' ? options.resolveSession : null;
   const configured = Boolean(ownerSecret);
   if (!ownerSecret && (deprecatedViewerSecret || deprecatedIngestCredentials.length)) {
     const error = new Error('JIRAN_SECRET (or legacy TOKEN_MONITOR_SECRET) is required; viewer/device credentials are no longer supported');
@@ -82,6 +85,19 @@ function createHubAuthPolicy(options = {}) {
   function authorize(request, scope) {
     if (scope !== AUTHENTICATED_SCOPE) throw new Error(`unknown Hub authorization scope: ${scope}`);
     if (!configured) return { ok: true, principal: { id: 'local-owner', authenticated: true } };
+    // Device sessions are checked first. They are opaque, revocable bearer
+    // credentials; the owner secret remains accepted for provisioning and for
+    // clients that have not migrated yet.
+    const sessionToken = sessionTokenFromRequest(request);
+    if (sessionToken && resolveSession) {
+      const session = resolveSession(sessionToken);
+      if (session) {
+        return {
+          ok: true,
+          principal: { id: 'owner', authenticated: true, session }
+        };
+      }
+    }
     const credential = requestCredential(request);
     // Secrets in URLs are removed from the single-owner protocol. They are
     // routinely copied into browser/proxy logs and cannot be made safe by
@@ -99,7 +115,7 @@ function createHubAuthPolicy(options = {}) {
     authorize,
     configured,
     secretRequired: configured,
-    summary: Object.freeze({ ownerConfigured: configured })
+    summary: Object.freeze({ ownerConfigured: configured, sessionAuth: configured })
   });
 }
 

@@ -66,3 +66,37 @@ test('credential parsing and comparison remain defensive', () => {
   assert.equal(secretMatches('same', 'same'), true);
   assert.equal(secretMatches('same', 'different'), false);
 });
+
+test('device session tokens authenticate from a bearer header or the session cookie', () => {
+  const seen = [];
+  const policy = createHubAuthPolicy({
+    ownerSecret: 'owner-secret',
+    resolveSession: (token) => {
+      seen.push(token);
+      return token === 'jrs_device' ? { sessionId: 'session-1' } : null;
+    }
+  });
+  const bearer = policy.authorize(request('jrs_device'), AUTHENTICATED_SCOPE);
+  assert.equal(bearer.ok, true);
+  assert.deepEqual(bearer.principal.session, { sessionId: 'session-1' });
+
+  const cookie = new Request('https://hub.example/api/stats', {
+    headers: { cookie: 'theme=dark; jiran_session=jrs_device' }
+  });
+  const cookieResult = policy.authorize(cookie, AUTHENTICATED_SCOPE);
+  assert.equal(cookieResult.ok, true);
+  assert.equal(cookieResult.principal.session.sessionId, 'session-1');
+  assert.deepEqual(seen, ['jrs_device', 'jrs_device']);
+});
+
+test('a revoked or unknown session token falls back to the owner-secret check and fails', () => {
+  const policy = createHubAuthPolicy({
+    ownerSecret: 'owner-secret',
+    resolveSession: () => null
+  });
+  const result = policy.authorize(request('jrs_revoked'), AUTHENTICATED_SCOPE);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 401);
+  // The owner secret remains a provisioning credential during migration.
+  assert.equal(policy.authorize(request('owner-secret'), AUTHENTICATED_SCOPE).ok, true);
+});

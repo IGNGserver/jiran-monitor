@@ -162,9 +162,14 @@ Then, on each machine:
 - **Android** → point the app at the Hub URL and the same key. Release builds require HTTPS.
 
 `JIRAN_SECRET` is the one owner key: it covers reads, ingest and administration, including the
-quota accounts. Devices identify *data sources*, not users. Remote connections require HTTPS;
-plain HTTP to a Hub on your LAN is possible only after you opt in explicitly, and an older
-profile pointing at a non-loopback `http://` Hub keeps its local collection while its Hub
+quota accounts. Devices identify *data sources*, not users. Browsers and native clients exchange
+that key for a revocable per-device session; the browser keeps it in an HttpOnly cookie and the
+desktop/Android clients keep only the session token. Sessions do not expire by default, so active
+use keeps the previous unlimited sign-in; the browser renews its persistent cookie on every visit
+(the browser itself caps it at 400 days). Management lists the sessions and can revoke one or all
+devices, and `JIRAN_SESSION_IDLE_DAYS` optionally adds a sliding idle limit. Remote connections
+require HTTPS; plain HTTP to a Hub on your LAN is possible only after you opt in explicitly, and an
+older profile pointing at a non-loopback `http://` Hub keeps its local collection while its Hub
 channels stay blocked until you choose.
 
 ## How the data moves

@@ -61,12 +61,13 @@ test('removes credential fields from settings without mutating runtime state', (
 test('renderer redaction exposes only explicitly allowed client credentials', () => {
   const settings = {
     secret: 'client-secret',
+    sessionToken: 'device-session',
     hubAdminSecret: 'admin-secret',
     hubHostSecret: 'removed-host-secret',
     deepseekApiKey: 'provider-secret'
   };
   const redacted = credentialSettingsForRenderer(settings, { expose: ['secret'] });
-  assert.deepEqual(redacted, { secret: 'client-secret' });
+  assert.deepEqual(redacted, { secret: 'client-secret', sessionToken: '' });
 });
 
 test('migrates legacy settings once and keeps an existing credential authoritative', (t) => {

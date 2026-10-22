@@ -80,6 +80,15 @@ account-encryption key from it. `JIRAN_HUB_CREDENTIAL_KEY` remains an
 optional legacy override. Changing the effective encryption key requires
 re-adding the affected accounts.
 
+Authentication uses revocable per-device sessions. The browser dashboard keeps
+an `HttpOnly` cookie; the desktop and Android clients store a `jrs_` token in
+their existing credential stores. The owner secret is only used to provision a
+session (and by the headless agent). Sessions have no fixed expiry by default;
+set `JIRAN_SESSION_IDLE_DAYS` to add a sliding idle limit. The Hub's Management
+page lists signed-in devices and can revoke one or all of them. Changing
+`JIRAN_SECRET` invalidates every session and, unless
+`JIRAN_HUB_CREDENTIAL_KEY` is set, the account-encryption key.
+
 Antigravity (`agy`) accounts can be added with the OAuth wizard instead of pasting
 an endpoint and CSRF token: the Hub generates a Google consent link and the user
 pastes back the authorization code Google displays on its page. That code — not
@@ -100,6 +109,7 @@ JIRAN_DEVICE_ID=             # optional — defaults to the hostname
 JIRAN_LIMITS_ENABLED=        # legacy compatibility; device quota probing is removed
 JIRAN_LIMIT_PROVIDERS=       # legacy compatibility; Hub accounts select providers
 JIRAN_HUB_CREDENTIAL_KEY=    # optional legacy account-encryption override; normally leave empty
+JIRAN_SESSION_IDLE_DAYS=0    # 0 = never expire; >0 = sliding idle expiry in days
 JIRAN_QODER_TRANSCRIPTS_DIR=    # optional direct override for the international Qoder JSONL transcripts
 JIRAN_QODER_MAIN_DB_PATH=       # optional direct override for the international Qoder main.sqlite store
 QODERCN_CONFIG_DIR=                   # Qoder CN's optional config root; transcript default is $QODERCN_CONFIG_DIR/projects

@@ -1287,11 +1287,18 @@ function updateSyncHealth(channel, patch = {}) {
 }
 
 function effectiveHubConfig() {
-  if (settings?.hubMode !== 'client') return { url: null, secret: '' };
+  if (settings?.hubMode !== 'client') {
+    return { url: null, secret: '', sessionToken: '', masterSecret: '' };
+  }
   const url = normalizeHubUrl(settings.hubUrl);
   return {
     url: url ? requireSafeHubTransport(url, { allowInsecureHttp: settings.allowInsecureHubHttp === true }) : null,
-    secret: settings.secret || ''
+    // `secret` is the credential this process presents to the Hub: the revocable
+    // device token when one exists, otherwise the owner secret during migration
+    // or against an older Hub. Callers can stay unchanged.
+    secret: String(settings.sessionToken || settings.secret || ''),
+    sessionToken: String(settings.sessionToken || ''),
+    masterSecret: String(settings.secret || '')
   };
 }
 
@@ -2195,7 +2202,7 @@ function settingsForRenderer() {
     windowsSurface: windowsSurfaceFor().kind,
     effectiveWindowSurface: effectiveWindowSurface(settings),
     ...redactedCredentials,
-    hubSecretConfigured: Boolean(settings?.secret),
+    hubSecretConfigured: Boolean(settings?.sessionToken || settings?.secret),
     limitsAuthority: 'hub',
     centralQuotaSync: true,
     currencyRatesEffective: effectiveRates || resolveEffectiveRates(rateCache?.rates || {}, settings?.currencyRates || {}),
@@ -2261,6 +2268,10 @@ function startMode() {
       return { ok: false, superseded: true, generation: requestedGeneration };
     }
     if (settings.hubMode === 'client') {
+      // Existing installs still hold the owner secret. Exchange it for a
+      // revocable device session in the background; requests can keep using the
+      // secret on the old Hub or until the exchange completes.
+      void ensureHubSession();
       // `/api/stats` is an authenticated connectivity check, not merely a
       // socket probe: it verifies the address, transport policy, and saved
       // secret before the first POST /api/ingest is allowed to run.
@@ -3224,6 +3235,119 @@ async function validateHubSecret(secret) {
   return body;
 }
 
+let hubSessionPromise = null;
+
+/** Exchange the owner secret for a revocable desktop device session. */
+async function loginHubSession(secret) {
+  const config = effectiveHubConfig();
+  if (!config.url) throw Object.assign(new Error('Hub is not configured'), { code: 'hub_not_configured' });
+  const candidate = String(secret || '').trim();
+  if (!candidate) throw Object.assign(new Error('Hub secret is not configured'), { code: 'hub_secret_not_configured' });
+  const response = await fetchBufferedWithTimeout(fetch, `${config.url.replace(/\/$/, '')}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      secret: candidate,
+      mode: 'token',
+      platform: 'desktop',
+      deviceName: os.hostname()
+    })
+  }, HUB_REQUEST_TIMEOUT_MS);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const unsupported = response.status === 404 || response.status === 405 || response.status === 501 || body.error === 'session_auth_unavailable';
+    const error = new Error(body.error || body.message || `Hub request failed (${response.status})`);
+    Object.assign(error, {
+      code: unsupported ? 'session_auth_unsupported' : (body.error || (response.status === 401 ? 'unauthorized' : 'hub_request_failed')),
+      status: response.status,
+      payload: body
+    });
+    throw error;
+  }
+  if (!body.token) {
+    const error = new Error('Hub did not return a session token');
+    error.code = 'session_token_missing';
+    throw error;
+  }
+  return body;
+}
+
+function storeHubCredential({ sessionToken = '', secret = '' } = {}) {
+  settings.sessionToken = String(sessionToken || '');
+  settings.secret = String(secret || '');
+  saveSettings({ throwOnError: true });
+  pushSettingsToRenderer();
+}
+
+async function revokeHubToken(token) {
+  const value = String(token || '').trim();
+  const config = effectiveHubConfig();
+  if (!value || !config.url) return;
+  try {
+    await fetchBufferedWithTimeout(fetch, `${config.url.replace(/\/$/, '')}/api/auth/session`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${value}` }
+    }, HUB_REQUEST_TIMEOUT_MS);
+  } catch (error) {
+    console.warn(`[hub-session] could not revoke the replaced session: ${error?.message || error}`);
+  }
+}
+
+async function connectHub(secret) {
+  const candidate = String(secret || '').trim();
+  if (!candidate) throw Object.assign(new Error('Hub secret is not configured'), { code: 'hub_secret_not_configured' });
+  try {
+    const previousToken = settings.sessionToken;
+    const session = await loginHubSession(candidate);
+    storeHubCredential({ sessionToken: session.token });
+    if (previousToken) await revokeHubToken(previousToken);
+    return { legacy: false, session: session.session || null };
+  } catch (error) {
+    if (error.code !== 'session_auth_unsupported') throw error;
+    // Mixed-version deployment: the Hub predates device sessions. Keep the
+    // owner secret working exactly as it did before the upgrade.
+    const capabilities = await validateHubSecret(candidate);
+    storeHubCredential({ secret: candidate });
+    return { legacy: true, capabilities };
+  }
+}
+
+async function ensureHubSession() {
+  if (settings?.hubMode !== 'client' || settings.sessionToken || !settings.secret) return null;
+  if (hubSessionPromise) return hubSessionPromise;
+  hubSessionPromise = (async () => {
+    try {
+      const result = await connectHub(settings.secret);
+      return result;
+    } catch (error) {
+      // A network outage or a revoked credential must not make startup fail:
+      // the existing secret path stays available and the sync health surface
+      // reports the actual 401 when requests run.
+      console.warn(`[hub-session] could not exchange the owner secret: ${error.code || error.message || error}`);
+      return null;
+    } finally {
+      hubSessionPromise = null;
+    }
+  })();
+  return hubSessionPromise;
+}
+
+async function logoutHub() {
+  const config = effectiveHubConfig();
+  if (config.url && config.sessionToken) {
+    try {
+      await fetchBufferedWithTimeout(fetch, `${config.url.replace(/\/$/, '')}/api/auth/session`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${config.sessionToken}` }
+      }, HUB_REQUEST_TIMEOUT_MS);
+    } catch (error) {
+      console.warn(`[hub-session] logout request failed: ${error?.message || error}`);
+    }
+  }
+  storeHubCredential({});
+  return { ok: true };
+}
+
 // Serves the shared UI's `/api/*` calls from this device. Local data comes from
 // the running collector/runtime; Hub-owned resources are proxied with the
 // process-held secret so the renderer never sees a credential.
@@ -3629,6 +3753,13 @@ app.whenReady().then(() => {
       currency: normalizedCurrency
     };
     if (patch.hubUrl !== undefined) normalizedPatch.hubUrl = normalizeHubUrl(patch.hubUrl);
+    // A device session is bound to the Hub that issued it. Changing the address
+    // must not send the old token to a different server; the next sign-in issues
+    // a new session there.
+    if (normalizedPatch.hubUrl !== undefined
+      && String(normalizedPatch.hubUrl || '') !== String(previousSettingsState?.hubUrl || '')) {
+      normalizedPatch.sessionToken = '';
+    }
     delete normalizedPatch.hubAdminSecret;
     if (patch.allowInsecureHubHttp !== undefined) {
       normalizedPatch.allowInsecureHubHttp = parseBoolean(patch.allowInsecureHubHttp, false);
@@ -3788,6 +3919,28 @@ app.whenReady().then(() => {
           payload: error?.payload ?? null
         }
       };
+    }
+  });
+  ipcMain.handle('hub:connect', async (_event, secret) => {
+    try {
+      return { ok: true, data: await connectHub(secret) };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          message: error?.message || String(error),
+          code: error?.code || null,
+          status: Number.isInteger(Number(error?.status)) ? Number(error.status) : null,
+          payload: error?.payload ?? null
+        }
+      };
+    }
+  });
+  ipcMain.handle('hub:logout', async () => {
+    try {
+      return { ok: true, data: await logoutHub() };
+    } catch (error) {
+      return { ok: false, error: { message: error?.message || String(error), code: error?.code || null } };
     }
   });
   ipcMain.handle('transport:flag:read', (_event, key) => {

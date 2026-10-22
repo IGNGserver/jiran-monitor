@@ -18,12 +18,23 @@ const viewPath = path.join(__dirname, '..', '..', 'src', 'shared-ui', 'views', '
 
 // The module is browser ESM; evaluate it with its import graph stubbed so the
 // test stays a pure unit test of the page composition.
-function loadView({ desktop = false, authenticated = true, capabilities = { hubAccounts: true, subscriptions: true, pricing: true }, prefs = {} } = {}) {
+function loadView({
+  desktop = false,
+  authenticated = true,
+  capabilities = { hubAccounts: true, subscriptions: true, pricing: true },
+  prefs = {},
+  sessions = null,
+  session = null,
+  sessionsLoading = false
+} = {}) {
   installDom(globalThis);
   const state = {
     prefs: { managementSection: 'accounts', managementTab: 'subscriptions', ...prefs },
     secret: '',
     authorization: { authenticated, capabilities },
+    sessions,
+    session,
+    sessionsLoading,
     desktopSettings: {},
     desktopInfo: {}
   };
@@ -100,6 +111,35 @@ test('the desktop host renders its device groups and no Hub section', () => {
   // must not promise accounts and consumption on a host that renders neither.
   assert.match(html, /<p>settings\.desktopDescription<\/p>/);
   assert.doesNotMatch(html, /page\.settings\.description/);
+});
+
+test('the Hub preferences section lists and revokes signed-in devices', () => {
+  const { renderSettingsPage } = loadView({
+    capabilities: { hubAccounts: true, subscriptions: true, pricing: true, sessionAuth: true },
+    session: { id: 'session-1' },
+    sessions: [
+      { id: 'session-1', deviceName: 'MacBook', platform: 'desktop', lastSeenAt: '2026-10-22T10:00:00.000Z', current: true },
+      { id: 'session-2', deviceName: 'Pixel', platform: 'android', lastSeenAt: '2026-10-21T10:00:00.000Z', current: false }
+    ]
+  });
+  const html = renderSettingsPage();
+  assert.match(html, /settings\.sessions/);
+  assert.match(html, /MacBook/);
+  assert.match(html, /Pixel/);
+  assert.match(html, /data-session-revoke="session-1"/);
+  assert.match(html, /data-session-revoke="session-2"/);
+  assert.match(html, /data-session-revoke-all/);
+});
+
+test('the desktop host never renders the Hub device-session list', () => {
+  const { renderSettingsPage } = loadView({
+    desktop: true,
+    capabilities: { hubAccounts: true, subscriptions: true, pricing: true, sessionAuth: true },
+    sessions: [{ id: 'session-1', deviceName: 'MacBook', platform: 'desktop' }]
+  });
+  const html = renderSettingsPage();
+  assert.doesNotMatch(html, /data-session-revoke/);
+  assert.doesNotMatch(html, /settings\.sessions/);
 });
 
 test('the stored section marks exactly one section active', () => {
