@@ -35,7 +35,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -66,6 +69,8 @@ import com.igng.tokenmonitor.android.ui.more.SessionsScreen
 import com.igng.tokenmonitor.android.ui.more.SettingsScreen
 import com.igng.tokenmonitor.android.ui.more.StatusScreen
 import com.igng.tokenmonitor.android.ui.overview.OverviewScreen
+import com.igng.tokenmonitor.android.ui.update.canInstallPackages
+import com.igng.tokenmonitor.android.ui.update.launchApkInstaller
 import com.igng.tokenmonitor.android.ui.widgets.WidgetsScreen
 import com.igng.tokenmonitor.android.widget.WidgetRefreshScheduler
 import com.igng.tokenmonitor.android.widget.WidgetRenderer
@@ -113,6 +118,7 @@ fun TokenMonitorApp(
   hubViewModel: HubViewModel = hiltViewModel(),
   connectionViewModel: ConnectionViewModel = hiltViewModel(),
   preferencesViewModel: PreferencesViewModel = hiltViewModel(),
+  updateViewModel: UpdateViewModel = hiltViewModel(),
   initialDestination: String? = null,
   onDestinationConsumed: () -> Unit = {}
 ) {
@@ -123,6 +129,29 @@ fun TokenMonitorApp(
   val connectionState by connectionViewModel.state.collectAsStateWithLifecycle()
   val prefs by preferencesViewModel.preferences.collectAsStateWithLifecycle()
   val context = LocalContext.current
+  val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+  val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+
+  // The installer is launched here, at the app root, so navigating away from
+  // Settings does not strand a finished download. Background launches are
+  // blocked by the platform, so an update that finishes in the background waits
+  // for the next RESUMED state instead of being reported as "up to date".
+  LaunchedEffect(updateState.installUri, lifecycleState) {
+    val pending = updateState.installUri ?: return@LaunchedEffect
+    if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
+    if (!canInstallPackages(context)) {
+      updateViewModel.onInstallPermissionRequired()
+    } else if (launchApkInstaller(context, pending)) {
+      updateViewModel.onInstallerLaunched()
+    } else {
+      updateViewModel.onInstallerLaunchFailed()
+    }
+  }
+  LaunchedEffect(updateState.needsInstallPermission, lifecycleState) {
+    if (!updateState.needsInstallPermission) return@LaunchedEffect
+    if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
+    if (canInstallPackages(context)) updateViewModel.onInstallPermissionGranted()
+  }
   // Widget work is scheduled only while at least one card exists. Doing this on
   // every relevant preference change also repaints the cards when the user picks
   // a new accent / dark mode / currency, instead of waiting for the next poll.
@@ -248,6 +277,7 @@ fun TokenMonitorApp(
             connectionState = connectionState,
             hubViewModel = hubViewModel,
             connectionViewModel = connectionViewModel,
+            updateViewModel = updateViewModel,
             navigateHome = navigateHome,
             initialDestination = initialDestination,
             onDestinationConsumed = onDestinationConsumed,
@@ -266,6 +296,7 @@ fun TokenMonitorApp(
           connectionState = connectionState,
           hubViewModel = hubViewModel,
           connectionViewModel = connectionViewModel,
+          updateViewModel = updateViewModel,
           navigateHome = navigateHome,
           initialDestination = initialDestination,
           onDestinationConsumed = onDestinationConsumed,
@@ -324,6 +355,7 @@ private fun AppNavHost(
   connectionState: ConnectionUiState,
   hubViewModel: HubViewModel,
   connectionViewModel: ConnectionViewModel,
+  updateViewModel: UpdateViewModel,
   navigateHome: () -> Unit,
   initialDestination: String?,
   onDestinationConsumed: () -> Unit,
@@ -470,6 +502,7 @@ private fun AppNavHost(
         restartRealtime = hubViewModel::onConnectionChanged,
         hubRates = hubState.rates,
         hubRatesDate = hubState.ratesDate,
+        updateViewModel = updateViewModel,
         onHome = navigateHome,
         onBack = {
           if (!navController.popBackStack()) {

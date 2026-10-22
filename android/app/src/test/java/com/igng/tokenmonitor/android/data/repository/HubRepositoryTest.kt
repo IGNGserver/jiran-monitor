@@ -83,6 +83,49 @@ class HubRepositoryTest {
     assertEquals(HubError.Kind.Unauthorized, (result as HubResult.Failure).error.kind)
   }
 
+  @Test fun appUpdateParsesReleaseMetadataAndSendsTheInstalledVersion() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(200).setBody("""
+      {"platform":"android","currentVersion":"1.3.1","currentChannel":"test","available":true,
+       "installable":true,"latestVersion":"1.3.2","latestChannel":"test","releaseTag":"v1.3.2",
+       "releaseUrl":"https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.3.2",
+       "assetName":"Jiran-Android-1.3.2.apk","assetUrl":"https://github.com/IGNGserver/jiran-monitor/releases/download/v1.3.2/Jiran-Android-1.3.2.apk",
+       "assetSize":11629795,"sha256":"${"a".repeat(64)}","installMode":"apk"}
+    """.trimIndent()))
+
+    val result = repository.updateInfo("1.3.1")
+
+    assertTrue(result is HubResult.Success)
+    val info = (result as HubResult.Success).value
+    assertEquals("1.3.2", info.latestVersion)
+    assertTrue(info.installable)
+    assertEquals("Jiran-Android-1.3.2.apk", info.assetName)
+    val request = server.takeRequest()
+    assertEquals("/api/updates?platform=android&currentVersion=1.3.1", request.path)
+    assertEquals("Bearer shared-secret", request.getHeader("Authorization"))
+  }
+
+  @Test fun appUpdate404IsReportedAsAnOldHubNotAsNoUpdate() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not_found"}"""))
+
+    val result = repository.updateInfo("1.3.1")
+
+    assertTrue(result is HubResult.Failure)
+    assertTrue(
+      (result as HubResult.Failure).error.message.contains("当前 Hub 不支持应用内更新")
+    )
+  }
+
+  @Test fun appUpdate502ExplainsThatTheHubCouldNotReachGitHub() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":"update_check_failed"}"""))
+
+    val result = repository.updateInfo("1.3.1")
+
+    assertTrue(result is HubResult.Failure)
+    assertTrue(
+      (result as HubResult.Failure).error.message.contains("GitHub 发布信息")
+    )
+  }
+
   @Test fun pricingMaps401ToReadableUnauthorizedError() = runBlocking {
     server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
 

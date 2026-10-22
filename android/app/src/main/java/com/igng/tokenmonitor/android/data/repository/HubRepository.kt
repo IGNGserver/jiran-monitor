@@ -4,6 +4,7 @@ import com.igng.tokenmonitor.android.data.local.ConnectionConfig
 import com.igng.tokenmonitor.android.data.local.ConnectionStorage
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
 import com.igng.tokenmonitor.android.data.model.AccountsResponseDto
+import com.igng.tokenmonitor.android.data.model.AppUpdateDto
 import com.igng.tokenmonitor.android.data.model.OAuthExchangeRequestDto
 import com.igng.tokenmonitor.android.data.model.OAuthStartDto
 import com.igng.tokenmonitor.android.data.model.RatesResponseDto
@@ -87,6 +88,32 @@ class HubRepository @Inject constructor(
     )
   }
   suspend fun capabilities(): HubResult<HubAuthorizationDto> = withConnection { apiFactory.create(it).capabilities() }
+
+  /**
+   * The Hub's Android release check. A 404 is not "no update": it means the Hub
+   * predates `/api/updates`, so [safeCall] is told to phrase it as an upgrade
+   * hint instead of the generic "request failed" message.
+   */
+  suspend fun updateInfo(currentVersion: String): HubResult<AppUpdateDto> {
+    val result = withConnection(
+      notFoundMessage = "当前 Hub 不支持应用内更新，请先升级 Hub，或打开 Releases 页面手动下载。"
+    ) {
+      apiFactory.create(it).updateInfo(currentVersion = currentVersion)
+    }
+    // The Hub answers 502 when it cannot reach GitHub (for example while its
+    // unauthenticated API quota is exhausted). A gateway's 502 is the same
+    // user-facing condition, so phrase both as an upstream lookup failure.
+    return if (result is HubResult.Failure && result.error.message == "Hub 返回 HTTP 502。") {
+      HubResult.Failure(
+        HubError(
+          "Hub 暂时无法读取 GitHub 发布信息，请稍后重试；长期出现请检查 Hub 的更新源配置。",
+          result.error.kind
+        )
+      )
+    } else {
+      result
+    }
+  }
   suspend fun stats(): HubResult<StatsDto> =
     withConnection { apiFactory.create(it).stats() }.mapSuccess { it.sanitizeForDisplay() }
   /**
@@ -221,7 +248,10 @@ class HubRepository @Inject constructor(
     awaitClose { source.cancel() }
   }
 
-  private suspend fun <T> withConnection(call: suspend (ConnectionConfig) -> T): HubResult<T> {
+  private suspend fun <T> withConnection(
+    notFoundMessage: String? = null,
+    call: suspend (ConnectionConfig) -> T
+  ): HubResult<T> {
     val config = try {
       withContext(Dispatchers.IO) { connection() }
     } catch (error: CancellationException) {
@@ -230,15 +260,20 @@ class HubRepository @Inject constructor(
       return HubResult.Failure(HubError("无法读取本机连接设置，请重新保存连接信息。", HubError.Kind.Api))
     }
     return if (!config.isComplete) HubResult.Failure(HubError("请先在设置中保存 Hub 地址和共享密钥。", HubError.Kind.NotConfigured))
-    else safeCall { call(config) }
+    else safeCall(notFoundMessage) { call(config) }
   }
 
-  private suspend fun <T> safeCall(call: suspend () -> T): HubResult<T> = try {
+  private suspend fun <T> safeCall(
+    notFoundMessage: String? = null,
+    call: suspend () -> T
+  ): HubResult<T> = try {
     HubResult.Success(call())
   } catch (error: HttpException) {
     val message = when (error.code()) {
       401 -> "未授权：请检查共享密钥。"
-      404, 422 -> "请求未完成：${error.response()?.errorBody()?.string().orEmpty().ifBlank { "模型没有可用的上游定价。" }}"
+      404 -> notFoundMessage
+        ?: "请求未完成：${error.response()?.errorBody()?.string().orEmpty().ifBlank { "模型没有可用的上游定价。" }}"
+      422 -> "请求未完成：${error.response()?.errorBody()?.string().orEmpty().ifBlank { "模型没有可用的上游定价。" }}"
       else -> "Hub 返回 HTTP ${error.code()}。"
     }
     HubResult.Failure(HubError(message, if (error.code() == 401) HubError.Kind.Unauthorized else HubError.Kind.Api))

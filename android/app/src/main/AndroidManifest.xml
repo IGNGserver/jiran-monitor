@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.VIBRATE" />
+  <!-- Sideloaded in-app updates: the system installer still confirms every install. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
   <application
     android:name=".TokenMonitorApplication"
     android:allowBackup="false"
@@ -87,5 +89,17 @@
     <receiver
       android:name=".widget.WidgetActionReceiver"
       android:exported="false" />
+
+    <!-- Only the downloaded APK under cache/updates is exposed, and only to the
+         system installer through a temporary read grant. -->
+    <provider
+      android:name="androidx.core.content.FileProvider"
+      android:authorities="${applicationId}.fileprovider"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/file_paths" />
+    </provider>
   </application>
 </manifest>

@@ -6,7 +6,14 @@ const { compareProjectVersions, parseProjectVersion } = require('./versioning');
 const GITHUB_REPO = 'IGNGserver/jiran';
 const RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`;
 const RELEASES_LATEST_URL = RELEASES_URL;
-const RELEASE_HTML_PREFIX = `https://github.com/${GITHUB_REPO}/releases/`;
+// The repository is exposed under its old `jiran` slug and its canonical
+// `jiran-monitor` slug. GitHub rewrites release URLs to the canonical name even
+// when the API is addressed through the old one, so accepting only the old
+// prefix discarded every release from the list.
+const RELEASE_HTML_PREFIXES = [
+  `https://github.com/${GITHUB_REPO}/releases/`,
+  'https://github.com/IGNGserver/jiran-monitor/releases/'
+];
 const REQUEST_TIMEOUT_MS = 10 * 1000;
 const APP_UPDATE_BACKGROUND_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const APP_UPDATE_OUTDATED_COOLDOWN_MS = 60 * 60 * 1000;
@@ -403,7 +410,7 @@ function parseLatestReleasePayload(payload) {
   const version = parseTag(tag);
   if (!version) return null;
   const htmlUrl = typeof payload.html_url === 'string' ? payload.html_url : '';
-  if (!htmlUrl.startsWith(RELEASE_HTML_PREFIX)) return null;
+  if (!RELEASE_HTML_PREFIXES.some((prefix) => htmlUrl.startsWith(prefix))) return null;
   const releaseNotes = extractReleaseNotes(payload.body);
   return {
     version,

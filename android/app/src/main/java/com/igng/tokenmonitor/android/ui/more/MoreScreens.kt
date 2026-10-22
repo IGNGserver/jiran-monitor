@@ -84,9 +84,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.igng.tokenmonitor.android.ui.components.FluentProgressBar
 import com.igng.tokenmonitor.android.ui.components.FluentProgressRing
 import androidx.compose.ui.Modifier
 import androidx.annotation.DrawableRes
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -94,6 +96,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.igng.tokenmonitor.android.BuildConfig
+import com.igng.tokenmonitor.android.data.model.AppUpdateDto
 import com.igng.tokenmonitor.android.data.model.BatchPricingResultDto
 import com.igng.tokenmonitor.android.data.model.PeriodDto
 import com.igng.tokenmonitor.android.data.model.ProjectDto
@@ -106,6 +109,9 @@ import com.igng.tokenmonitor.android.ui.ConnectionUiState
 import com.igng.tokenmonitor.android.ui.ConnectionViewModel
 import com.igng.tokenmonitor.android.ui.HubUiState
 import com.igng.tokenmonitor.android.ui.HubViewModel
+import com.igng.tokenmonitor.android.ui.UpdateUiState
+import com.igng.tokenmonitor.android.ui.UpdateViewModel
+import com.igng.tokenmonitor.android.ui.update.openInstallPermissionSettings
 import com.igng.tokenmonitor.android.ui.components.AppCard
 import com.igng.tokenmonitor.android.ui.components.ShareEntry
 import com.igng.tokenmonitor.android.ui.components.ShareBarList
@@ -115,9 +121,11 @@ import com.igng.tokenmonitor.android.ui.components.ClientBranding
 import com.igng.tokenmonitor.android.ui.components.EmptyState
 import com.igng.tokenmonitor.android.ui.components.MetricHeroCard
 import com.igng.tokenmonitor.android.ui.components.SegmentedTokenBar
+import com.igng.tokenmonitor.android.ui.components.formatIsoCompact
 import com.igng.tokenmonitor.android.ui.components.formatTokens
 import com.igng.tokenmonitor.android.ui.components.formatTokensShort
 import com.igng.tokenmonitor.android.ui.components.formatUsd
+import java.util.Locale
 
 @Composable
 fun MoreHubScreen(
@@ -939,6 +947,7 @@ fun SettingsScreen(
   onBack: () -> Unit, onHome: (() -> Unit)? = null,
   hubRates: Map<String, Double> = emptyMap(),
   hubRatesDate: String? = null,
+  updateViewModel: UpdateViewModel,
   preferencesViewModel: PreferencesViewModel = hiltViewModel()
 ) {
   if (state.loading) {
@@ -954,7 +963,9 @@ fun SettingsScreen(
     return
   }
   val uriHandler = LocalUriHandler.current
+  val context = LocalContext.current
   val prefs by preferencesViewModel.preferences.collectAsStateWithLifecycle()
+  val updateState by updateViewModel.state.collectAsStateWithLifecycle()
   val haptics = rememberAppHaptics()
   val scrollState = rememberScrollState()
   val scrolled = rememberScrolledFlag(scrollState)
@@ -1261,6 +1272,35 @@ fun SettingsScreen(
           variant = FluentButtonVariant.Quiet
         )
       }
+      UpdateCard(
+        state = updateState,
+        onCheck = {
+          haptics.perform(HapticEvent.Refresh)
+          updateViewModel.checkForUpdate()
+        },
+        onDownload = {
+          haptics.perform(HapticEvent.Confirm)
+          updateViewModel.downloadUpdate()
+        },
+        onCancelDownload = {
+          haptics.perform(HapticEvent.Tap)
+          updateViewModel.cancelDownload()
+        },
+        onInstall = {
+          haptics.perform(HapticEvent.Confirm)
+          updateViewModel.requestInstall()
+        },
+        onOpenPermissionSettings = {
+          haptics.perform(HapticEvent.Tap)
+          if (!openInstallPermissionSettings(context)) {
+            updateViewModel.onInstallSettingsUnavailable()
+          }
+        },
+        onOpenRelease = { url ->
+          haptics.perform(HapticEvent.Tap)
+          uriHandler.openUri(url)
+        }
+      )
       AppCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
           Icon(
@@ -1281,31 +1321,194 @@ fun SettingsScreen(
           style = FluentTypeRamp.body2,
           color = LocalFluentColors.current.neutralForeground1
         )
-        Spacer(Modifier.height(FluentSpacingDefaults.xs))
-        Text(
-          "当前 Android 版本：${BuildConfig.VERSION_NAME}",
-          style = FluentTypeRamp.caption1,
-          color = LocalFluentColors.current.neutralForeground2
-        )
         state.health?.version?.let {
+          Spacer(Modifier.height(FluentSpacingDefaults.xs))
           Text(
             "当前连接 Hub 版本：$it",
             style = FluentTypeRamp.caption1,
             color = LocalFluentColors.current.neutralForeground2
           )
         }
-        Spacer(Modifier.height(FluentSpacingDefaults.xs))
-        FluentButton(
-          label = "检查并下载最新 Android 版本",
-          onClick = {
-            haptics.perform(HapticEvent.Tap)
-            uriHandler.openUri("https://github.com/IGNGserver/jiran/releases/latest")
-          },
-          variant = FluentButtonVariant.Quiet
-        )
       }
     }
   }
+}
+
+@Composable
+private fun UpdateCard(
+  state: UpdateUiState,
+  onCheck: () -> Unit,
+  onDownload: () -> Unit,
+  onCancelDownload: () -> Unit,
+  onInstall: () -> Unit,
+  onOpenPermissionSettings: () -> Unit,
+  onOpenRelease: (String) -> Unit
+) {
+  val colors = LocalFluentColors.current
+  val info = state.info
+  AppCard {
+    SectionHeader(
+      title = "版本与更新",
+      subtitle = "通过当前 Hub 检查并下载 Android 安装包；安装由系统确认。"
+    )
+    Spacer(Modifier.height(FluentSpacingDefaults.m))
+    FluentListRow(
+      primary = "当前版本",
+      secondary = buildString {
+        append("v")
+        append(state.currentVersion)
+        info?.currentChannel?.let {
+          append(" · ")
+          append(channelLabel(it))
+        }
+      },
+      trailing = {
+        FluentButton(
+          label = if (state.checking) "检查中" else "检查更新",
+          onClick = onCheck,
+          enabled = !state.checking && !state.downloading,
+          variant = FluentButtonVariant.Outline,
+          contentDescription = "检查 Android 应用更新"
+        )
+      },
+      contentPadding = 0.dp
+    )
+    if (info?.available == true) {
+      Spacer(Modifier.height(FluentSpacingDefaults.l))
+      Text(
+        "发现新版本 v${info.latestVersion.orEmpty()}",
+        style = FluentTypeRamp.title3,
+        color = colors.neutralForeground1
+      )
+      Spacer(Modifier.height(FluentSpacingDefaults.xxs))
+      Text(
+        updateMetaLine(info),
+        style = FluentTypeRamp.caption1,
+        color = colors.neutralForeground2
+      )
+      if (!info.installable) {
+        Spacer(Modifier.height(FluentSpacingDefaults.s))
+        Text(
+          when (info.message) {
+            "asset_missing" -> "该版本没有 Android 安装包，请打开 Releases 页面查看其他资产。"
+            "checksum_missing" -> "该版本缺少 SHA-256 校验信息，无法在应用内安全安装。"
+            else -> "该版本暂时无法在应用内安装。"
+          },
+          style = FluentTypeRamp.body2,
+          color = colors.errorForeground
+        )
+      }
+      if (info.installable) {
+        Spacer(Modifier.height(FluentSpacingDefaults.m))
+        when {
+          state.downloading -> {
+            val progress = state.progress
+            if (progress != null) {
+              FluentProgressBar(fraction = progress)
+            } else {
+              FluentProgressRing(size = 20.dp, strokeWidth = 2.dp)
+            }
+            Spacer(Modifier.height(FluentSpacingDefaults.xs))
+            Text(
+              downloadLine(state),
+              style = FluentTypeRamp.caption1,
+              color = colors.neutralForeground2
+            )
+            Spacer(Modifier.height(FluentSpacingDefaults.s))
+            FluentButton(
+              label = "取消下载",
+              onClick = onCancelDownload,
+              variant = FluentButtonVariant.Quiet
+            )
+          }
+          state.downloadedUri != null -> {
+            FluentButton(
+              label = if (state.needsInstallPermission) "等待安装授权" else "安装已下载版本",
+              onClick = onInstall,
+              enabled = !state.needsInstallPermission,
+              filledWidth = true
+            )
+          }
+          else -> {
+            FluentButton(
+              label = "下载并安装",
+              onClick = onDownload,
+              filledWidth = true
+            )
+          }
+        }
+      }
+      if (state.needsInstallPermission) {
+        Spacer(Modifier.height(FluentSpacingDefaults.m))
+        Text(
+          "系统尚未允许计然安装未知应用。授权后返回即可继续安装，无需重新下载。",
+          style = FluentTypeRamp.body2,
+          color = colors.warningForeground
+        )
+        Spacer(Modifier.height(FluentSpacingDefaults.xs))
+        FluentButton(
+          label = "去允许安装",
+          onClick = onOpenPermissionSettings,
+          variant = FluentButtonVariant.Outline
+        )
+      }
+    }
+    state.message?.let { message ->
+      Spacer(Modifier.height(FluentSpacingDefaults.m))
+      Text(
+        message,
+        style = FluentTypeRamp.body2,
+        color = if (state.isError) colors.errorForeground else colors.neutralForeground2
+      )
+    }
+    // This stays available on an old Hub or a failed check, which would
+    // otherwise leave the user with a message and no way to reach the APK.
+    val releaseUrl = info?.notesUrl
+      ?: info?.releaseUrl
+      ?: "https://github.com/IGNGserver/jiran-monitor/releases"
+    Spacer(Modifier.height(FluentSpacingDefaults.xs))
+    FluentButton(
+      label = if (info?.available == true) "查看更新说明" else "打开 Releases 页面",
+      onClick = { onOpenRelease(releaseUrl) },
+      variant = FluentButtonVariant.Quiet
+    )
+  }
+}
+
+private fun updateMetaLine(info: AppUpdateDto): String = buildString {
+  info.publishedAt?.takeIf { it.isNotBlank() }?.let {
+    append("发布 ")
+    append(formatIsoCompact(it))
+    append(" · ")
+  }
+  info.assetSize?.takeIf { it > 0 }?.let {
+    append(formatUpdateBytes(it))
+    append(" · ")
+  }
+  append(channelLabel(info.latestChannel))
+  append(" · 下载后由系统安装器确认")
+}
+
+private fun downloadLine(state: UpdateUiState): String {
+  val percent = state.progress?.let { "${(it * 100).toInt()}% · " }.orEmpty()
+  val total = state.totalBytes
+  return if (total != null && total > 0) {
+    "$percent${formatUpdateBytes(state.downloadedBytes)} / ${formatUpdateBytes(total)}"
+  } else {
+    "$percent${formatUpdateBytes(state.downloadedBytes)}"
+  }
+}
+
+private fun formatUpdateBytes(bytes: Long): String = when {
+  bytes >= 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / 1024.0 / 1024.0)
+  bytes >= 1024L -> String.format(Locale.getDefault(), "%.0f KB", bytes / 1024.0)
+  else -> "$bytes B"
+}
+
+private fun channelLabel(channel: String?): String = when (channel) {
+  "test" -> "预发布渠道"
+  "stable" -> "正式渠道"
+  else -> "未知渠道"
 }
 
 fun availableSessions(stats: StatsDto?): List<Pair<String, SessionDto>> {

@@ -51,6 +51,11 @@ services:
       TOKEN_MONITOR_HUB_PROBE_DEADLINE_MS: ${TOKEN_MONITOR_HUB_PROBE_DEADLINE_MS:-${JIRAN_HUB_PROBE_DEADLINE_MS:-60000}}
       # Coalescing window for the fleet stats aggregation (ms).
       TOKEN_MONITOR_HUB_STATS_TTL_MS: ${TOKEN_MONITOR_HUB_STATS_TTL_MS:-${JIRAN_HUB_STATS_TTL_MS:-1000}}
+      # Android update metadata is resolved from GitHub Releases. The cache keeps
+      # the unauthenticated 60-requests/hour ceiling from being spent per tap; a
+      # token is optional and never leaves the Hub.
+      TOKEN_MONITOR_UPDATE_GITHUB_TOKEN: ${TOKEN_MONITOR_UPDATE_GITHUB_TOKEN:-${JIRAN_UPDATE_GITHUB_TOKEN:-}}
+      TOKEN_MONITOR_UPDATE_CACHE_MS: ${TOKEN_MONITOR_UPDATE_CACHE_MS:-${JIRAN_UPDATE_CACHE_MS:-600000}}
       # Legacy credential-encryption override and the Google OAuth client secret
       # used by the Antigravity account adapter.
       TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-}

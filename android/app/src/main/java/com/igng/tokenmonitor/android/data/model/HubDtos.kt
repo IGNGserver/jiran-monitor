@@ -16,6 +16,27 @@ data class HealthDto(
 )
 
 @Serializable
+data class AppUpdateDto(
+  val platform: String = "android",
+  val currentVersion: String = "",
+  val currentChannel: String = "stable",
+  val available: Boolean = false,
+  val installable: Boolean = false,
+  val latestVersion: String? = null,
+  val latestChannel: String? = null,
+  val releaseTag: String? = null,
+  val releaseUrl: String? = null,
+  val notesUrl: String? = null,
+  val publishedAt: String? = null,
+  val assetName: String? = null,
+  val assetUrl: String? = null,
+  val assetSize: Long? = null,
+  val sha256: String? = null,
+  val installMode: String = "apk",
+  val message: String? = null
+)
+
+@Serializable
 data class HubCapabilitiesDto(
   val stats: Boolean = true,
   val history: Boolean = true,
@@ -26,6 +47,12 @@ data class HubCapabilitiesDto(
   val deviceDelete: Boolean = false,
   val deviceRename: Boolean = false,
   val publicStats: Boolean = false,
+  /**
+   * Whether the Hub resolves Android release metadata through `/api/updates`.
+   * Older Hubs omit the flag and answer the route with 404; the client must then
+   * offer the release page rather than calling the result "up to date".
+   */
+  val updateCheck: Boolean = false,
   /**
    * Whether the Hub serves the staged first-paint endpoints
    * (`/api/stats/summary`, `/api/devices/{id}`, `/api/sessions`).
