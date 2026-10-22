@@ -1,6 +1,5 @@
 package com.igng.tokenmonitor.android.data.repository
 
-import android.os.Build
 import com.igng.tokenmonitor.android.data.local.ConnectionConfig
 import com.igng.tokenmonitor.android.data.local.ConnectionStorage
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
@@ -78,7 +77,7 @@ class HubRepository @Inject constructor(
    * revocable device session; an older Hub that has no `/api/auth/login` keeps
    * the legacy secret behaviour.
    */
-  suspend fun saveConnection(config: ConnectionConfig): HubResult<Unit> = safeCall {
+  suspend fun saveConnection(config: ConnectionConfig, deviceName: String = ""): HubResult<Unit> = safeCall {
     if (!config.isComplete) {
       throw IllegalArgumentException("请填写 Hub 密钥。")
     }
@@ -92,7 +91,7 @@ class HubRepository @Inject constructor(
             secret = config.secret,
             mode = "token",
             platform = "android",
-            deviceName = Build.MODEL.orEmpty()
+            deviceName = deviceName
           )
         )
         val token = login.token.orEmpty()

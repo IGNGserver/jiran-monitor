@@ -1,5 +1,7 @@
 package com.igng.tokenmonitor.android.ui
 
+import android.os.Build
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.igng.tokenmonitor.android.data.local.ConnectionConfig
@@ -84,7 +86,7 @@ class ConnectionViewModel @Inject constructor(private val repository: HubReposit
       _state.value.sessionToken
     )
     try {
-      when (val result = repository.saveConnection(config)) {
+      when (val result = repository.saveConnection(config, Build.MODEL.orEmpty())) {
         is HubResult.Success -> {
           val saved = withContext(Dispatchers.IO) { repository.connection() }
           _state.value = _state.value.copy(
