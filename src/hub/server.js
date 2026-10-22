@@ -42,6 +42,7 @@ const { createHubAccountService } = require('./accountService');
 const { createOAuthSessionManager } = require('./oauthService');
 const { createOutboundFetch } = require('../shared/outboundFetch');
 const { createDisplayRatesCache } = require('./displayRates');
+const { UpdateCheckError, createUpdateService } = require('./updates');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRICE_FIELDS = [
@@ -339,6 +340,7 @@ function createHub({
   accountConcurrency = 4,
   accountProbe,
   oauthFetch: injectedOAuthFetch = null,
+  updateService = null,
   // The one calendar the fleet buckets usage days into (IANA name). Unset keeps
   // every device on its own OS zone, which is the pre-fleet behaviour; when set,
   // the Hub advertises it to devices and uses it for its own clock fallbacks.
@@ -369,6 +371,21 @@ function createHub({
     const oauthHttpFetch = typeof injectedOAuthFetch === 'function'
       ? injectedOAuthFetch
       : (accountProbe ? undefined : outboundFetch);
+    // GitHub's unauthenticated release API is limited per source IP. The Hub
+    // caches the release document for ten minutes, and an operator can raise the
+    // ceiling with a token without exposing it to any client.
+    const resolvedUpdateService = updateService || createUpdateService({
+      fetchImpl: outboundFetch,
+      token: String(
+        process.env.JIRAN_UPDATE_GITHUB_TOKEN
+        || process.env.TOKEN_MONITOR_UPDATE_GITHUB_TOKEN
+        || ''
+      ).trim(),
+      cacheTtlMs: Number(
+        process.env.JIRAN_UPDATE_CACHE_MS
+        || process.env.TOKEN_MONITOR_UPDATE_CACHE_MS
+      ) || undefined
+    });
     const accountService = accountsEnabled !== false
     && resolvedAccountCredentialKey
     && typeof store.listHubAccounts === 'function'
@@ -1495,6 +1512,29 @@ function createHub({
          authenticated: true
       });
     }
+    // Update metadata is read through the Hub so the phone never has to reach
+    // GitHub itself and every client shares one cached release lookup. The
+    // route stays authenticated like every other read: the endpoint is a
+    // proxy for a public repository, not a public proxy.
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/updates') {
+      const result = authorize(AUTHENTICATED_SCOPE);
+      if (!result) return;
+      try {
+        const info = await resolvedUpdateService.getInfo({
+          platform: url.searchParams.get('platform') || 'android',
+          currentVersion: url.searchParams.get('currentVersion') || ''
+        });
+        return sendJson(res, 200, info);
+      } catch (error) {
+        const statusCode = error instanceof UpdateCheckError ? error.statusCode : 502;
+        if (statusCode !== 400) {
+          logger.warn?.(`[hub-update] ${error?.message || String(error)}`);
+        }
+        return sendJson(res, statusCode, {
+          error: error?.code || 'update_check_failed'
+        });
+      }
+    }
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/api/accounts') {
       const result = authorize(AUTHENTICATED_SCOPE);
       if (!result) return;
@@ -2085,7 +2125,8 @@ function createHub({
     getCachedStats: () => statsCache,
     // Observability for the SSE registry: a monotonic leak here is what made a
     // busy Hub degrade until restart. Exposed for tests and health diagnostics.
-    getSseClientCount: () => sseClients.size
+    getSseClientCount: () => sseClients.size,
+    updateService: resolvedUpdateService
   };
 }
 

@@ -23,7 +23,11 @@ function hubCapabilities(runtime, options = {}) {
     // keep using `/api/stats` alone, so absence means "not available".
     statsSummary: true,
     deviceDetail: true,
-    sessionList: true
+    sessionList: true,
+    // `/api/updates` resolves the newest installable Android release through the
+    // Hub. Older Hubs omit the flag and the client must fall back to the release
+    // page rather than treating a 404 as "no update".
+    updateCheck: true
   });
 }
 

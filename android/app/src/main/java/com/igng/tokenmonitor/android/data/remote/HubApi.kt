@@ -2,6 +2,7 @@ package com.igng.tokenmonitor.android.data.remote
 
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
 import com.igng.tokenmonitor.android.data.model.AccountsResponseDto
+import com.igng.tokenmonitor.android.data.model.AppUpdateDto
 import com.igng.tokenmonitor.android.data.model.BatchPricingResponseDto
 import com.igng.tokenmonitor.android.data.model.OAuthExchangeRequestDto
 import com.igng.tokenmonitor.android.data.model.OAuthStartDto
@@ -33,6 +34,15 @@ import retrofit2.http.Query
 interface HubApi {
   @GET("api/health") suspend fun health(): HealthDto
   @GET("api/capabilities") suspend fun capabilities(): HubAuthorizationDto
+  /**
+   * Release metadata for this Android build. The Hub resolves the release
+   * channel from [currentVersion] and returns the APK URL and SHA-256; the
+   * phone never talks to GitHub for the check itself.
+   */
+  @GET("api/updates") suspend fun updateInfo(
+    @Query("platform") platform: String = "android",
+    @Query("currentVersion") currentVersion: String
+  ): AppUpdateDto
   @GET("api/stats") suspend fun stats(): StatsDto
   /**
    * First-paint snapshot: the same aggregate as [stats], minus the per-device

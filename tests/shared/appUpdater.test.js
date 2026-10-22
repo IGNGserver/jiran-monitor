@@ -322,6 +322,17 @@ test('parseLatestReleasePayload returns normalized object for valid payload', ()
   });
 });
 
+test('parseLatestReleasePayload accepts the canonical jiran-monitor release URL', () => {
+  const result = parseLatestReleasePayload({
+    tag_name: 'v1.3.1',
+    html_url: 'https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.3.1',
+    prerelease: true
+  });
+  assert.equal(result.version, '1.3.1');
+  assert.equal(result.htmlUrl, 'https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.3.1');
+  assert.equal(result.prerelease, true);
+});
+
 test('parseLatestReleasePayload falls back to tag when name is missing', () => {
   const result = parseLatestReleasePayload({
     tag_name: 'v0.1.3',
