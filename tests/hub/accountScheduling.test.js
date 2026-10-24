@@ -304,6 +304,9 @@ test('concurrent identical OAuth renewals share one token exchange', async () =>
   release.resolve();
   const accounts = await Promise.all([first, second]);
   assert.deepEqual(accounts.map((account) => decryptCredential(store.hubCredentials.get(account.id), 'test-key').marker), ['first', 'second']);
+  await nextTurn();
+  await service.addAccount({ provider: 'codex', label: 'later', credential });
+  assert.equal(tokenCalls, 2, 'a completed exchange must not retain a token-keyed credential cache');
   await service.stop();
 });
 

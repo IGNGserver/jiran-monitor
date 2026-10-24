@@ -461,9 +461,6 @@ function createHubAccountService({
   const refreshFlights = new Map();
   const probeFlights = new Map();
   const tokenFlights = new Map();
-  // Ephemeral keyed fingerprints deduplicate physical renewal work without
-  // retaining raw refresh tokens or exposing a reusable credential digest.
-  const tokenFlightKey = crypto.randomBytes(32);
   const runtimeAccounts = new Map();
   const probeQueue = [];
   let activeProbes = 0;
@@ -471,16 +468,21 @@ function createHubAccountService({
 
   function refreshCredential(provider, credential, deps) {
     const refreshToken = credentialRefreshToken(credential);
-    const key = `${provider}:${crypto.createHmac('sha256', tokenFlightKey).update(refreshToken).digest('hex')}`;
-    const existing = tokenFlights.get(key);
+    // This is request single-flight, not a password verifier. Use exact opaque
+    // token identity only for the lifetime of its physical exchange; never
+    // persist, expose or log this map or produce a reusable credential digest.
+    let flights = tokenFlights.get(provider);
+    if (!flights) tokenFlights.set(provider, (flights = new Map()));
+    const existing = flights.get(refreshToken);
     const withCredential = (tokens) => ({ credential: credentialWithOAuthTokens(provider, credential, tokens), tokens });
     if (existing) return existing.promise.then(withCredential);
     const pending = new Set();
     const entry = { promise: refreshOAuthToken(provider, refreshToken, { ...deps, fetch: trackedFetch(deps.fetch, pending) }) };
-    tokenFlights.set(key, entry);
+    flights.set(refreshToken, entry);
     const cleanup = async () => {
       await Promise.allSettled([...pending]);
-      if (tokenFlights.get(key) === entry) tokenFlights.delete(key);
+      if (flights.get(refreshToken) === entry) flights.delete(refreshToken);
+      if (!flights.size && tokenFlights.get(provider) === flights) tokenFlights.delete(provider);
     };
     void entry.promise.then(cleanup, cleanup);
     return entry.promise.then(withCredential);
