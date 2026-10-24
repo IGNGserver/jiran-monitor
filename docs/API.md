@@ -383,6 +383,15 @@ unknown id returns `404 {"error":"device_not_found"}`. Advertised as
 
 ## `GET /api/sessions`
 
+Stats envelopes also expose additive invalidation tokens: each device may carry
+`detailRevision`, and `sessionRevision` maps `today`, `month`, and `allTime` to
+opaque strings. Use these instead of the fleet timestamp when caching the
+corresponding detail document. They change with relevant data or window expiry,
+not unrelated account/device updates; they are not counters and must not be
+compared across Hub restarts. Older Hubs omit them, so clients retain their
+timestamp/history-revision fallback. Authorization still applies to every read;
+these tokens are not credentials or persistent browser-cache permissions.
+
 Requires the owner key. The aggregate session list on its own, so
 `/api/stats` no longer has to carry it for a screen the user may never open.
 Returns `{ total, shown, sessions }`:

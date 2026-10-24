@@ -184,7 +184,9 @@ test('HTTP ingest reuses the one stats aggregation for its response and SSE upda
     assert.equal(ingest.status, 200);
     assert.equal((await ingest.json()).stats.periods.allTime.totalTokens, 5);
     assert.match(await readUntil(reader, (text) => text.includes('event: stats')), /reason":"ingest"/);
-    assert.equal(listCalls, 1);
+    // The warm read model replaces the committed contribution; response/SSE
+    // reuse must not reload the fleet merely to aggregate the same mutation.
+    assert.equal(listCalls, 0);
     await reader.cancel();
   } finally {
     controller.abort();

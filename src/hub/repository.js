@@ -1,6 +1,7 @@
 'use strict';
 
 const mysql = require('mysql2/promise');
+const { isDeepStrictEqual } = require('node:util');
 const { emptySubscriptionDocument } = require('../shared/subscriptionDisplay');
 
 const RESERVED_DYNAMIC_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -186,6 +187,90 @@ function addTokenCost(mapTokens, mapCosts, key, tokens, cost) {
   mapCosts[id] = mapNumber(mapCosts, id) + cost;
 }
 
+// Bound both placeholder count and parameter bytes (including UTF-8 JSON). A
+// single oversized row remains one statement: splitting a row would change the
+// ledger. Normal event rows are also bounded by their VARCHAR column widths.
+function* writeBatches(rows) {
+  let batch = [];
+  let bytes = 0;
+  for (const row of rows) {
+    const rowBytes = row.reduce((size, value) => size + 16 + (
+      typeof value === 'string' ? Buffer.byteLength(value) : 8
+    ), 0);
+    if (batch.length && (batch.length >= 500 || bytes + rowBytes > 512 * 1024)) {
+      yield batch;
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(row);
+    bytes += rowBytes;
+  }
+  if (batch.length) yield batch;
+}
+
+function placeholders(rows) {
+  return rows.map((row) => `(${row.map(() => '?').join(', ')})`).join(', ');
+}
+
+function storedSnapshot(record) {
+  const stored = { ...record };
+  delete stored.limits;
+  delete stored.limitsOnly;
+  return stored;
+}
+
+function sameStoredValue(left, right) {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  const leftArray = Array.isArray(left);
+  const rightArray = Array.isArray(right);
+  if (leftArray || rightArray) {
+    if (!leftArray || !rightArray || left.length !== right.length) return false;
+  } else {
+    // Normalization uses null-prototype dictionaries; MySQL JSON parses them as
+    // ordinary objects. Their prototypes are not persisted content. Keep strict
+    // comparison for non-JSON objects rather than treating Dates/Maps as {}.
+    const leftPrototype = Object.getPrototypeOf(left);
+    const rightPrototype = Object.getPrototypeOf(right);
+    if ((leftPrototype !== null && leftPrototype !== Object.prototype)
+      || (rightPrototype !== null && rightPrototype !== Object.prototype)) return isDeepStrictEqual(left, right);
+  }
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every((key) => hasOwn(right, key) && sameStoredValue(left[key], right[key]));
+}
+
+function sameSnapshotExceptTimes(previous, current) {
+  // JSON_SET below writes strings, matching normalized wire timestamps. Other
+  // types or absent fields take the full snapshot path without coercion.
+  if (typeof current.updatedAt !== 'string' || typeof current.receivedAt !== 'string') return false;
+  const withoutTimes = (record) => {
+    const content = { ...record };
+    delete content.updatedAt;
+    delete content.receivedAt;
+    return content;
+  };
+  return sameStoredValue(withoutTimes(previous), withoutTimes(current));
+}
+
+const SESSION_COUNTERS = [
+  ['totalTokens', 'total_tokens'], ['inputTokens', 'input_tokens'], ['outputTokens', 'output_tokens'],
+  ['cacheReadTokens', 'cache_read_tokens'], ['cacheWriteTokens', 'cache_write_tokens'],
+  ['reasoningTokens', 'reasoning_tokens'], ['messageCount', 'message_count']
+];
+
+function sameSession(row, summary) {
+  if (!SESSION_COUNTERS.every(([field, column]) => number(row[column]) === number(summary[field]))) return false;
+  // Compare at the existing DECIMAL(24,10) storage precision, without rounding
+  // the value we send to MySQL or touching the immutable ledger's prices.
+  if (number(row.cost_usd) !== Number(number(summary.costUsd).toFixed(10))) return false;
+  if (iso(row.started_at) !== iso(summary.startedAt) || iso(row.last_used_at) !== iso(summary.lastUsedAt)) return false;
+  const models = parseJson(row.models, {}) || {};
+  const next = summary.models || {};
+  return Object.keys(models).length === Object.keys(next).length
+    && Object.keys(models).every((key) => hasOwn(next, key) && models[key] === next[key]);
+}
+
 function createRepository(pool) {
   async function listDeviceRecords(executor = pool) {
     // Do not sort the JSON snapshots in MySQL. With a large snapshot, sorting
@@ -204,6 +289,14 @@ function createRepository(pool) {
     return rows.length ? parseJson(rows[0].snapshot_json, null) : null;
   }
 
+  async function getActiveDeviceRecord(deviceId, executor = pool) {
+    const [rows] = await executor.execute(`SELECT state.snapshot_json
+      FROM device_ingest_state state
+      INNER JOIN devices device ON device.device_id = state.device_id
+      WHERE device.device_id = ? AND device.deleted_at IS NULL`, [deviceId]);
+    return rows.length ? parseJson(rows[0].snapshot_json, null) : null;
+  }
+
   // The ingest baseline and the device row are updated in the same transaction.
   // Locking the row before reading the baseline serializes cumulative deltas for
   // one device while leaving different devices fully concurrent.
@@ -215,37 +308,73 @@ function createRepository(pool) {
     return rows.length > 0;
   }
 
-  async function saveDevice(record, executor = pool) {
-    const storedRecord = { ...record };
-    delete storedRecord.limits;
-    delete storedRecord.limitsOnly;
-    await executor.execute(`INSERT INTO devices (
-      device_id, hostname, platform, updated_at, received_at, agent_version, agent_runtime,
-      tracked_clients, client_status, wsl_status, projects_enabled,
-      all_time_projects_omitted, all_time_projects_incomplete, sync_upload_interval_ms,
-      period_windows, limits, history
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      hostname = VALUES(hostname), platform = VALUES(platform), updated_at = VALUES(updated_at),
-      received_at = VALUES(received_at), agent_version = VALUES(agent_version), agent_runtime = VALUES(agent_runtime),
-      tracked_clients = VALUES(tracked_clients), client_status = VALUES(client_status), wsl_status = VALUES(wsl_status),
-      projects_enabled = VALUES(projects_enabled), all_time_projects_omitted = VALUES(all_time_projects_omitted),
-      all_time_projects_incomplete = VALUES(all_time_projects_incomplete),
-      sync_upload_interval_ms = VALUES(sync_upload_interval_ms), period_windows = VALUES(period_windows),
-      limits = VALUES(limits), history = VALUES(history), deleted_at = NULL`, [
-      record.deviceId, record.hostname || '', record.platform || '', date(record.updatedAt), date(record.receivedAt),
+  async function saveDevice(record, executor = pool, options = {}) {
+    const stored = storedSnapshot(record);
+    // This option is the persisted display snapshot read under the caller's
+    // transaction/device lock, never a raw cumulative upload or another device.
+    const previous = options.previousRecord?.deviceId === record.deviceId
+      ? storedSnapshot(options.previousRecord) : null;
+    let serialized;
+    const serialize = () => (serialized ??= JSON.stringify(stored));
+    const columns = [
+      'hostname', 'platform', 'updated_at', 'received_at', 'agent_version', 'agent_runtime',
+      'tracked_clients', 'client_status', 'wsl_status', 'projects_enabled',
+      'all_time_projects_omitted', 'all_time_projects_incomplete', 'sync_upload_interval_ms',
+      'period_windows', 'limits'
+    ];
+    const values = [
+      record.hostname || '', record.platform || '', date(record.updatedAt), date(record.receivedAt),
       record.agentVersion || '', record.agentRuntime || '', json(record.trackedClients), json(record.clientStatus),
       json(record.wslStatus), record.projectsEnabled ?? null, record.allTimeProjectsOmitted ?? null,
       record.allTimeProjectsIncomplete ?? null, record.syncUploadIntervalMs ?? null, json(record.periodWindows),
-      null, json(record.history)
-    ]);
-    await executor.execute(`INSERT INTO device_ingest_state (device_id, snapshot_json)
-      VALUES (?, ?) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, JSON.stringify(storedRecord)]);
-    // The ingest baseline mirrors the display snapshot on the regular path; the
-    // `transferred` flag survives the refresh because it is only written by
-    // transferDeviceData and cleared by an explicit re-anchor there.
+      null
+    ];
+    if (!previous || !sameStoredValue(previous.history, stored.history)) {
+      columns.push('history');
+      values.push(json(record.history));
+    }
+    if (previous) {
+      await executor.execute(`UPDATE devices SET ${columns.map((column) => `${column} = ?`).join(', ')},
+        deleted_at = NULL WHERE device_id = ?`, [...values, record.deviceId]);
+    } else {
+      await executor.execute(`INSERT INTO devices (device_id, ${columns.join(', ')})
+        VALUES (?, ${columns.map(() => '?').join(', ')})
+        ON DUPLICATE KEY UPDATE ${columns.map((column) => `${column} = VALUES(${column})`).join(', ')},
+        deleted_at = NULL`, [record.deviceId, ...values]);
+    }
+    if (!previous || !sameStoredValue(previous, stored)) {
+      if (previous && sameSnapshotExceptTimes(previous, stored)) {
+        await executor.execute(`UPDATE device_ingest_state SET snapshot_json = JSON_SET(snapshot_json,
+          '$.updatedAt', ?, '$.receivedAt', ?) WHERE device_id = ?`, [record.updatedAt, record.receivedAt, record.deviceId]);
+      } else {
+        await executor.execute(`INSERT INTO device_ingest_state (device_id, snapshot_json)
+          VALUES (?, ?) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, serialize()]);
+      }
+    }
+    // Legacy callers still mirror display -> baseline. Ingest may explicitly
+    // supply the raw cumulative record when the display is transfer-adjusted;
+    // display-only updates must use baseline:false. Never clear `transferred`.
+    if (options.baseline === false) return;
+    const baseline = options.baseline === undefined || options.baseline === record
+      ? stored : storedSnapshot(options.baseline);
+    // Only a known persisted RAW baseline may authorize a skipped/partial
+    // write. In particular previousRecord is not evidence: transfers deliberately
+    // make display and raw differ. Unknown/first persistence keeps the upsert.
+    const previousBaseline = options.previousBaseline?.deviceId === record.deviceId
+      ? storedSnapshot(options.previousBaseline) : null;
+    if (previousBaseline) {
+      if (sameStoredValue(previousBaseline, baseline)) return;
+      if (sameSnapshotExceptTimes(previousBaseline, baseline)) {
+        await executor.execute(`UPDATE device_ingest_baseline SET snapshot_json = JSON_SET(snapshot_json,
+          '$.updatedAt', ?, '$.receivedAt', ?) WHERE device_id = ?`, [baseline.updatedAt, baseline.receivedAt, record.deviceId]);
+        return;
+      }
+    }
+    // The usual rawCumulative is a shallow clone of the unadjusted display.
+    // Reuse its serialization even when those root objects are not identical.
+    const baselineJson = sameStoredValue(stored, baseline) ? serialize() : JSON.stringify(baseline);
     await executor.execute(`INSERT INTO device_ingest_baseline (device_id, snapshot_json, transferred)
-      VALUES (?, ?, 0) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, JSON.stringify(storedRecord)]);
+      VALUES (?, ?, 0) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, baselineJson]);
   }
 
   async function countDevices(executor = pool) {
@@ -459,6 +588,12 @@ function createRepository(pool) {
     return rows.map(hubSessionRow);
   }
 
+  async function loadActiveHubSessions(executor = pool) {
+    const [rows] = await executor.query(`SELECT * FROM hub_sessions
+      WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(3))`);
+    return rows.map(hubSessionRow);
+  }
+
   async function createHubSession(session, executor = pool) {
     await executor.execute(`INSERT INTO hub_sessions (
       session_id, token_hash, secret_fingerprint, device_name, platform, user_agent,
@@ -575,47 +710,76 @@ function createRepository(pool) {
       message_count_delta, price_input_per_million, price_output_per_million,
       price_cache_read_per_million, price_cache_write_per_million, pricing_source,
       pricing_snapshot_at, cost_usd, credits
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-    for (const event of events) {
-      await executor.execute(sql, [
+    ) VALUES `;
+    function* rows() {
+      for (const event of events) yield [
         deviceId, event.client, event.sessionId, event.model, event.provider, event.projectId,
         event.projectLabel, date(event.recordedAt), event.inputTokens, event.outputTokens,
         event.cacheReadTokens, event.cacheWriteTokens, event.reasoningTokens, event.messageCount,
         event.priceInputPerMillion, event.priceOutputPerMillion, event.priceCacheReadPerMillion,
         event.priceCacheWritePerMillion, event.pricingSource, event.pricingSnapshotAt ? date(event.pricingSnapshotAt) : null,
         event.costUsd, event.credits
-      ]);
+      ];
+    }
+    for (const batch of writeBatches(rows())) {
+      await executor.execute(sql + placeholders(batch), batch.flat());
     }
   }
 
-  async function replaceSessions(deviceId, summaries, executor = pool) {
+  async function replaceSessions(deviceId, summaries, executor = pool, { previousSummaries } = {}) {
     // This is a mutable materialized view of the latest all-time snapshot, not
-    // the immutable event ledger. Replacing it also makes a device-side counter
-    // reset visible without rewriting any usage_events rows.
-    await executor.execute('DELETE FROM sessions WHERE device_id = ?', [deviceId]);
+    // the immutable event ledger. Diff against SQL, not a process cache: rollback,
+    // delete, rename and transfer must all be visible to the next replacement.
+    // The caller's device lock/transaction serializes concurrent ingests.
+    // Optional fast path: these must describe the actual persisted sessions,
+    // NOT an ingest baseline (which survives deletion and may differ on transfer).
+    // Callers unable to guarantee that provenance leave this option unset.
+    let existing;
+    if (previousSummaries !== undefined) {
+      existing = previousSummaries.map((summary) => ({
+        client: summary.client,
+        session_id: summary.sessionId,
+        ...Object.fromEntries(SESSION_COUNTERS.map(([field, column]) => [column, summary[field]])),
+        cost_usd: Number(number(summary.costUsd).toFixed(10)),
+        started_at: summary.startedAt,
+        last_used_at: summary.lastUsedAt,
+        models: summary.models
+      }));
+    } else {
+      [existing] = await executor.execute('SELECT * FROM sessions WHERE device_id = ?', [deviceId]);
+    }
+    const key = (item) => `${item.client}\u0000${item.sessionId ?? item.session_id}`;
+    const previous = new Map(existing.map((row) => [key(row), row]));
+    const changed = [];
+    for (const summary of summaries) {
+      const row = previous.get(key(summary));
+      if (!row || !sameSession(row, summary)) changed.push(summary);
+      previous.delete(key(summary));
+    }
+    // Only missing identities are removed; a counter reset is an ordinary
+    // upsert, and changing a model/timestamp without changing totals still writes.
+    for (const batch of writeBatches([...previous.values()].map((row) => [row.client, row.session_id]))) {
+      await executor.execute(`DELETE FROM sessions WHERE device_id = ?
+        AND (client, session_id) IN (${placeholders(batch)})`, [deviceId, ...batch.flat()]);
+    }
     const columns = `(device_id, client, session_id, total_tokens, input_tokens, output_tokens,
       cache_read_tokens, cache_write_tokens, reasoning_tokens, message_count, cost_usd,
       started_at, last_used_at, models)`;
-    const valuesPerRow = 14;
-    const batchSize = 500;
-    for (let offset = 0; offset < summaries.length; offset += batchSize) {
-      const batch = summaries.slice(offset, offset + batchSize);
-      const values = [];
-      const placeholders = batch.map((summary) => {
-        values.push(
+    function* rows() {
+      for (const summary of changed) yield [
           deviceId, summary.client, summary.sessionId, summary.totalTokens, summary.inputTokens,
           summary.outputTokens, summary.cacheReadTokens, summary.cacheWriteTokens, summary.reasoningTokens,
           summary.messageCount, summary.costUsd, date(summary.startedAt), date(summary.lastUsedAt),
           JSON.stringify(summary.models)
-        );
-        return `(${Array.from({ length: valuesPerRow }, () => '?').join(', ')})`;
-      }).join(', ');
-      await executor.execute(`INSERT INTO sessions ${columns} VALUES ${placeholders}
+      ];
+    }
+    for (const batch of writeBatches(rows())) {
+      await executor.execute(`INSERT INTO sessions ${columns} VALUES ${placeholders(batch)}
         ON DUPLICATE KEY UPDATE total_tokens = VALUES(total_tokens), input_tokens = VALUES(input_tokens),
           output_tokens = VALUES(output_tokens), cache_read_tokens = VALUES(cache_read_tokens),
           cache_write_tokens = VALUES(cache_write_tokens), reasoning_tokens = VALUES(reasoning_tokens),
           message_count = VALUES(message_count), cost_usd = VALUES(cost_usd), started_at = VALUES(started_at),
-          last_used_at = VALUES(last_used_at), models = VALUES(models)`, values);
+          last_used_at = VALUES(last_used_at), models = VALUES(models)`, batch.flat());
     }
   }
 
@@ -704,7 +868,12 @@ function createRepository(pool) {
     const existing = await getDeviceRecord(previousId, executor);
     if (!existing) return { renamed: false, reason: 'baseline_missing' };
 
-    await saveDevice({ ...existing, deviceId: nextId }, executor);
+    const baseline = await getIngestBaseline(previousId, executor);
+    const nextBaseline = { ...(baseline.snapshot || existing), deviceId: nextId };
+    await saveDevice({ ...existing, deviceId: nextId }, executor, { baseline: nextBaseline });
+    if (baseline.transferred) {
+      await saveIngestBaseline(nextId, nextBaseline, { transferred: true }, executor);
+    }
     await executor.execute('UPDATE usage_events SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
     await executor.execute('UPDATE sessions SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
     await executor.execute('DELETE FROM device_ingest_state WHERE device_id = ?', [previousId]);
@@ -728,17 +897,11 @@ function createRepository(pool) {
     const result = emptyUsageRange();
     if (!(fromAt.getTime() < toAt.getTime())) return result;
 
-    const [countRows] = await executor.execute(
-      'SELECT COUNT(*) AS count FROM usage_events WHERE recorded_at >= ? AND recorded_at < ?',
-      [fromAt, toAt]
-    );
-    result.eventCount = Number(countRows[0]?.count || 0);
-    if (result.eventCount === 0) return result;
-
     const [rows] = await executor.execute(`
       SELECT
         client,
         model,
+        COUNT(*) AS event_count,
         SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens,
         SUM(cost_usd) AS cost_usd,
         SUM(credits) AS credits
@@ -748,6 +911,7 @@ function createRepository(pool) {
     `, [fromAt, toAt]);
 
     for (const row of rows) {
+      result.eventCount += number(row.event_count);
       const tokens = Math.round(number(row.tokens));
       const cost = number(row.cost_usd);
       const credits = number(row.credits);
@@ -822,6 +986,7 @@ function createRepository(pool) {
     createHubSession,
     deleteDevice,
     getDeviceRecord,
+    getActiveDeviceRecord,
     getHubAccount,
     getHubAccountCredential,
     getHubAccountForUpdate,
@@ -838,6 +1003,7 @@ function createRepository(pool) {
     listHubAccountSnapshots,
     listDeviceRecords,
     listHubSessions,
+    loadActiveHubSessions,
     listKnownModels,
     listPricing,
     lockDevice,

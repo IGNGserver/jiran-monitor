@@ -112,7 +112,9 @@ async function fileExists(filePath) {
 
 async function resolveStaticAsset(webRoot, pathname) {
   const direct = resolveWebFile(webRoot, pathname);
-  if (!direct) return null;
+  // Compressed siblings are transport representations, never public assets or
+  // SPA routes. Only an existing original may negotiate access to its sibling.
+  if (!direct || /\.(?:br|gz)$/i.test(direct)) return null;
 
   const directStat = await fileExists(direct);
   if (directStat) return { filePath: direct, stat: directStat };
@@ -134,9 +136,24 @@ async function resolveStaticAsset(webRoot, pathname) {
   return null;
 }
 
-function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = {}) {
+async function precompressedFile(filePath, stat, encoding) {
+  if (!encoding) return null;
+  const compressedPath = `${filePath}.${encoding === 'gzip' ? 'gz' : 'br'}`;
+  try {
+    const compressedStat = await fsp.lstat(compressedPath);
+    // Build output is deployed as one tree. A leftover older sibling must not
+    // supply a previous shell/SW under the current original's ETag. Do not follow
+    // a sibling symlink, even when the ordinary original is inside the web root.
+    if (compressedStat.isFile() && compressedStat.mtimeMs >= stat.mtimeMs) {
+      return { filePath: compressedPath, stat: compressedStat };
+    }
+  } catch {}
+  return null;
+}
+
+async function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = {}) {
   const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
-  const compressible = /\.(?:html|js|css|json|svg|webmanifest)$/.test(filePath);
+  const compressible = /\.(?:html|js|css|json|map|svg|txt|webmanifest)$/i.test(filePath);
   const encoding = compressible && stat.size >= 1024 ? negotiateEncoding(res) : null;
   const headers = corsHeaders({
     ...SECURITY_HEADERS,
@@ -160,6 +177,10 @@ function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = 
     return true;
   }
 
+  // A 304 has no representation body/length and does not need another disk read.
+  const precompressed = await precompressedFile(filePath, stat, encoding);
+  if (precompressed) headers['content-length'] = precompressed.stat.size;
+
   if (method === 'HEAD') {
     res.writeHead(200, headers);
     res.end();
@@ -167,7 +188,7 @@ function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = 
   }
 
   res.writeHead(200, headers);
-  const stream = fs.createReadStream(filePath);
+  const stream = fs.createReadStream(precompressed?.filePath || filePath);
   stream.on('error', () => {
     if (!res.headersSent) {
       res.writeHead(500, corsHeaders({
@@ -177,7 +198,7 @@ function sendFile(res, filePath, stat, { method = 'GET', revalidate = false } = 
     }
     res.end();
   });
-  if (encoding) {
+  if (encoding && !precompressed) {
     const compressor = encoding === 'br'
       ? zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } })
       : zlib.createGzip();

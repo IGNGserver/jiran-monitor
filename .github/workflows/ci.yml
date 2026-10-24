@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -45,6 +48,64 @@ jobs:
         run: |
           docker build --target runtime -t jiran-loading:ci .
           docker run --rm --entrypoint node jiran-loading:ci -e "const assert=require('node:assert/strict'); const fs=require('node:fs'); const root=require('./src/hub/static').DEFAULT_WEB_ROOT; assert.ok(root.endsWith('dist/web')); assert.ok(fs.readFileSync(root+'/index.html','utf8').includes('/assets/app-'));"
+
+  hub-integration:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports:
+          - 127.0.0.1:3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Create a disposable database with ephemeral credentials
+        run: |
+          node <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const mysql = require('mysql2/promise');
+          (async () => {
+            const suffix = crypto.randomBytes(6).toString('hex');
+            const database = `jiran_ci_${suffix}`;
+            const comparisonDatabase = `${database}_slice`;
+            const user = `jiran_ci_${suffix}`;
+            const password = crypto.randomBytes(32).toString('hex');
+            console.log(`::add-mask::${password}`);
+            const db = await mysql.createConnection({host:'127.0.0.1',user:'root',port:3306});
+            await db.query(`CREATE DATABASE \`${database}\``);
+            await db.query(`CREATE DATABASE \`${comparisonDatabase}\``);
+            await db.query('CREATE USER ?@? IDENTIFIED BY ?', [user, '%', password]);
+            await db.query(`GRANT ALL ON \`${database}\`.* TO ?@?`, [user, '%']);
+            await db.query(`GRANT ALL ON \`${comparisonDatabase}\`.* TO ?@?`, [user, '%']);
+            await db.end();
+            fs.appendFileSync(process.env.GITHUB_ENV, `MYSQL_TEST_HOST=127.0.0.1\nMYSQL_TEST_PORT=3306\nMYSQL_TEST_DATABASE=${database}\nMYSQL_TEST_USER=${user}\nMYSQL_TEST_PASSWORD=${password}\n`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `JIRAN_MYSQL_HOST=127.0.0.1\nJIRAN_MYSQL_DATABASE=${comparisonDatabase}\nJIRAN_MYSQL_USER=${user}\nJIRAN_MYSQL_PASSWORD=${password}\n`);
+          })().catch(error => { console.error(error.code || error.name); process.exitCode = 1; });
+          NODE
+      - name: Verify real transactions, history patches and session diffs
+        run: npm run test:mysql
+      - name: Compare durable MySQL and SQLite transaction slices
+        env:
+          JIRAN_DISPOSABLE_MYSQL: '1'
+          BUILD_SCRATCH_ROOT: ${{ runner.temp }}/jiran-build
+        run: |
+          mkdir -p "$BUILD_SCRATCH_ROOT"
+          node scripts/experiments/hub-resource-comparison/mysql-slice.js --devices=20 --sessions=40 --iterations=100 --output="$BUILD_SCRATCH_ROOT/mysql-slice.json"
+          node -e "const r=require(process.env.BUILD_SCRATCH_ROOT+'/mysql-slice.json'); if(!r.success||!r.comparisonMeasured||!r.crossBackendPayloadsMatch)process.exit(1); console.log(JSON.stringify(r,null,2));"
 
   # The Android client is a separate toolchain, so it gets its own job rather than
   # a step that can only be reached after npm ci on three OSes. This exists because

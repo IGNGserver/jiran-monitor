@@ -1567,12 +1567,10 @@ function aggregateHistory(devices, options = {}) {
 // emptyPeriod()-shaped object). Shared by device aggregation and the WSL merge so
 // the two never diverge on which period fields exist.
 //
-// `options.omitSessionDetail` skips the per-session archive and the project
-// rollup. The mobile first-paint payload reads headline totals, the client/model
-// split and provenance, but not session rows, and those rows are the single
-// largest field on the wire (they dominate a fleet snapshot). The detail stays
-// reachable through `/api/devices/:id` and `/api/sessions`; only the copy folded
-// into the fleet aggregate is dropped.
+// `options.omitAggregateSessions` skips only the per-session archive: projects
+// are already normalized rollups, so retaining them never walks sessions. The
+// older `omitSessionDetail` skips both collections for compatibility. Ordinary
+// collector/WSL merges keep both collections unchanged.
 function addPeriodInto(target, source, options = {}) {
   if (source.estimated === true) target.estimated = true;
   target.capabilities.tokenComponents = target.capabilities.tokenComponents === true
@@ -1687,6 +1685,8 @@ function addPeriodInto(target, source, options = {}) {
   }
   if (!options.omitSessionDetail) {
     for (const [key, project] of Object.entries(source.projects || {})) addProjectInto(target.projects, key, project);
+  }
+  if (!options.omitSessionDetail && !options.omitAggregateSessions) {
     for (const session of Object.values(source.sessions)) addSession(target, session);
   }
   return target;
@@ -1722,6 +1722,48 @@ function isPeriodExpired(record, periodName, nowMs) {
   return false;
 }
 
+// Read-only projection shared by aggregate and individual device reads. Unexpired
+// period objects remain shared with the normalized record; callers must not mutate
+// them. Expired periods are fresh empties, never edits to the cached source.
+function projectDeviceForNow(normalized, staleAfterMs, nowMs = Date.now()) {
+  const ageMs = nowMs - Date.parse(normalized.receivedAt || normalized.updatedAt || 0);
+  const deviceStaleAfterMs = staleAfterMsForSyncUpload(normalized.syncUploadIntervalMs, staleAfterMs);
+  const stale = Number.isFinite(ageMs) && deviceStaleAfterMs > 0 ? ageMs > deviceStaleAfterMs : false;
+  // Keep the device snapshot aligned with the same wall-clock expiry used by
+  // the aggregate. A stale device may still be valid for the current day;
+  // only a window that has actually ended is cleared from its device view.
+  const periods = {};
+  for (const periodName of PERIODS) {
+    const expired = isPeriodExpired(normalized, periodName, nowMs);
+    periods[periodName] = expired ? emptyPeriod() : normalized.periods[periodName];
+  }
+  return {
+    deviceId: normalized.deviceId,
+    hostname: normalized.hostname,
+    platform: normalized.platform,
+    ...(hasOwn(normalized, 'osName') ? { osName: normalized.osName } : {}),
+    ...(hasOwn(normalized, 'osVersion') ? { osVersion: normalized.osVersion } : {}),
+    agentVersion: normalized.agentVersion,
+    agentRuntime: normalized.agentRuntime,
+    updatedAt: normalized.updatedAt,
+    receivedAt: normalized.receivedAt,
+    ageMs: Number.isFinite(ageMs) ? ageMs : null,
+    stale,
+    ...(hasOwn(normalized, 'trackedClients') ? { trackedClients: normalized.trackedClients } : {}),
+    ...(hasOwn(normalized, 'clientStatus') ? { clientStatus: normalized.clientStatus } : {}),
+    ...(hasOwn(normalized, 'wslStatus') ? { wslStatus: normalized.wslStatus } : {}),
+    ...(hasOwn(normalized, 'projectsEnabled') ? { projectsEnabled: normalized.projectsEnabled } : {}),
+    ...(hasOwn(normalized, 'allTimeProjectsOmitted') ? { allTimeProjectsOmitted: normalized.allTimeProjectsOmitted } : {}),
+    ...(hasOwn(normalized, 'allTimeProjectsIncomplete') ? { allTimeProjectsIncomplete: normalized.allTimeProjectsIncomplete } : {}),
+    ...(hasOwn(normalized, 'sessionDetailsOmitted') ? { sessionDetailsOmitted: normalized.sessionDetailsOmitted } : {}),
+    ...(hasOwn(normalized, 'periodProjectsOmitted') ? { periodProjectsOmitted: normalized.periodProjectsOmitted } : {}),
+    ...(hasOwn(normalized, 'syncUploadIntervalMs') ? { syncUploadIntervalMs: normalized.syncUploadIntervalMs } : {}),
+    ...(hasOwn(normalized, 'periodWindows') ? { periodWindows: normalized.periodWindows } : {}),
+    periods,
+    limits: normalized.limits
+  };
+}
+
 function aggregateDevices(devices, staleAfterMs, nowMs = Date.now(), options = {}) {
   const aggregate = { updatedAt: new Date().toISOString(), periods: {}, devices: [], projectsIncomplete: false };
   const sessionDetailsOmitted = {};
@@ -1730,42 +1772,8 @@ function aggregateDevices(devices, staleAfterMs, nowMs = Date.now(), options = {
   const now = nowMs;
   for (const record of devices) {
     const normalized = options.normalized === true ? record : normalizeDeviceRecord(record);
-    const ageMs = now - Date.parse(normalized.receivedAt || normalized.updatedAt || 0);
-    const deviceStaleAfterMs = staleAfterMsForSyncUpload(normalized.syncUploadIntervalMs, staleAfterMs);
-    const stale = Number.isFinite(ageMs) && deviceStaleAfterMs > 0 ? ageMs > deviceStaleAfterMs : false;
-    // Keep the device snapshot aligned with the same wall-clock expiry used by
-    // the aggregate. A stale device may still be valid for the current day;
-    // only a window that has actually ended is cleared from its device view.
-    const periods = {};
-    for (const periodName of PERIODS) {
-      const expired = isPeriodExpired(normalized, periodName, now);
-      periods[periodName] = expired ? emptyPeriod() : normalized.periods[periodName];
-    }
-    aggregate.devices.push({
-      deviceId: normalized.deviceId,
-      hostname: normalized.hostname,
-      platform: normalized.platform,
-      ...(hasOwn(normalized, 'osName') ? { osName: normalized.osName } : {}),
-      ...(hasOwn(normalized, 'osVersion') ? { osVersion: normalized.osVersion } : {}),
-      agentVersion: normalized.agentVersion,
-      agentRuntime: normalized.agentRuntime,
-      updatedAt: normalized.updatedAt,
-      receivedAt: normalized.receivedAt,
-      ageMs: Number.isFinite(ageMs) ? ageMs : null,
-      stale,
-      ...(hasOwn(normalized, 'trackedClients') ? { trackedClients: normalized.trackedClients } : {}),
-      ...(hasOwn(normalized, 'clientStatus') ? { clientStatus: normalized.clientStatus } : {}),
-      ...(hasOwn(normalized, 'wslStatus') ? { wslStatus: normalized.wslStatus } : {}),
-      ...(hasOwn(normalized, 'projectsEnabled') ? { projectsEnabled: normalized.projectsEnabled } : {}),
-      ...(hasOwn(normalized, 'allTimeProjectsOmitted') ? { allTimeProjectsOmitted: normalized.allTimeProjectsOmitted } : {}),
-      ...(hasOwn(normalized, 'allTimeProjectsIncomplete') ? { allTimeProjectsIncomplete: normalized.allTimeProjectsIncomplete } : {}),
-      ...(hasOwn(normalized, 'sessionDetailsOmitted') ? { sessionDetailsOmitted: normalized.sessionDetailsOmitted } : {}),
-      ...(hasOwn(normalized, 'periodProjectsOmitted') ? { periodProjectsOmitted: normalized.periodProjectsOmitted } : {}),
-      ...(hasOwn(normalized, 'syncUploadIntervalMs') ? { syncUploadIntervalMs: normalized.syncUploadIntervalMs } : {}),
-      ...(hasOwn(normalized, 'periodWindows') ? { periodWindows: normalized.periodWindows } : {}),
-      periods,
-      limits: normalized.limits
-    });
+    const device = projectDeviceForNow(normalized, staleAfterMs, now);
+    aggregate.devices.push(device);
     if (
       normalized.allTimeProjectsOmitted === true
       || normalized.allTimeProjectsIncomplete === true
@@ -1780,8 +1788,7 @@ function aggregateDevices(devices, staleAfterMs, nowMs = Date.now(), options = {
       periodProjectsOmitted[periodName] = (periodProjectsOmitted[periodName] || 0) + count;
     }
     for (const periodName of PERIODS) {
-      if (isPeriodExpired(normalized, periodName, now)) continue;
-      addPeriodInto(aggregate.periods[periodName], normalizePeriod(normalized.periods[periodName]), options);
+      addPeriodInto(aggregate.periods[periodName], device.periods[periodName], options);
     }
   }
   aggregate.limits = aggregateLimits(aggregate.devices, staleAfterMs, now);
@@ -1832,11 +1839,9 @@ function aggregateDevices(devices, staleAfterMs, nowMs = Date.now(), options = {
 
 // Fields the first-paint payload cannot do without, per period.
 //
-// `sessions` and `projects` are deliberately absent: session rows alone are ~76%
-// of a fleet snapshot's bytes, and the mobile surfaces that read them (the
-// 会话 list and the 项目 rollup) are separate screens that pull their own
-// endpoint. Keeping the list explicit is what makes a new period field a
-// deliberate addition to the mobile payload instead of an accidental one.
+// `sessions` is deliberately absent: its archive dominates fleet snapshot bytes
+// and is fetched separately. Project rollups remain in SUMMARY_PERIOD_MAPS.
+// Keeping the lists explicit makes a new field a deliberate payload addition.
 const SUMMARY_PERIOD_FIELDS = [
   'totalTokens',
   'costUsd',
@@ -1908,8 +1913,8 @@ function summaryDevicePeriod(period = {}) {
  *
  * Not a second measurement: every value here is a reference to a value the full
  * aggregate already computed, minus the detail collections. Callers use it on the
- * result of an `aggregateDevices(..., { omitSessionDetail: true })` pass so the
- * session fold never happens in the first place.
+ * result of an `aggregateDevices(..., { normalized: true, omitAggregateSessions:
+ * true })` pass so neither period normalization nor the session fold happens.
  */
 function summarizeStats(stats = {}) {
   const periods = {};
@@ -2007,6 +2012,7 @@ module.exports = {
   normalizeModelNameForClient,
   normalizeDeviceRecord,
   normalizePeriod,
+  projectDeviceForNow,
   projectRollupFromSessions,
   summarizeStats
 };

@@ -59,19 +59,26 @@ class MemoryRepository {
 
   async getDeviceRecord(deviceId) { return clone(this.devices.get(deviceId) || null); }
 
+  async getActiveDeviceRecord(deviceId) {
+    return this.hiddenDevices.has(deviceId) ? null : this.getDeviceRecord(deviceId);
+  }
+
   // The in-memory store is single-threaded; keep the repository contract so
   // server tests exercise the same lock-before-baseline call sequence.
   async lockDevice(deviceId) { return this.devices.has(deviceId); }
 
-  async saveDevice(record) {
+  async saveDevice(record, _executor, options = {}) {
     const stored = { ...record };
     delete stored.limits;
     delete stored.limitsOnly;
     this.devices.set(record.deviceId, clone(stored));
     this.hiddenDevices.delete(record.deviceId);
-    // Mirror the MySQL repository: the regular write path refreshes the ingest
-    // baseline together with the display snapshot.
-    this.baselines.set(record.deviceId, clone(stored));
+    if (options.baseline !== false) {
+      const baseline = { ...(options.baseline === undefined ? stored : options.baseline) };
+      delete baseline.limits;
+      delete baseline.limitsOnly;
+      this.baselines.set(record.deviceId, clone(baseline));
+    }
   }
 
   async getIngestBaseline(deviceId) {
@@ -210,6 +217,13 @@ class MemoryRepository {
       .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)));
   }
 
+  async loadActiveHubSessions() {
+    const now = Date.now();
+    return [...this.hubSessions.values()]
+      .filter((session) => !session.revokedAt && (!session.expiresAt || Date.parse(session.expiresAt) > now))
+      .map(clone);
+  }
+
   async createHubSession(session) {
     this.hubSessions.set(session.sessionId, clone(session));
     return clone(session);
@@ -266,8 +280,15 @@ class MemoryRepository {
     for (const event of events) this.events.push({ id: this.events.length + 1, deviceId, ...clone(event) });
   }
 
-  async replaceSessions(deviceId, summaries) {
-    for (const key of [...this.sessions.keys()]) if (key.startsWith(`${deviceId}\u0000`)) this.sessions.delete(key);
+  async replaceSessions(deviceId, summaries, _executor, { previousSummaries } = {}) {
+    const previous = previousSummaries === undefined
+      ? [...this.sessions.entries()].filter(([key]) => key.startsWith(`${deviceId}\u0000`)).map(([, value]) => value)
+      : previousSummaries;
+    const nextKeys = new Set(summaries.map((summary) => `${deviceId}\u0000${summary.client}\u0000${summary.sessionId}`));
+    for (const summary of previous) {
+      const key = `${deviceId}\u0000${summary.client}\u0000${summary.sessionId}`;
+      if (!nextKeys.has(key)) this.sessions.delete(key);
+    }
     for (const summary of summaries) this.sessions.set(`${deviceId}\u0000${summary.client}\u0000${summary.sessionId}`, clone(summary));
   }
 
@@ -288,9 +309,10 @@ class MemoryRepository {
     this.devices.set(nextDeviceId, { ...clone(record), deviceId: nextDeviceId });
     this.devices.delete(previousDeviceId);
     if (this.baselines.has(previousDeviceId)) {
-      this.baselines.set(nextDeviceId, clone(this.baselines.get(previousDeviceId)));
+      this.baselines.set(nextDeviceId, { ...clone(this.baselines.get(previousDeviceId)), deviceId: nextDeviceId });
       this.baselines.delete(previousDeviceId);
     }
+    if (this.transferredDevices.delete(previousDeviceId)) this.transferredDevices.add(nextDeviceId);
     if (this.hiddenDevices.delete(previousDeviceId)) this.hiddenDevices.add(nextDeviceId);
     for (const event of this.events) if (event.deviceId === previousDeviceId) event.deviceId = nextDeviceId;
     const moved = [];

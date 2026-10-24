@@ -4,9 +4,32 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
+const { createReadStream, createWriteStream } = require('node:fs');
+const { pipeline } = require('node:stream/promises');
+const zlib = require('node:zlib');
 const esbuild = require('esbuild-wasm');
 
 const ROOT = path.resolve(__dirname, '..');
+
+// Siblings are transport variants only: the PWA graph and HTML keep referencing
+// the original content-addressed asset URLs. Walk one file at a time so adding
+// resources cannot turn this into an unbounded in-memory compression queue.
+async function precompressWebFiles(directory) {
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await precompressWebFiles(file);
+    } else if (entry.isFile() && /\.(?:html|js|css|json|map|svg|txt|webmanifest)$/i.test(entry.name)) {
+      if ((await fs.stat(file)).size < 1024) continue;
+      await Promise.all([
+        pipeline(createReadStream(file), zlib.createGzip({ level: 9 }), createWriteStream(`${file}.gz`)),
+        pipeline(createReadStream(file), zlib.createBrotliCompress({
+          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 }
+        }), createWriteStream(`${file}.br`))
+      ]);
+    }
+  }
+}
 
 async function buildWeb({ outdir = path.join(ROOT, 'dist/web') } = {}) {
   const source = path.join(ROOT, 'src/hub/web');
@@ -46,9 +69,10 @@ async function buildWeb({ outdir = path.join(ROOT, 'dist/web') } = {}) {
   await fs.writeFile(path.join(outdir, 'sw.js'), sw);
   const manifest = { version, precache, outputs: result.metafile.outputs };
   await fs.writeFile(path.join(outdir, 'asset-manifest.json'), JSON.stringify(manifest, null, 2));
+  await precompressWebFiles(outdir);
   console.log(`Web assets: ${outputs.length} hashed files; PWA revision ${version}`);
   return manifest;
 }
 
 if (require.main === module) buildWeb().catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { buildWeb };
+module.exports = { buildWeb, precompressWebFiles };

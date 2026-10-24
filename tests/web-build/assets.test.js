@@ -24,4 +24,12 @@ test('built shell and PWA reference the complete hashed bundler graph', { skip: 
     }
   }
   assert.ok(sw.includes(`jiran-web-${manifest.version}`));
+  assert.ok(manifest.precache.every((asset) => !/\.(?:gz|br)$/.test(asset)));
+  for (const asset of [...manifest.precache, '/sw.js', '/manifest.webmanifest', '/asset-manifest.json']) {
+    const file = path.join(root, asset);
+    const body = fs.readFileSync(file);
+    if (body.length < 1024) continue;
+    assert.deepEqual(zlib.gunzipSync(fs.readFileSync(`${file}.gz`)), body, `${asset} gzip sibling`);
+    assert.deepEqual(zlib.brotliDecompressSync(fs.readFileSync(`${file}.br`)), body, `${asset} brotli sibling`);
+  }
 });

@@ -12,6 +12,42 @@ const COMPRESSION_MIN_BYTES = 1024;
 // compressing a multi-megabyte fleet snapshot.
 const BROTLI_QUALITY = 4;
 const REQUEST_STARTED_AT = Symbol('jiran.requestStartedAt');
+const MAX_COMPRESSION_BYTES = 16 * 1024 * 1024;
+const MAX_COMPRESSION_JOBS = 4;
+let compressionBytes = 0;
+let compressionJobs = 0;
+
+function compressBounded(buffer, encoding) {
+  if (compressionJobs >= MAX_COMPRESSION_JOBS || compressionBytes + buffer.length > MAX_COMPRESSION_BYTES) return null;
+  compressionJobs++;
+  compressionBytes += buffer.length;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (error, value) => {
+      if (settled) return;
+      settled = true;
+      compressionJobs--;
+      compressionBytes -= buffer.length;
+      if (error) reject(error);
+      else resolve(value);
+    };
+    try {
+      if (encoding === 'br') zlib.brotliCompress(buffer, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }, done);
+      else zlib.gzip(buffer, done);
+    } catch (error) { done(error); }
+  });
+}
+
+function sendEncodedBuffer(res, statusCode, buffer, contentType, encoding, extraHeaders = {}) {
+  if (res.destroyed || res.writableEnded) return;
+  res.writeHead(statusCode, corsHeaders({
+    'content-type': contentType, 'cache-control': 'no-store', vary: 'accept-encoding',
+    ...responseTimingHeaders(res), ...extraHeaders,
+    ...(encoding ? { 'content-encoding': encoding } : {}),
+    'content-length': String(buffer.length)
+  }));
+  res.end(buffer);
+}
 
 function startResponseTiming(req) {
   req[REQUEST_STARTED_AT] = performance.now();
@@ -72,41 +108,93 @@ function negotiateEncoding(res) {
  * fire-and-forget contract. A compression failure falls back to the raw body.
  */
 function sendBuffer(res, statusCode, body, contentType, extraHeaders = {}) {
-  const headers = corsHeaders({
-    'content-type': contentType,
-    'cache-control': 'no-store',
-    vary: 'accept-encoding',
-    ...responseTimingHeaders(res),
-    ...extraHeaders
-  });
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
   const encoding = buffer.length >= COMPRESSION_MIN_BYTES ? negotiateEncoding(res) : null;
-  if (!encoding) {
-    headers['content-length'] = String(buffer.length);
-    res.writeHead(statusCode, headers);
-    res.end(buffer);
-    return;
+  const work = encoding && compressBounded(buffer, encoding);
+  // Overload falls back to identity, not an unbounded libuv queue retaining one
+  // fleet-sized Buffer per waiting response. No data or durability is sacrificed.
+  if (!work) return sendEncodedBuffer(res, statusCode, buffer, contentType, null, extraHeaders);
+  work.then(
+    (compressed) => sendEncodedBuffer(res, statusCode, compressed, contentType, encoding, extraHeaders),
+    () => sendEncodedBuffer(res, statusCode, buffer, contentType, null, extraHeaders)
+  );
+}
+
+// Opt-in identity cache for immutable, authenticated read envelopes only. A
+// WeakMap avoids retaining the source object graph; the LRU retains at most the
+// configured bytes of UTF-8/encoded representations. Never use for mutable state,
+// cookies or request-dependent bodies, and never bypass route authorization.
+function createJsonResponseCache({ maxBytes = 8 * 1024 * 1024, maxEntries = 8 } = {}) {
+  const byObject = new WeakMap();
+  const lru = new Set();
+  let bytes = 0;
+  const counters = { serializations: 0, compressions: 0, hits: 0 };
+  function evict(entry) {
+    if (!entry?.active) return;
+    entry.active = false;
+    lru.delete(entry);
+    bytes -= entry.bytes;
+    entry.encoded.clear();
   }
-  const done = (error, compressed) => {
-    if (res.destroyed || res.writableEnded) return;
-    if (error) {
-      // Never fail a response because compression failed: send it uncompressed.
-      delete headers['content-encoding'];
-      headers['content-length'] = String(buffer.length);
-      res.writeHead(statusCode, headers);
-      res.end(buffer);
-      return;
+  function reserve(size, protectedEntry = null) {
+    for (const entry of lru) {
+      if (bytes + size <= maxBytes && lru.size < maxEntries + (protectedEntry ? 1 : 0)) break;
+      if (entry !== protectedEntry) evict(entry);
     }
-    headers['content-encoding'] = encoding;
-    headers['content-length'] = String(compressed.length);
-    res.writeHead(statusCode, headers);
-    res.end(compressed);
-  };
-  if (encoding === 'br') {
-    zlib.brotliCompress(buffer, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }, done);
-  } else {
-    zlib.gzip(buffer, done);
+    return bytes + size <= maxBytes;
   }
+  function representation(payload) {
+    let entry = payload && typeof payload === 'object' ? byObject.get(payload)?.deref() : null;
+    if (entry?.active) {
+      counters.hits++;
+      lru.delete(entry);
+      lru.add(entry);
+      return entry;
+    }
+    counters.serializations++;
+    const buffer = Buffer.from(JSON.stringify(payload));
+    entry = { buffer, bytes: buffer.length, encoded: new Map(), pending: new Map(), active: false };
+    if (payload && typeof payload === 'object' && buffer.length <= maxBytes && maxEntries > 0 && reserve(buffer.length)) {
+      entry.active = true;
+      bytes += entry.bytes;
+      lru.add(entry);
+      byObject.set(payload, new WeakRef(entry));
+    }
+    return entry;
+  }
+  return {
+    prepare(payload) { return representation(payload).buffer; },
+    async send(res, statusCode, payload, headers = {}) {
+      const entry = representation(payload);
+      const encoding = entry.buffer.length >= COMPRESSION_MIN_BYTES ? negotiateEncoding(res) : null;
+      let buffer = encoding ? entry.encoded.get(encoding) : entry.buffer;
+      let selectedEncoding = buffer && encoding;
+      if (!buffer && encoding) {
+        let work = entry.pending.get(encoding);
+        if (!work) {
+          work = compressBounded(entry.buffer, encoding);
+          if (work) {
+            counters.compressions++;
+            entry.pending.set(encoding, work);
+            work.then((value) => {
+              if (entry.active && reserve(value.length, entry)) {
+                entry.encoded.set(encoding, value);
+                entry.bytes += value.length;
+                bytes += value.length;
+              }
+            }, () => {}).finally(() => entry.pending.delete(encoding));
+          }
+        }
+        if (work) {
+          try { buffer = await work; selectedEncoding = encoding; } catch (_) { /* identity fallback */ }
+        }
+      }
+      if (!buffer) { buffer = entry.buffer; selectedEncoding = null; }
+      sendEncodedBuffer(res, statusCode, buffer, 'application/json; charset=utf-8', selectedEncoding, headers);
+    },
+    clear() { for (const entry of [...lru]) evict(entry); },
+    metrics: () => ({ ...counters, bytes, entries: lru.size, compressionJobs, compressionBytes })
+  };
 }
 
 function abortError(reason) {
@@ -269,6 +357,7 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES) {
 }
 
 module.exports = {
+  createJsonResponseCache,
   startResponseTiming,
   responseTimingHeaders,
   COMPRESSION_MIN_BYTES,
