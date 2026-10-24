@@ -461,6 +461,9 @@ function createHubAccountService({
   const refreshFlights = new Map();
   const probeFlights = new Map();
   const tokenFlights = new Map();
+  // Ephemeral keyed fingerprints deduplicate physical renewal work without
+  // retaining raw refresh tokens or exposing a reusable credential digest.
+  const tokenFlightKey = crypto.randomBytes(32);
   const runtimeAccounts = new Map();
   const probeQueue = [];
   let activeProbes = 0;
@@ -468,7 +471,7 @@ function createHubAccountService({
 
   function refreshCredential(provider, credential, deps) {
     const refreshToken = credentialRefreshToken(credential);
-    const key = `${provider}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
+    const key = `${provider}:${crypto.createHmac('sha256', tokenFlightKey).update(refreshToken).digest('hex')}`;
     const existing = tokenFlights.get(key);
     const withCredential = (tokens) => ({ credential: credentialWithOAuthTokens(provider, credential, tokens), tokens });
     if (existing) return existing.promise.then(withCredential);
