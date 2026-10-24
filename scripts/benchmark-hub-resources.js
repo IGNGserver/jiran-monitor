@@ -288,6 +288,9 @@ async function runScenario(options, devices) {
   const child = fork(__filename, ['--worker', JSON.stringify({ ...options, devices })], {
     env, cwd: path.dirname(options.output), stdio: ['ignore', 'ignore', 'pipe', 'ipc']
   });
+  // Observe close immediately: Windows keeps the worker's cwd locked until the
+  // process really exits. kill() only requests termination and is not a join.
+  const childClosed = new Promise((resolve) => child.once('close', resolve));
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-8192); });
   const streams = [];
@@ -332,7 +335,10 @@ async function runScenario(options, devices) {
     throw new Error(`${error.message}\n${stderr}`, { cause: error });
   } finally {
     for (const stream of streams) stream.close();
-    child.kill('SIGTERM');
+    const force = setTimeout(() => child.kill('SIGKILL'), 1000);
+    force.unref?.();
+    try { child.kill('SIGTERM'); await childClosed; }
+    finally { clearTimeout(force); }
   }
 }
 

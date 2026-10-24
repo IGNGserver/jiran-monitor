@@ -61,6 +61,10 @@ replace the cached device directly. At 50 devices the measured CPU per completed
 round is about 64% lower; the sampled RSS peak is about 8% lower. A separate
 30-second baseline check (41 rounds) reported ingest/summary/full p50
 400.48/186.40/147.42 ms, CPU 532.98 ms/round and sampled RSS 456.68 MiB.
+The optimized 30-second confirmation completed 63 rounds, with p50
+67.10/24.20/150.07 ms, CPU 202.85 ms/round, sampled RSS 388.34 MiB and zero fleet
+list reads. The full-read median was effectively unchanged in this confirmation;
+the larger benefits are minimal ingest, summary and CPU per completed round.
 
 These results do **not** show uniform memory improvement: the 5/20-device peaks
 increase, reflecting cache retention/GC and workload tradeoffs. Full reads at
@@ -408,6 +412,21 @@ This local run is not a SQLite/MySQL speed comparison. WAL concurrency, process
 crash/server restart, power loss, real Hub transactions and multi-client load
 remain outside this experiment. The isolated MySQL 8.4.8 CI service is the venue
 for the actual paired measurement; do not fill in a MySQL result before it runs.
+
+The first paired PR execution is now recorded in
+[`hub-integration`, run 40090945053](https://github.com/IGNGserver/jiran-monitor/actions/runs/40090945053/job/120863298590):
+real MySQL tests **5/5 passed**, including resumed transfers and timestamp/history
+patches. The storage slice measured 100 durable COMMIT ACKs and 100 verification
+reads after reconnect for each backend. SQLite 3.53.4 WAL/FULL write p50 was
+**0.542 ms**; MySQL 8.4.8 InnoDB write p50 was **4.470 ms**. Snapshot/raw/ledger
+counts and exact tokens, ten-place USD and credits matched before/after reconnect
+and across backends (`success`, `comparisonMeasured`, `crossBackendPayloadsMatch`
+were all true). This is the three-table slice on one disposable CI runner, not a
+complete Hub adapter or a NAS deployment benchmark. It supports further SQLite
+evaluation, not immediate migration or a whole-stack 8x performance claim. The
+overall first CI run failed only the Windows benchmark worker-directory cleanup;
+the driver now joins worker termination before returning, and the PR rerun is
+the final cross-platform acceptance gate.
 
 ## Checks
 
