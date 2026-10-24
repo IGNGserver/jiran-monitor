@@ -6,16 +6,13 @@ const fs = require('node:fs');
 const { URL } = require('node:url');
 const {
   PERIODS,
-  aggregateDevices,
-  aggregateHistory,
+  emptyPeriod,
   mergeDeviceRecord,
   mergePeriods,
   normalizeDeviceRecord,
   summarizeStats
 } = require('../shared/usage');
 const { normalizeLimitsSummary } = require('../shared/limits');
-const { historyPreview, historyRevision } = require('../shared/history');
-const { deviceHistoryRevision } = require('../shared/history');
 const {
   emptySubscriptionDocument,
   isStaleSubscriptionWrite,
@@ -23,7 +20,7 @@ const {
 } = require('../shared/subscriptionDisplay');
 const { CURRENCY_CODES, normalizeCurrency } = require('../shared/currency');
 const { currentHubBuild } = require('../shared/hubBuildIdentity');
-const { readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
+const { createJsonResponseCache, readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
 const {
   AUTHENTICATED_SCOPE,
   createHubAuthPolicy,
@@ -40,12 +37,14 @@ const { tryServeStatic } = require('./static');
 const { lookupModelPricing, normalizePromaPricing } = require('../shared/collector');
 const { createMySqlPool, createRepository } = require('./repository');
 const { createCatalogPricingLookup, pricingNotFound } = require('./pricing-upstream');
-const { calculateUsageEventDeltas, summarizeSessions } = require('./usage-events');
+const { calculateUsageEventDeltas, summarizeSessions, usageCandidates } = require('./usage-events');
 const { createHubAccountService } = require('./accountService');
 const { createOAuthSessionManager } = require('./oauthService');
 const { createOutboundFetch } = require('../shared/outboundFetch');
 const { createDisplayRatesCache } = require('./displayRates');
 const { UpdateCheckError, createUpdateService } = require('./updates');
+const { createFleetReadModel } = require('./fleetReadModel');
+const { createLatestPublisher } = require('./latestPublisher');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRICE_FIELDS = [
@@ -479,7 +478,7 @@ function createHub({
       oauthFetch: oauthHttpFetch,
       logger,
       onUpdate: () => {
-        invalidateStatsCache();
+        invalidateStatsCache({ fleet: false, limits: true });
         void broadcastStats('account-update');
       }
     })
@@ -506,12 +505,14 @@ function createHub({
   }
   let statsCache = null;
   let subscriptionsCache = emptySubscriptionDocument();
-  // Normalized fleet + aggregate history, shared by /api/stats, /api/history and
-  // /api/devices. Never outlives a mutation: `invalidateStatsCache` drops it.
-  let recordsBundle = null;
-  let recordsBundleInFlight = null;
-  // A stale in-flight aggregation must not be allowed to repopulate the cache
-  // after a mutation. The generation is advanced by every invalidation.
+  let subscriptionsLoaded = false;
+  let subscriptionsInFlight = null;
+  let limitsCache = null;
+  let limitsCacheGeneration = -1;
+  let limitsInFlight = null;
+  let limitsGeneration = 0;
+  const fleet = createFleetReadModel({ store, staleAfterMs, timeZone: resolvedFleetTimeZone });
+  const jsonResponses = createJsonResponseCache();
   let statsCacheGeneration = 0;
   const ingestLocks = new Map();
 
@@ -533,81 +534,60 @@ function createHub({
   // memory; a failed fetch falls back to the shared built-in table so cost
   // rendering never breaks because a third-party endpoint is down.
   const displayRates = createDisplayRatesCache({ fetchImpl: oauthHttpFetch, logger });
-  // Coalescing window for the stats aggregation. `statsCache` is invalidated by
-  // every mutation (ingest, rename, delete, subscriptions), so the only thing a
-  // TTL adds is protection against a burst of identical reads. Without it every
-  // /api/stats poll, /api/devices poll and SSE snapshot recomputed the whole
-  // fleet synchronously on the single event loop (measured 266 ms at 20 devices,
-  // 1564 ms at 50), which stalls the heartbeats and every other request.
+  // TTL applies only to the cheap envelope/presence overlay. Heavy usage and
+  // history projections live until their own data or calendar boundary changes.
   const statsCacheTtlMs = Math.max(0, Number(process.env.TOKEN_MONITOR_HUB_STATS_TTL_MS ?? 1000) || 0);
-  let statsCacheAt = 0;
-  let statsInFlight = null;
+  const envelopes = new Map();
+  const statsInFlight = new Map();
+  const statsGenerations = new WeakMap();
 
-  function invalidateStatsCache() {
+  function invalidateStatsCache({ fleet: resetFleet = true, record = null, limits = false } = {}) {
     statsCacheGeneration += 1;
     statsCache = null;
-    statsCacheAt = 0;
-    statsInFlight = null;
-    // The normalized fleet + history bundle is derived from the fleet and goes
-    // stale with it. Dropping the reference also releases a multi-megabyte
-    // retained snapshot immediately rather than at the next rebuild.
-    recordsBundle = null;
-    recordsBundleInFlight = null;
+    envelopes.clear();
+    if (record) fleet.put(record, { normalized: true });
+    else if (resetFleet) fleet.reset();
+    if (limits) { limitsGeneration++; limitsCache = null; }
   }
 
-  async function getSubscriptions() {
-    if (typeof store.getSubscriptions === 'function') {
-      subscriptionsCache = await store.getSubscriptions();
+  async function getSubscriptions({ fresh = false } = {}) {
+    if (subscriptionsLoaded && !fresh) return subscriptionsCache;
+    if (!subscriptionsInFlight) {
+      subscriptionsInFlight = Promise.resolve().then(async () => {
+        if (typeof store.getSubscriptions === 'function') subscriptionsCache = await store.getSubscriptions();
+        subscriptionsLoaded = true;
+        return subscriptionsCache;
+      }).finally(() => { subscriptionsInFlight = null; });
     }
-    return subscriptionsCache;
+    return subscriptionsInFlight;
   }
 
-  // One read of the device fleet, shared by every derived document.
-  //
-  // `/api/stats`, `/api/history` and `/api/devices` all start from
-  // `listDeviceRecords()`, and any ingest/mutation invalidates all three. Without
-  // this each endpoint paid its own SELECT plus its own `normalizeDeviceRecord()`
-  // pass, and `/api/history` — which does not even look at the periods — paid for
-  // a second full fleet read that the stats path had already performed.
-  //
-  // The bundle only lives as long as the mutation generation does; a write drops
-  // it (see `invalidateStatsCache`) so a cached read can never outlive its data.
-  async function getFleetRecords() {
-    if (recordsBundle) return recordsBundle;
-    if (recordsBundleInFlight) return recordsBundleInFlight;
-    const generation = statsCacheGeneration;
-    const inFlight = (async () => {
-      const rawRecords = await store.listDeviceRecords();
-      const records = rawRecords.map((record) => normalizeDeviceRecord(record));
-      const history = aggregateHistory(records, { normalized: true, fallbackTodayKey: hubDayKey() });
-      const bundle = { rawRecords, records, history };
-      if (generation === statsCacheGeneration) recordsBundle = bundle;
-      return bundle;
-    })().finally(() => {
-      if (recordsBundleInFlight === inFlight) recordsBundleInFlight = null;
-    });
-    recordsBundleInFlight = inFlight;
-    return inFlight;
+  async function getLimits(minimumGeneration = limitsGeneration) {
+    if (!accountService) return normalizeLimitsSummary({});
+    if (limitsCache && limitsCacheGeneration >= minimumGeneration) return limitsCache;
+    if (!limitsInFlight) {
+      const generation = limitsGeneration;
+      limitsInFlight = accountService.getLimitsSummary().then((result) => {
+        if (generation === limitsGeneration) { limitsCache = result; limitsCacheGeneration = generation; }
+        return { value: result, generation };
+      }).finally(() => { limitsInFlight = null; });
+    }
+    const result = await limitsInFlight;
+    return result.generation >= minimumGeneration ? result.value : getLimits(minimumGeneration);
   }
 
-  // The fleet aggregate is the expensive part; both shapes derive from one
-  // computation. `summarizeStats` is a projection over the same numbers (no
-  // re-measurement), so the summary endpoint costs one extra shallow copy rather
-  // than a second aggregation.
-  async function computeStatsBundle() {
-    const { rawRecords, records, history } = await getFleetRecords();
-    const stats = aggregateDevices(records, staleAfterMs, Date.now(), { normalized: true });
-    const centralLimits = accountService
-      ? await accountService.getLimitsSummary()
-      : normalizeLimitsSummary({});
+  async function computeStatsBundle(summary = false) {
+    const [{ stats, history }, centralLimits, subscriptions] = await Promise.all([
+      fleet.snapshot({ summary }), getLimits(), getSubscriptions()
+    ]);
     for (const device of stats.devices) delete device.limits;
     stats.limits = centralLimits;
     stats.limitsAuthority = accountService ? 'hub' : 'none';
     stats.staleAfterMs = staleAfterMs;
-    stats.historyPreview = historyPreview(history);
-    stats.historyRevision = historyRevision(history);
-    stats.deviceHistoryRevision = deviceHistoryRevision(rawRecords);
-    stats.subscriptionsUpdatedAt = (await getSubscriptions()).updatedAt || '';
+    stats.historyPreview = history.preview;
+    stats.historyRevision = history.revision;
+    stats.deviceHistoryRevision = history.deviceRevision;
+    stats.subscriptionsUpdatedAt = subscriptions.updatedAt || '';
     stats.apiVersion = HUB_API_VERSION;
     stats.capabilities = capabilities;
     // The fleet calendar is part of the read contract: clients compute their
@@ -617,26 +597,36 @@ function createHub({
     return stats;
   }
 
-  async function getStatsBundle() {
+  async function getStatsBundle(summary = false, minimumGeneration = statsCacheGeneration) {
     const now = Date.now();
-    if (statsCache && statsCacheTtlMs > 0 && now - statsCacheAt < statsCacheTtlMs) {
-      return statsCache;
+    const mode = summary ? 'summary' : 'full';
+    const cached = envelopes.get(mode);
+    if (cached && statsCacheTtlMs > 0 && now - cached.at < statsCacheTtlMs) {
+      return cached.bundle;
     }
-    // Share one computation across concurrent readers instead of stacking them.
-    if (statsInFlight) return statsInFlight;
+    // Keep at most one physical build per shape, including across invalidations.
+    const existing = statsInFlight.get(mode);
+    if (existing) {
+      const bundle = await existing;
+      // A reader needs the state committed when it arrived, not an impossible
+      // globally-idle instant under a continuous ingest stream.
+      if ((statsGenerations.get(bundle) ?? -1) >= minimumGeneration) return bundle;
+      return getStatsBundle(summary, minimumGeneration);
+    }
     const generation = statsCacheGeneration;
-    const inFlight = computeStatsBundle()
+    const inFlight = computeStatsBundle(summary)
       .then((bundle) => {
+        statsGenerations.set(bundle, generation);
         if (generation === statsCacheGeneration) {
-          statsCache = bundle;
-          statsCacheAt = Date.now();
+          envelopes.set(mode, { bundle, at: Date.now() });
+          if (!summary) statsCache = bundle;
         }
         return bundle;
       })
       .finally(() => {
-        if (statsInFlight === inFlight) statsInFlight = null;
+        if (statsInFlight.get(mode) === inFlight) statsInFlight.delete(mode);
       });
-    statsInFlight = inFlight;
+    statsInFlight.set(mode, inFlight);
     return inFlight;
   }
 
@@ -652,31 +642,11 @@ function createHub({
   // so the mobile client is not forced to download every device's session rows
   // before it can draw a headline number.
   async function getStatsSummary() {
-    const bundle = await getStatsBundle();
-    if (bundle.__summary) return bundle.__summary;
-    const summary = summarizeStats(bundle);
-    Object.defineProperty(bundle, '__summary', { value: summary, enumerable: false, configurable: true });
-    return summary;
+    return getStatsBundle(true);
   }
 
   async function getHistory(deviceId = '') {
-    const { rawRecords, history } = await getFleetRecords();
-    const scopedDeviceId = String(deviceId || '').trim();
-    return scopedDeviceId
-      ? aggregateHistoryRangeFromRecords(rawRecords, history, scopedDeviceId)
-      : history;
-  }
-
-  // `/api/history?deviceId=` is a separate document from the fleet aggregate:
-  // `aggregateHistory(records.filter(...))` re-merges one device's history from
-  // its stored daily/monthly tiers. The fleet bundle already holds every raw
-  // record, so the scoped read reuses that list instead of issuing a second
-  // `listDeviceRecords()` (the query that made /api/history cost as much as a
-  // full /api/stats rebuild).
-  function aggregateHistoryRangeFromRecords(rawRecords, fleetHistory, deviceId) {
-    const scoped = rawRecords.filter((record) => String(record?.deviceId || record?.id || '') === deviceId);
-    if (scoped.length === rawRecords.length) return fleetHistory;
-    return aggregateHistory(scoped.map((record) => normalizeDeviceRecord(record)), { fallbackTodayKey: hubDayKey() });
+    return (await fleet.history(String(deviceId || '').trim())).document;
   }
 
   async function setSubscriptions(subscriptions, baseUpdatedAt) {
@@ -685,7 +655,7 @@ function createHub({
       error.code = 'bad_subscriptions';
       throw error;
     }
-    const current = await getSubscriptions();
+    const current = await getSubscriptions({ fresh: true });
     if (isStaleSubscriptionWrite(current, baseUpdatedAt)) {
       const error = new Error('stale_write');
       error.code = 'stale_write';
@@ -710,7 +680,7 @@ function createHub({
     subscriptionsCache = next;
     // stats.subscriptionsUpdatedAt is part of the stats payload, so it has to be
     // rebuilt rather than served from the coalescing cache.
-    invalidateStatsCache();
+    invalidateStatsCache({ fleet: false });
     await broadcastStats('subscriptions');
     return subscriptionsCache;
   }
@@ -1003,6 +973,32 @@ function createHub({
   const sseClients = new Set();
   const sseHeartbeats = new Map();
   const sseStates = new Map();
+  const bulkReads = new Set();
+
+  function trackBulkRead(res) {
+    let finish;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    const done = () => {
+      bulkReads.delete(pending);
+      res.off('finish', done);
+      res.off('close', done);
+      finish();
+    };
+    bulkReads.add(pending);
+    res.once('finish', done);
+    res.once('close', done);
+  }
+
+  async function yieldToBulkReads() {
+    if (!bulkReads.size) return;
+    let timer;
+    try {
+      // Give an explicit legacy full-document request priority over duplicating
+      // megabytes onto SSE sockets. A slow reader cannot hold back live updates
+      // indefinitely; the delay is bounded well below the collector cadence.
+      await Promise.race([Promise.all([...bulkReads]), new Promise((resolve) => { timer = setTimeout(resolve, 250); })]);
+    } finally { clearTimeout(timer); }
+  }
   // A stream is authenticated once at open. Keep the owning session id so
   // revoking a device can close its already-open stream instead of letting it
   // keep receiving fleet data until the client reconnects.
@@ -1100,29 +1096,69 @@ function createHub({
   // get the first-paint projection plus the `historyRevision` /
   // `deviceHistoryRevision` tokens that tell them the omitted documents moved;
   // everyone else keeps the full document.
-  async function statsFrames(reason, stats, at) {
+  function statsFrames(reason, stats, at) {
     let full = null;
     let slim = null;
-    const payloadFor = async (shape) => {
+    const frame = (document) => Buffer.concat([
+      Buffer.from(`event: stats\ndata: {"type":"stats","reason":${JSON.stringify(reason)},"stats":`),
+      jsonResponses.prepare(document),
+      Buffer.from(`,"at":${JSON.stringify(at)}}\n\n`)
+    ]);
+    const payloadFor = (shape) => {
       if (shape !== 'slim') {
-        if (full === null) full = sseFormat('stats', { type: 'stats', reason, stats, at });
+        if (full === null) full = frame(stats);
         return full;
       }
       if (slim === null) {
-        slim = sseFormat('stats', { type: 'stats', reason, stats: await getStatsSummary(), at });
+        slim = frame(stats.detail === 'summary' ? stats : summarizeStats(stats));
       }
       return slim;
     };
     for (const res of sseClients) {
-      writeSse(res, await payloadFor(sseShapes.get(res)));
+      writeSse(res, payloadFor(sseShapes.get(res)));
     }
   }
 
-  async function broadcastStats(reason = 'update', statsOverride = null) {
-    if (sseClients.size === 0 && statsListeners.size === 0) return;
-    const stats = statsOverride || await getStatsBundle();
+  let boundaryTimer = null;
+  let stopped = false;
+  let lastPublishedGeneration = -1;
+  const publisher = createLatestPublisher({
+    async publish(reason) {
+      if (sseClients.size === 0 && statsListeners.size === 0) return;
+      await yieldToBulkReads();
+      const needsFull = statsListeners.size > 0 || [...sseShapes.values()].some((shape) => shape !== 'slim');
+      const stats = await getStatsBundle(!needsFull);
+      const generation = statsGenerations.get(stats) ?? statsCacheGeneration;
+      if (generation < lastPublishedGeneration || stopped) return;
+      lastPublishedGeneration = generation;
+      publishStats(reason, stats);
+      await armBoundaryTimer();
+    },
+    onError(error) { logger.warn?.(`[hub-broadcast] failed: ${error?.message || error}`); }
+  });
+
+  async function armBoundaryTimer() {
+    if (boundaryTimer) clearTimeout(boundaryTimer);
+    boundaryTimer = null;
+    if (stopped || (sseClients.size === 0 && statsListeners.size === 0)) return;
+    const boundary = await fleet.nextBoundary();
+    if (stopped || (sseClients.size === 0 && statsListeners.size === 0)) return;
+    boundaryTimer = setTimeout(() => {
+      boundaryTimer = null;
+      invalidateStatsCache({ fleet: false });
+      void broadcastStats('calendar');
+    }, Math.max(1, Math.min(0x7fffffff, boundary - Date.now())));
+    boundaryTimer.unref?.();
+  }
+
+  function broadcastStats(reason = 'update') {
+    if (stopped || (sseClients.size === 0 && statsListeners.size === 0)) return Promise.resolve();
+    return publisher.request(reason);
+  }
+
+  function publishStats(reason, stats) {
     const at = new Date().toISOString();
-    if (sseClients.size > 0) await statsFrames(reason, stats, at);
+    if (sseClients.size > 0) statsFrames(reason, stats, at);
     for (const listener of statsListeners) {
       try { listener(stats, reason, at); } catch (_) { /* listener errors must not break ingest */ }
     }
@@ -1150,7 +1186,10 @@ function createHub({
       // lock above also serializes first-ingest races before a device row exists.
       if (typeof store.lockDevice === 'function') await store.lockDevice(deviceId, connection);
       const existing = await store.getDeviceRecord(deviceId, connection);
-      const merged = mergeDeviceRecord(existing, {
+      const baselineState = typeof store.getIngestBaseline === 'function'
+        ? await store.getIngestBaseline(deviceId, connection)
+        : { snapshot: existing, transferred: false };
+      const merged = mergeDeviceRecord(baselineState.transferred && !limitsOnly ? baselineState.snapshot : existing, {
         ...usagePayload,
         receivedAt: new Date().toISOString(),
         ...(limitsOnly ? { limitsOnly: true } : {})
@@ -1159,49 +1198,52 @@ function createHub({
       if (limitsOnly) {
         // No usage to record: keep the stored periods/sessions and the ledger
         // untouched. Only the carried-forward attribution may have changed.
-        await store.saveDevice(merged, connection);
+        await store.saveDevice(merged, connection, { baseline: baselineState.snapshot || merged, previousRecord: existing, previousBaseline: baselineState.snapshot });
         return merged;
       }
       // Deltas come from the ingest baseline, not the display snapshot: a
       // transfer rewrites the display snapshot but pins the baseline, so the
       // next upload after a transfer books only genuinely new usage.
-      const baselineState = typeof store.getIngestBaseline === 'function'
-        ? await store.getIngestBaseline(deviceId, connection)
-        : { snapshot: existing, transferred: false };
       const baseline = baselineState?.snapshot || existing;
-      const { candidates, events } = calculateUsageEventDeltas(baseline, merged);
+      const { candidates, events } = calculateUsageEventDeltas(baseline ? normalizeDeviceRecord(baseline) : null, merged, { normalized: true });
+      const rawCumulative = { ...merged };
       // A transferred device's display snapshot is re-derived, not replaced:
       // previous display + (fresh cumulative - baseline). Without this the
       // device's next full cumulative report would put the transferred history
       // back into the aggregate even though the ledger booked none of it.
       if (baselineState?.transferred) {
-        merged.periods = reanchorTransferredPeriods(merged.periods, baseline.periods || {});
+        merged.periods = reanchorTransferredPeriods(merged, baseline, existing);
+        if (hasOwn(merged, 'history')) merged.history = reanchorTransferredHistory(merged.history, baseline.history, existing?.history);
       }
-      const pricingByModel = await store.getPricing(events.map((event) => event.model), connection);
+      const pricingByModel = events.length ? await store.getPricing(events.map((event) => event.model), connection) : new Map();
       const pricedEvents = events.map((event) => priceSnapshot(event, pricingByModel.get(event.model)));
-      await store.saveDevice(merged, connection);
+      await store.saveDevice(merged, connection, { baseline: rawCumulative, previousRecord: existing, previousBaseline: baselineState.snapshot });
       await store.insertUsageEvents(merged.deviceId, pricedEvents, connection);
-      await store.replaceSessions(merged.deviceId, summarizeSessions(candidates), connection);
+      const displayCandidates = baselineState.transferred ? usageCandidates(merged, { normalized: true }) : candidates;
+      await store.replaceSessions(merged.deviceId, summarizeSessions(displayCandidates), connection);
       return merged;
     }));
-    invalidateStatsCache();
+    invalidateStatsCache({ record });
     // The transaction has committed by now, so the payload IS stored. A failure
     // while building or broadcasting the response must not be reported as a client
     // error: the old code let it fall into the route's catch-all and answer
     // `400 bad_request`, which told agents their data was rejected when it had
     // actually been accepted (so they retried and alerted for the wrong reason).
     let stats = null;
-    if (includeStats || sseClients.size > 0 || statsListeners.size > 0) {
+    if (includeStats) {
       try {
         const bundle = await getStatsBundle();
         stats = bundle;
-        await broadcastStats('ingest', bundle);
+        void broadcastStats('ingest');
       } catch (error) {
         logger.warn?.(`[hub-ingest] post-commit stats/broadcast failed: ${error?.message || error}`);
         stats = null;
       }
     }
-    if (!includeStats || !stats) return record;
+    if (!includeStats) {
+      void broadcastStats('ingest');
+      return record;
+    }
     return { record, stats };
   }
 
@@ -1211,49 +1253,67 @@ function createHub({
   // collector's watch ticks use (applyPeriodDelta), applied against the transfer
   // anchor instead of a scan anchor. Never negative — a counter reset simply
   // re-anchors.
-  function reanchorTransferredPeriods(periods, anchorPeriods) {
+  function reanchorTransferredPeriods(fresh, anchor, previous) {
     const reanchored = {};
     for (const periodName of PERIODS) {
+      const legacyKey = (record) => {
+        const stamp = String(record?.updatedAt || record?.receivedAt || '');
+        return stamp.slice(0, periodName === 'month' ? 7 : 10);
+      };
+      const newWindow = fresh.periodWindows?.[periodName]?.key || legacyKey(fresh);
+      const oldWindow = anchor.periodWindows?.[periodName]?.key || legacyKey(anchor);
+      const changedWindow = periodName !== 'allTime' && newWindow && oldWindow && newWindow !== oldWindow;
       reanchored[periodName] = reanchorPeriodAgainstAnchor(
-        periods?.[periodName] || {},
-        anchorPeriods?.[periodName] || {}
+        fresh.periods?.[periodName] || {},
+        changedWindow ? {} : anchor.periods?.[periodName] || {},
+        changedWindow ? {} : previous?.periods?.[periodName] || {}
       );
     }
     return reanchored;
   }
 
-  function reanchorPeriodAgainstAnchor(period, anchor) {
-    // Own-null handling: keys the anchor knows were moved to the target and must
-    // not reappear in the display, even though the fresh cumulative report still
-    // lists them.
+  function reanchorPeriodAgainstAnchor(period, anchor, previous = {}, resetCounters = true) {
     const result = {};
-    for (const [key, value] of Object.entries(period)) {
-      if (Object.prototype.hasOwnProperty.call(anchor, key) && key !== 'capabilities') continue;
-      result[key] = value;
-    }
-    for (const [key, value] of Object.entries(period)) {
-      if (key === 'capabilities' || key === 'estimated' || key === 'sessions' || key === 'projects') continue;
+    for (const key of new Set([...Object.keys(previous), ...Object.keys(period)])) {
+      if (RESERVED_DYNAMIC_KEYS.has(key.toLowerCase())) continue;
+      const value = period[key];
       const anchorValue = anchor[key];
       if (typeof value === 'number') {
-        result[key] = Math.max(0, value - (typeof anchorValue === 'number' ? anchorValue : 0));
-        continue;
-      }
-      if (value && typeof value === 'object') {
-        result[key] = reanchorPeriodAgainstAnchor(value, anchorValue && typeof anchorValue === 'object' ? anchorValue : {});
+        const before = Number(anchorValue) || 0;
+        const delta = resetCounters && value < before ? value : value - before;
+        result[key] = Math.max(0, (Number(previous[key]) || 0) + delta);
+      } else if (value && typeof value === 'object') {
+        result[key] = reanchorPeriodAgainstAnchor(value, anchorValue || {}, previous[key] || {}, resetCounters);
+      } else if (key === 'startedAt' && value && previous[key]) {
+        result[key] = [value, previous[key]].sort()[0];
+      } else if (key === 'lastUsedAt' && value && previous[key]) {
+        result[key] = [value, previous[key]].sort().pop();
+      } else if (key === 'tokenComponents') {
+        result[key] = value === true && previous[key] !== false;
+      } else if (typeof value === 'boolean') {
+        result[key] = value || previous[key] === true;
+      } else if (['tokens', 'costUsd', 'provenance'].includes(key) && typeof value === 'string') {
+        const rank = { unknown: 0, exact: 1, estimated: 2 };
+        result[key] = (rank[previous[key]] ?? -1) > (rank[value] ?? -1) ? previous[key] : value;
+      } else {
+        result[key] = value ?? previous[key];
       }
     }
-    // Sessions/projects keep only entries the anchor did not cover; those are
-    // genuinely new and stay as reported.
-    for (const mapKey of ['sessions', 'projects']) {
-      if (!period[mapKey] || typeof period[mapKey] !== 'object') continue;
-      const anchorMap = anchor[mapKey] && typeof anchor[mapKey] === 'object' ? anchor[mapKey] : {};
-      const kept = {};
-      for (const [key, value] of Object.entries(period[mapKey])) {
-        if (Object.prototype.hasOwnProperty.call(anchorMap, key)) continue;
-        kept[key] = value;
+    return result;
+  }
+
+  function reanchorTransferredHistory(fresh, anchor, previous) {
+    if (fresh === null) return previous || null;
+    const result = {};
+    for (const [field, key] of [['daily', 'date'], ['monthly', 'month']]) {
+      const before = new Map((anchor?.[field] || []).map((row) => [row[key], row]));
+      const base = new Map((previous?.[field] || []).map((row) => [row[key], row]));
+      for (const row of fresh?.[field] || []) {
+        base.set(row[key], reanchorPeriodAgainstAnchor(row, before.get(row[key]) || {}, base.get(row[key]) || {}, false));
       }
-      result[mapKey] = kept;
+      result[field] = [...base.values()].sort((a, b) => String(a[key]).localeCompare(String(b[key])));
     }
+    result.summary = reanchorPeriodAgainstAnchor(fresh?.summary || {}, anchor?.summary || {}, previous?.summary || {}, false);
     return result;
   }
 
@@ -1274,10 +1334,11 @@ function createHub({
     validateDeviceRecordPayload({ deviceId: sourceId });
     validateDeviceRecordPayload({ deviceId: targetId });
 
-    return withDeviceIngestLock(sourceId, () => withDeviceIngestLock(targetId, () => store.transaction(async (connection) => {
+    const [firstId, secondId] = [sourceId, targetId].sort();
+    return withDeviceIngestLock(firstId, () => withDeviceIngestLock(secondId, () => store.transaction(async (connection) => {
       if (typeof store.lockDevice === 'function') {
-        await store.lockDevice(sourceId, connection);
-        await store.lockDevice(targetId, connection);
+        await store.lockDevice(firstId, connection);
+        await store.lockDevice(secondId, connection);
       }
       const sourceRecord = await store.getDeviceRecord(sourceId, connection);
       if (!sourceRecord) { const e = new Error('source device not found'); e.code = 'not_found'; throw e; }
@@ -1286,6 +1347,10 @@ function createHub({
 
       const sourceNormalized = normalizeDeviceRecord(sourceRecord);
       const targetNormalized = normalizeDeviceRecord(targetRecord);
+      const sourceBaseline = typeof store.getIngestBaseline === 'function'
+        ? await store.getIngestBaseline(sourceId, connection) : { snapshot: sourceNormalized };
+      const targetBaseline = typeof store.getIngestBaseline === 'function'
+        ? await store.getIngestBaseline(targetId, connection) : { snapshot: targetNormalized };
 
       // 1. The append-only ledger moves wholesale.
       if (typeof store.moveDeviceUsageEvents === 'function') {
@@ -1315,7 +1380,10 @@ function createHub({
         history: mergeHistoryDocuments(targetNormalized.history, sourceNormalized.history)
       };
       mergedRecord.limits = normalizeLimitsSummary({});
-      await store.saveDevice(mergedRecord, connection);
+      await store.saveDevice(mergedRecord, connection, { baseline: targetBaseline.snapshot });
+      if (typeof store.saveIngestBaseline === 'function') {
+        await store.saveIngestBaseline(targetId, targetBaseline.snapshot || targetNormalized, { transferred: true }, connection);
+      }
 
       // 4. The source device is removed by the Hub. Its ledger rows already
       // moved, its display snapshot is folded into the target, and its ingest
@@ -1323,9 +1391,13 @@ function createHub({
       // from a clean baseline (the operator re-identifies the source device in
       // its own settings). deleteDevice keeps the devices row as a soft-delete
       // tombstone, which is what stops re-ingest from double-counting.
+      await store.saveDevice({ ...sourceNormalized,
+        periods: Object.fromEntries(PERIODS.map((name) => [name, emptyPeriod()])),
+        history: _emptyHistoryDocument()
+      }, connection, { baseline: sourceBaseline.snapshot });
       await store.deleteDevice(sourceId, connection);
       if (typeof store.saveIngestBaseline === 'function') {
-        await store.saveIngestBaseline(sourceId, sourceNormalized, { transferred: true }, connection);
+        await store.saveIngestBaseline(sourceId, sourceBaseline.snapshot || sourceNormalized, { transferred: true }, connection);
       }
       return { source: sourceNormalized, target: targetNormalized, merged: mergedRecord, removedSource: true };
     })));
@@ -1779,9 +1851,12 @@ function createHub({
     }
 
     if (req.method === 'GET' && url.pathname === '/api/stats/summary') {
-      return sendJson(res, 200, await getStatsSummary());
+      return jsonResponses.send(res, 200, await getStatsSummary());
     }
-    if (req.method === 'GET' && url.pathname === '/api/stats') return sendJson(res, 200, await getStats());
+    if (req.method === 'GET' && url.pathname === '/api/stats') {
+      trackBulkRead(res);
+      return jsonResponses.send(res, 200, await getStats());
+    }
     if (req.method === 'GET' && url.pathname === '/api/devices') {
       // Keep this endpoint on the same normalized/staleness boundary as
       // /api/stats. Returning raw ingest snapshots here exposes top-level
@@ -1795,8 +1870,7 @@ function createHub({
     // *one* machine's detail; before this it had to download every machine's.
     if (req.method === 'GET' && /^\/api\/devices\/[^/]+$/.test(url.pathname)) {
       const deviceId = decodeURIComponent(url.pathname.slice('/api/devices/'.length));
-      const stats = await getStats();
-      const device = stats.devices.find((entry) => String(entry.deviceId || '') === deviceId);
+      const device = await fleet.device(deviceId);
       if (!device) return sendJson(res, 404, { error: 'device_not_found', deviceId });
       return sendJson(res, 200, { device });
     }
@@ -1822,14 +1896,11 @@ function createHub({
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
       const deviceId = String(url.searchParams.get('deviceId') || '').trim();
-      const document = await getHistory(deviceId);
-      // The document is derived entirely from stored records (no wall clock), so
-      // its revision is a complete identity and a repeat read can be answered
-      // without a body. That matters because "re-ask for history" is what the
-      // client does when the stream's `historyRevision` moves.
-      const etag = `"hist-${historyRevision(document)}${deviceId ? `-${deviceId}` : ''}"`;
+      const { document, revision } = await fleet.history(deviceId);
+      // Source changes and calendar expiry both invalidate this document/hash.
+      const etag = `"hist-${revision}${deviceId ? `-${encodeURIComponent(deviceId)}` : ''}"`;
       if (sendNotModifiedIfFresh(req, res, etag)) return;
-      return sendJson(res, 200, document, { etag });
+      return jsonResponses.send(res, 200, document, { etag });
     }
     if (req.method === 'GET' && url.pathname === '/api/subscriptions') {
       return sendJson(res, 200, { ok: true, ...(await getSubscriptions()) });
@@ -2112,6 +2183,7 @@ function createHub({
       // delay the fixed 30-second SSE keepalive cadence.
       const heartbeat = setInterval(() => { writeSse(res, ': hb\n\n', 'heartbeat'); }, sseHeartbeatMs);
       sseHeartbeats.set(res, heartbeat);
+      void armBoundaryTimer().catch((error) => logger.warn?.(`[hub-calendar] ${error?.message || error}`));
       return;
     }
 
@@ -2288,6 +2360,11 @@ function createHub({
   }
 
   async function stop() {
+    stopped = true;
+    if (boundaryTimer) clearTimeout(boundaryTimer);
+    boundaryTimer = null;
+    await publisher.close();
+    jsonResponses.clear();
     await accountService?.stop();
     for (const res of [...sseClients]) dropSseClient(res);
     sseClients.clear();
@@ -2343,6 +2420,7 @@ function createHub({
     // Observability for the SSE registry: a monotonic leak here is what made a
     // busy Hub degrade until restart. Exposed for tests and health diagnostics.
     getSseClientCount: () => sseClients.size,
+    getResourceMetrics: () => ({ ...fleet.metrics(), publisher: publisher.metrics(), responses: jsonResponses.metrics() }),
     updateService: resolvedUpdateService
   };
 }

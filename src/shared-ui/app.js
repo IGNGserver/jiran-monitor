@@ -2152,7 +2152,10 @@ function writeContentHtml(html, renderState) {
 async function ensureHistory({ force = false, deviceId = state.prefs.deviceFilter || '' } = {}) {
   // Full /api/history includes perClient/perModel stacks needed by Trends.
   // historyPreview from /api/stats is totals-only and must NOT block this fetch.
-  if (!state.secret && state.health?.secretRequired) return;
+  // The browser normally holds only an HttpOnly session cookie, not the owner
+  // secret. A successful capabilities read (or restored session) authorizes this
+  // fetch; the server still rejects revoked/expired credentials with 401.
+  if (!state.secret && !state.session?.id && state.authorization?.authenticated !== true && state.health?.secretRequired) return;
   const scopedDeviceId = String(deviceId || '').trim();
   if (!force && state.history && state.historyDeviceId === scopedDeviceId) return;
   if (state.historyRequest && state.historyRequestDeviceId === scopedDeviceId) return state.historyRequest;

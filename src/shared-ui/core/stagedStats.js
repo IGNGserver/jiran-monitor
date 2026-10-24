@@ -9,10 +9,20 @@ export function detailRequest(stats, prefs) {
   const filter = stats.devices?.find((device) => device.deviceId === prefs.deviceFilter);
   const deviceId = filter?.deviceId || (prefs.view === 'devices' ? selected?.deviceId || first?.deviceId : '');
   const period = prefs.period || 'today';
-  const revision = JSON.stringify([stats.updatedAt, stats.historyRevision, stats.deviceHistoryRevision,
+  // Older Hubs have only a fleet revision. Prefer scoped additive revisions so
+  // an account refresh or another device cannot invalidate an unchanged document.
+  const legacyRevision = () => JSON.stringify([stats.updatedAt, stats.historyRevision, stats.deviceHistoryRevision,
     stats.devices?.map((device) => [device.deviceId, device.updatedAt, device.stale])]);
-  if (deviceId) return { key: `${revision}:device:${deviceId}`, deviceId, path: `/api/devices/${encodeURIComponent(deviceId)}` };
+  if (deviceId) {
+    const device = stats.devices.find((entry) => entry.deviceId === deviceId);
+    const revision = device.detailRevision != null
+      ? JSON.stringify([device.detailRevision, device.stale]) : legacyRevision();
+    return { key: `${revision}:device:${deviceId}`, deviceId, path: `/api/devices/${encodeURIComponent(deviceId)}` };
+  }
   if (prefs.view === 'usage' && prefs.usageTab === 'sessions' && ['today', 'month', 'allTime'].includes(period)) {
+    const sessionRevision = typeof stats.sessionRevision === 'object' && stats.sessionRevision !== null
+      ? stats.sessionRevision[period] : stats.sessionRevision;
+    const revision = sessionRevision != null ? JSON.stringify(sessionRevision) : legacyRevision();
     return { key: `${revision}:sessions:${period}`, period, path: `/api/sessions?period=${period}` };
   }
   return null;
@@ -55,7 +65,16 @@ export function createDetailCache(request) {
 export function withStatsDetail(stats, spec, data) {
   if (!data || !spec) return stats;
   if (spec.deviceId && data.device) {
-    return { ...stats, devices: stats.devices.map((device) => device.deviceId === spec.deviceId ? data.device : device) };
+    return { ...stats, devices: stats.devices.map((device) => {
+      if (device.deviceId !== spec.deviceId) return device;
+      const hydrated = { ...data.device };
+      // Scoped detail deliberately survives heartbeats. The current summary,
+      // not that cached document, owns presence and envelope timestamps.
+      for (const key of ['updatedAt', 'receivedAt', 'ageMs', 'stale', 'detailRevision']) {
+        if (Object.prototype.hasOwnProperty.call(device, key)) hydrated[key] = device[key];
+      }
+      return hydrated;
+    }) };
   }
   if (spec.period && Array.isArray(data.sessions)) {
     const sessions = Object.fromEntries(data.sessions.map((session, index) => [session.key || session.id || String(index), session]));

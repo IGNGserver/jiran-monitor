@@ -185,9 +185,11 @@ function snapshotCandidates(period, updatedAt) {
 // synchronized payload. Some sync payloads intentionally omit allTime.sessions,
 // so snapshot:* identifiers make that aggregate source explicit instead of
 // pretending it came from an individual CLI conversation.
-function usageCandidates(record) {
-  const normalized = normalizeDeviceRecord(record || {});
-  const period = normalized.periods.allTime;
+function usageCandidates(record, { normalized: alreadyNormalized = false } = {}) {
+  // Internal callers can reuse an already-normalized snapshot. Raw boundaries
+  // retain the defensive normalizer by default; null still means no baseline.
+  const normalized = alreadyNormalized ? (record || {}) : normalizeDeviceRecord(record || {});
+  const period = normalized.periods?.allTime || {};
   const updatedAt = normalized.updatedAt || normalized.receivedAt;
   const sessions = sessionCandidates(period, updatedAt);
   return sessions.length > 0 ? sessions : snapshotCandidates(period, updatedAt);
@@ -201,9 +203,9 @@ function deltaValue(current, previous) {
   return currentValue >= previousValue ? currentValue - previousValue : currentValue;
 }
 
-function calculateUsageEventDeltas(previousRecord, currentRecord) {
-  const previousByKey = new Map(usageCandidates(previousRecord).map((candidate) => [eventKey(candidate), candidate]));
-  const candidates = usageCandidates(currentRecord);
+function calculateUsageEventDeltas(previousRecord, currentRecord, options = {}) {
+  const previousByKey = new Map(usageCandidates(previousRecord, options).map((candidate) => [eventKey(candidate), candidate]));
+  const candidates = usageCandidates(currentRecord, options);
   const events = [];
   for (const candidate of candidates) {
     const previous = previousByKey.get(eventKey(candidate));

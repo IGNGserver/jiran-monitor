@@ -122,7 +122,8 @@ async function refreshOAuthToken(provider, refreshToken, deps = {}) {
         'content-type': 'application/x-www-form-urlencoded',
         accept: 'application/json'
       },
-      body
+      body,
+      signal: deps.signal
     }, 15000);
   } catch (error) {
     throw oauthError('refresh_network_error', `${config.label} token refresh network failed: ${error.message}`);
@@ -534,6 +535,7 @@ module.exports = {
   AGY_OAUTH_CLIENT_SECRET,
   AGY_TOKEN_URL,
   AGY_REDIRECT_URI,
+  credentialWithOAuthTokens,
   refreshOAuthCredential,
   refreshOAuthToken
 };

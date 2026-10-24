@@ -6,19 +6,22 @@ const { LIMIT_PROVIDER_IDS } = require('../shared/limitProviders');
 const { normalizeLimitProvider, normalizeLimitsSummary } = require('../shared/limits');
 const { HUB_MANUAL_PROVIDER_IDS } = require('../shared/limitProviderSources');
 const { probeLimitProvider } = require('../shared/limitCollector');
-const { refreshOAuthCredential } = require('./oauthService');
+const { refreshOAuthToken, credentialWithOAuthTokens } = require('./oauthService');
 const { createMimoManagedAccount } = require('../shared/mimoLimits');
 const {
   hostnameIsNonPublic,
   normalizeThirdPartyBaseUrl
 } = require('../shared/thirdPartyLimits');
 const { runWithProbeDeadline } = require('../shared/probeDeadline');
+const { createOutboundFetch } = require('../shared/outboundFetch');
 
 const MAX_ACCOUNT_NAME_LENGTH = 128;
 const MAX_ACCOUNT_LABEL_LENGTH = 256;
 const MAX_CREDENTIAL_BYTES = 128 * 1024;
 const DEFAULT_REFRESH_MS = 5 * 60 * 1000;
 const DEFAULT_CONCURRENCY = 4;
+const MAX_RUNTIME_ACCOUNTS = 128;
+const MAX_QUEUED_PROBES = 256;
 
 // Hard ceiling for one provider probe on the Hub. Some fetchers (openrouter,
 // thirdparty, opencode) rely solely on the caller's signal, so without this they
@@ -447,7 +450,7 @@ function createHubAccountService({
   const intervalMs = Number.isFinite(Number(refreshMs)) && Number(refreshMs) > 0
     ? Number(refreshMs)
     : DEFAULT_REFRESH_MS;
-  const maxConcurrency = Math.max(1, Math.min(32, Number(concurrency) || DEFAULT_CONCURRENCY));
+  const maxConcurrency = Math.max(1, Math.min(32, Math.floor(Number(concurrency) || DEFAULT_CONCURRENCY)));
   const probeTimeoutMs = Number.isFinite(Number(probeDeadlineMs)) && Number(probeDeadlineMs) > 0
     ? Number(probeDeadlineMs)
     : DEFAULT_PROBE_DEADLINE_MS;
@@ -455,6 +458,134 @@ function createHubAccountService({
   let stopped = false;
   let refreshPromise = null;
   let refreshStartedAt = 0;
+  const refreshFlights = new Map();
+  const probeFlights = new Map();
+  const tokenFlights = new Map();
+  const runtimeAccounts = new Map();
+  const probeQueue = [];
+  let activeProbes = 0;
+  const fetchProvider = oauthFetch || createOutboundFetch(process.env);
+
+  function refreshCredential(provider, credential, deps) {
+    const refreshToken = credentialRefreshToken(credential);
+    const key = `${provider}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
+    const existing = tokenFlights.get(key);
+    const withCredential = (tokens) => ({ credential: credentialWithOAuthTokens(provider, credential, tokens), tokens });
+    if (existing) return existing.promise.then(withCredential);
+    const pending = new Set();
+    const entry = { promise: refreshOAuthToken(provider, refreshToken, { ...deps, fetch: trackedFetch(deps.fetch, pending) }) };
+    tokenFlights.set(key, entry);
+    const cleanup = async () => {
+      await Promise.allSettled([...pending]);
+      if (tokenFlights.get(key) === entry) tokenFlights.delete(key);
+    };
+    void entry.promise.then(cleanup, cleanup);
+    return entry.promise.then(withCredential);
+  }
+
+  function trackedFetch(fetch, pending, signal) {
+    const track = (promise) => {
+      const work = Promise.resolve(promise);
+      pending.add(work);
+      work.then(() => pending.delete(work), () => pending.delete(work));
+      return work;
+    };
+    return async (...args) => {
+      signal?.throwIfAborted();
+      const response = await track(fetch(...args));
+      if (signal?.aborted) {
+        void response.body?.cancel?.().catch(() => {});
+        signal.throwIfAborted();
+      }
+      // Inner HTTP helpers can race their own deadlines. The caller's physical
+      // permit still owns the underlying headers AND body until they settle.
+      return new Proxy(response, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (['json', 'text', 'arrayBuffer', 'blob', 'formData'].includes(property) && typeof value === 'function') {
+            return (...params) => track(value.apply(target, params));
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+      });
+    };
+  }
+
+  function schedulingError(code) {
+    return Object.assign(new Error(code), { code });
+  }
+
+  // A deadline releases the caller, NOT the physical concurrency permit. A
+  // provider ignoring AbortSignal must never allow replacement work to pile up.
+  function acquireProbe(signal) {
+    if (stopped || signal.aborted) return Promise.reject(signal.reason || schedulingError('service_stopped'));
+    if (activeProbes < maxConcurrency) {
+      activeProbes += 1;
+      return Promise.resolve(releaseProbe);
+    }
+    if (probeQueue.length >= MAX_QUEUED_PROBES) return Promise.reject(schedulingError('probe_queue_full'));
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, reject, signal, abort: null };
+      entry.abort = () => {
+        const index = probeQueue.indexOf(entry);
+        if (index >= 0) probeQueue.splice(index, 1);
+        reject(signal.reason || schedulingError('service_stopped'));
+      };
+      signal.addEventListener('abort', entry.abort, { once: true });
+      probeQueue.push(entry);
+    });
+  }
+
+  function releaseProbe() {
+    activeProbes -= 1;
+    while (probeQueue.length) {
+      const entry = probeQueue.shift();
+      entry.signal.removeEventListener('abort', entry.abort);
+      if (stopped || entry.signal.aborted) {
+        entry.reject(entry.signal.reason || schedulingError('service_stopped'));
+        continue;
+      }
+      activeProbes += 1;
+      entry.resolve(releaseProbe);
+      break;
+    }
+  }
+
+  function credentialFingerprint(credential) {
+    return crypto.createHash('sha256').update(JSON.stringify(credential)).digest('hex');
+  }
+
+  function runtimeFor(account, credential) {
+    const fingerprint = credentialFingerprint(credential);
+    let entry = runtimeAccounts.get(account.id);
+    if (!entry || entry.fingerprint !== fingerprint) {
+      entry = { fingerprint, providerRuntimeState: new Map(), failures: 0 };
+    }
+    runtimeAccounts.delete(account.id);
+    runtimeAccounts.set(account.id, entry);
+    while (runtimeAccounts.size > MAX_RUNTIME_ACCOUNTS) runtimeAccounts.delete(runtimeAccounts.keys().next().value);
+    return entry;
+  }
+
+  function editTimestamp(account) {
+    // updatedAt is the optimistic ownership token even when two edits happen in
+    // the same millisecond (or the wall clock moves backwards).
+    return new Date(Math.max(now(), (Date.parse(account.updatedAt) || 0) + 1)).toISOString();
+  }
+
+  function retryDelay(status, failures) {
+    if (status === 'notConfigured') return Math.max(intervalMs, 6 * 60 * 60 * 1000);
+    if (status === 'unauthorized') return Math.max(intervalMs, Math.min(6 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** (failures - 1)));
+    const base = ['rateLimited', 'sourceRateLimited'].includes(status) ? intervalMs * 2 : intervalMs;
+    return Math.max(intervalMs, Math.min(60 * 60 * 1000, base * 2 ** Math.min(6, failures - 1)));
+  }
+
+  function scheduledLater(account, reason) {
+    // Timers and repository reads can straddle the due millisecond. A tiny
+    // tolerance avoids skipping a healthy account for an entire extra cycle.
+    return ['interval', 'startup'].includes(reason)
+      && Date.parse(account.nextRefreshAt) > now() + Math.min(1000, intervalMs * 0.01);
+  }
 
   async function runTransaction(work) {
     if (typeof store.transaction === 'function') return store.transaction(work);
@@ -536,51 +667,56 @@ function createHubAccountService({
     });
   }
 
-  async function probeAccount(account, credential) {
+  async function probeAccountRaw(account, credential, signal, state, fetch) {
     if (account.provider === 'thirdparty') validateHubThirdPartyCredential(credential);
     const runtime = {
       env: Object.create(null),
       homeDir: '',
-      platform: 'linux'
+      platform: 'linux',
+      signal,
+      now,
+      limitsRefreshMs: intervalMs,
+      providerRuntimeState: state.providerRuntimeState
     };
+    const checkAbort = () => signal.throwIfAborted();
+    checkAbort();
     let activeCredential = credential;
     if (shouldRefreshOAuthCredential(account.provider, activeCredential, now())) {
       try {
-        activeCredential = (await refreshOAuthCredential(account.provider, activeCredential, {
-          fetch: oauthFetch,
-          now
+        activeCredential = (await refreshCredential(account.provider, activeCredential, {
+          fetch,
+          now,
+          signal
         })).credential;
       } catch (error) {
+        checkAbort();
         logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} proactive token refresh failed (${error.code || 'error'})`);
       }
     }
 
     const probeWith = async (candidate) => {
-      // runWithProbeDeadline owns the controller; forward ITS signal so fetchers
-      // that honour deps.signal abort the moment the deadline fires instead of
-      // holding a socket until undici's inactivity timeout.
-      const result = await runWithProbeDeadline(
-        ({ signal }) => probe(account.provider, providerOptions(account, candidate), {}, {
-          fetch: oauthFetch,
-          signal,
-          ...runtime
-        }),
-        { deadlineMs: probeTimeoutMs }
-      );
+      checkAbort();
+      const result = await probe(account.provider, providerOptions(account, candidate), {}, {
+        fetch,
+        ...runtime
+      });
+      checkAbort();
       return { candidate, rows: rowsFromProbe(result) };
     };
     let attempt = await probeWith(activeCredential);
     let usable = attempt.rows.find((row) => row.status === 'ok') || attempt.rows[0];
     if ((!usable || usable.status !== 'ok') && usable?.status === 'unauthorized' && credentialRefreshToken(activeCredential)) {
       try {
-        const refreshed = await refreshOAuthCredential(account.provider, activeCredential, {
-          fetch: oauthFetch,
-          now
+        const refreshed = await refreshCredential(account.provider, activeCredential, {
+          fetch,
+          now,
+          signal
         });
         activeCredential = refreshed.credential;
         attempt = await probeWith(activeCredential);
         usable = attempt.rows.find((row) => row.status === 'ok') || attempt.rows[0];
       } catch (error) {
+        checkAbort();
         logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} token refresh failed (${error.code || 'error'})`);
       }
     }
@@ -591,6 +727,29 @@ function createHubAccountService({
       throw error;
     }
     return { row: usable, credential: activeCredential };
+  }
+
+  function probeAccount(account, credential) {
+    const key = JSON.stringify([account.id, account.updatedAt, account.name, account.label, credentialFingerprint(credential)]);
+    const existing = probeFlights.get(key);
+    if (existing) return existing.promise;
+    const flight = {};
+    probeFlights.set(key, flight);
+    flight.promise = runWithProbeDeadline(async ({ signal }) => {
+      let release;
+      const pending = new Set();
+      const fetch = trackedFetch(fetchProvider, pending, signal);
+      try {
+        release = await acquireProbe(signal);
+        signal.throwIfAborted();
+        return await probeAccountRaw(account, credential, signal, runtimeFor(account, credential), fetch);
+      } finally {
+        await Promise.allSettled([...pending]);
+        release?.();
+        if (probeFlights.get(key) === flight) probeFlights.delete(key);
+      }
+    }, { deadlineMs: probeTimeoutMs });
+    return flight.promise;
   }
 
   async function refreshOwner(account, executor) {
@@ -607,47 +766,40 @@ function createHubAccountService({
   }
 
   async function refreshOne(id, reason = 'manual') {
+    if (stopped) return null;
     const entry = await accountWithSnapshot(id);
-    if (!entry) return null;
+    if (!entry || stopped) return null;
+    const key = JSON.stringify([id, entry.account.updatedAt]);
+    if (refreshFlights.has(key)) return refreshFlights.get(key);
+    const promise = refreshEntry(entry, reason).finally(() => {
+      if (refreshFlights.get(key) === promise) refreshFlights.delete(key);
+    });
+    refreshFlights.set(key, promise);
+    return promise;
+  }
+
+  async function refreshEntry(entry, reason) {
     const { account, snapshot } = entry;
     const attemptAt = new Date(now()).toISOString();
     if (account.enabled === false) {
-      const committed = await runTransaction(async (executor) => {
-        const owner = await refreshOwner(account, executor);
-        if (!owner) return { stale: true };
-        const currentSnapshot = typeof store.getHubAccountSnapshot === 'function'
-          ? await store.getHubAccountSnapshot(account.id, executor)
-          : snapshot;
-        const disabled = normalizeLimitProvider({
-          ...(currentSnapshot?.provider || {}),
-          provider: owner.provider,
-          status: 'disabled',
-          updatedAt: attemptAt,
-          windows: []
-        });
-        await store.updateHubAccount(account.id, {
-          status: 'disabled',
-          lastAttemptAt: attemptAt,
-          nextRefreshAt: new Date(now() + intervalMs).toISOString()
-        }, executor);
-        await store.saveHubAccountSnapshot(account.id, {
-          provider: disabled,
-          lastGood: currentSnapshot?.lastGood || null,
-          updatedAt: attemptAt
-        }, executor);
-        return { stale: false, row: disabled };
-      });
-      return committed.stale ? null : committed.row;
+      return snapshot?.provider || null;
     }
-    await store.updateHubAccount(account.id, {
-      status: 'refreshing',
-      lastAttemptAt: attemptAt,
-      lastErrorCode: '',
-      lastErrorMessage: ''
+    if (scheduledLater(account, reason)) return null;
+    const owned = await runTransaction(async (executor) => {
+      if (!await refreshOwner(account, executor)) return false;
+      await store.updateHubAccount(account.id, {
+        status: 'refreshing',
+        lastAttemptAt: attemptAt,
+        lastErrorCode: '',
+        lastErrorMessage: ''
+      }, executor);
+      return true;
     });
+    if (!owned) return null;
     try {
       const credentialEnvelope = await store.getHubAccountCredential(account.id);
       const credential = decryptCredential(credentialEnvelope, credentialKey);
+      if (!credentialIsConfigured(credential)) throw schedulingError('notConfigured');
       const probed = await probeAccount(account, credential);
       const row = probed.row;
       const storedCredential = probed.credential;
@@ -666,7 +818,7 @@ function createHubAccountService({
           lastSuccessAt: attemptAt,
           lastErrorCode: '',
           lastErrorMessage: '',
-          nextRefreshAt: new Date(now() + intervalMs).toISOString()
+          nextRefreshAt: new Date(Date.parse(attemptAt) + intervalMs).toISOString()
         }, executor);
         await store.saveHubAccountSnapshot(account.id, {
           provider: row,
@@ -676,10 +828,13 @@ function createHubAccountService({
         return { stale: false, row };
       });
       if (committed.stale) return null;
+      runtimeFor(account, storedCredential).failures = 0;
       await onUpdate?.({ type: 'account-refresh', accountId: account.id, reason });
       return committed.row;
     } catch (error) {
       const status = statusFromError(error);
+      const state = runtimeAccounts.get(account.id);
+      const failures = (state?.failures || 0) + 1;
       const previous = snapshot?.lastGood || snapshot?.provider || null;
       const failed = normalizeLimitProvider({
         ...(previous || {}),
@@ -700,7 +855,7 @@ function createHubAccountService({
           lastAttemptAt: attemptAt,
           lastErrorCode: cleanText(error?.code || status, 64),
           lastErrorMessage: errorMessage(error),
-          nextRefreshAt: new Date(now() + intervalMs).toISOString()
+          nextRefreshAt: new Date(now() + retryDelay(status, failures)).toISOString()
         }, executor);
         await store.saveHubAccountSnapshot(account.id, {
           provider: failed,
@@ -710,18 +865,15 @@ function createHubAccountService({
         return { stale: false, row: failed };
       });
       if (committed.stale) return null;
+      if (state) state.failures = failures;
       logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} refresh failed (${status})`);
       await onUpdate?.({ type: 'account-refresh-failed', accountId: account.id, reason });
       return committed.row;
     }
   }
 
-  // A refresh cycle must never outlive its own schedule. The probe deadline above
-  // bounds each provider call, but an unforeseen await (a repository call, an
-  // OAuth refresh) could still stall the cycle and leave refreshPromise latched,
-  // which silently stops every later refresh. Past the ceiling, detach the latch so
-  // the next tick can start a fresh cycle instead of returning the dead promise
-  // forever.
+  // A stalled repository call may detach a cycle latch, but every cycle and
+  // manual/validation entry still shares probe permits and versioned flights.
   const ceilingOption = Number(refreshCeilingOverride);
   const refreshCeilingMs = Number.isFinite(ceilingOption) && ceilingOption > 0
     ? ceilingOption
@@ -760,10 +912,13 @@ function createHubAccountService({
       let cursor = 0;
       async function worker() {
         for (;;) {
+          if (stopped) return;
           const index = cursor;
           cursor += 1;
           if (index >= accounts.length) return;
           const account = accounts[index];
+          if (account.enabled === false) continue;
+          if (scheduledLater(account, reason)) continue;
           try { results[index] = await refreshOne(account.id, reason); }
           catch (error) { logger.warn?.(`[hub-accounts] refresh crashed: ${error.message}`); }
         }
@@ -854,12 +1009,13 @@ function createHubAccountService({
       const row = probed.row;
       const storedCredential = probed.credential;
       const envelope = encryptCredential(storedCredential, credentialKey);
-      const updatedAt = new Date(now()).toISOString();
-      const disabled = next.enabled === false;
+      const updatedAt = editTimestamp(entry.account);
+      const disabled = (next.enabled ?? entry.account.enabled) === false;
       const publishedRow = disabled
         ? normalizeLimitProvider({ ...row, status: 'disabled', updatedAt, windows: [] })
         : row;
       await runTransaction(async (executor) => {
+        if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
         await store.replaceHubAccountCredential(id, envelope, executor);
         await store.updateHubAccount(id, {
           ...next,
@@ -880,8 +1036,9 @@ function createHubAccountService({
           updatedAt
         }, executor);
       });
+      runtimeAccounts.delete(id);
     } else if (Object.keys(next).length) {
-      const updatedAt = new Date(now()).toISOString();
+      const updatedAt = editTimestamp(entry.account);
       if (next.enabled === false) {
         // Disabling an account must revoke its last-good snapshot immediately;
         // otherwise the central limits aggregate keeps displaying quota until
@@ -894,6 +1051,7 @@ function createHubAccountService({
           windows: []
         });
         await runTransaction(async (executor) => {
+          if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
           await store.updateHubAccount(id, {
             ...next,
             status: 'disabled',
@@ -910,16 +1068,22 @@ function createHubAccountService({
           }, executor);
         });
       } else if (next.enabled === true && entry.account.enabled === false) {
-        await store.updateHubAccount(id, {
-          ...next,
-          status: 'pending',
-          lastErrorCode: '',
-          lastErrorMessage: '',
-          updatedAt
+        await runTransaction(async (executor) => {
+          if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
+          await store.updateHubAccount(id, {
+            ...next,
+            status: 'pending',
+            lastErrorCode: '',
+            lastErrorMessage: '',
+            updatedAt
+          }, executor);
         });
         await refreshOne(id, 'enabled');
       } else {
-        await store.updateHubAccount(id, { ...next, updatedAt });
+        await runTransaction(async (executor) => {
+          if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
+          await store.updateHubAccount(id, { ...next, updatedAt }, executor);
+        });
       }
     }
     const refreshed = await accountWithSnapshot(id);
@@ -930,7 +1094,7 @@ function createHubAccountService({
   async function clearAccountCredential(id) {
     const entry = await accountWithSnapshot(id);
     if (!entry) return null;
-    const updatedAt = new Date(now()).toISOString();
+    const updatedAt = editTimestamp(entry.account);
     // Clearing keeps the account itself (name/label/enabled/limits identity) but
     // removes every usable secret, so the next refresh reports "not configured"
     // until the owner authorizes again. No probe runs: probing an empty credential
@@ -947,6 +1111,7 @@ function createHubAccountService({
     });
     const envelope = encryptCredential({}, credentialKey);
     await runTransaction(async (executor) => {
+      if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
       await store.replaceHubAccountCredential(id, envelope, executor);
       await store.updateHubAccount(id, {
         accountKey: '',
@@ -964,6 +1129,7 @@ function createHubAccountService({
         updatedAt
       }, executor);
     });
+    runtimeAccounts.delete(id);
     await onUpdate?.({ type: 'account-credential-cleared', accountId: id });
     return true;
   }
@@ -997,9 +1163,10 @@ function createHubAccountService({
       error.code = 'account_duplicate';
       throw error;
     }
-    const updatedAt = new Date(now()).toISOString();
+    const updatedAt = editTimestamp(entry.account);
     const envelope = encryptCredential(storedCredential, credentialKey);
     await runTransaction(async (executor) => {
+      if (!await refreshOwner(entry.account, executor)) throw schedulingError('stale_write');
       await store.replaceHubAccountCredential(id, envelope, executor);
       await store.updateHubAccount(id, {
         ...next,
@@ -1021,6 +1188,7 @@ function createHubAccountService({
         updatedAt
       }, executor);
     });
+    runtimeAccounts.delete(id);
     const refreshed = await accountWithSnapshot(id);
     await onUpdate?.({ type: 'account-authorized', accountId: id });
     return {
@@ -1033,6 +1201,7 @@ function createHubAccountService({
     const existing = await store.getHubAccount(id);
     if (!existing) return false;
     await store.deleteHubAccount(id);
+    runtimeAccounts.delete(id);
     await onUpdate?.({ type: 'account-deleted', accountId: id });
     return true;
   }
@@ -1048,7 +1217,13 @@ function createHubAccountService({
     stopped = true;
     if (timer) clearInterval(timer);
     timer = null;
+    for (const entry of probeQueue.splice(0)) {
+      entry.signal.removeEventListener('abort', entry.abort);
+      entry.reject(schedulingError('service_stopped'));
+    }
     await refreshPromise?.catch(() => {});
+    await Promise.allSettled([...refreshFlights.values()]);
+    runtimeAccounts.clear();
   }
 
   return {

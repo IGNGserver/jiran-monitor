@@ -100,11 +100,14 @@ function createHubSessionService({
     }
     if (loadPromise) return loadPromise;
     loadPromise = (async () => {
-      const rows = await store.listHubSessions();
+      const rows = typeof store.loadActiveHubSessions === 'function'
+        ? await store.loadActiveHubSessions()
+        : await store.listHubSessions();
       const at = now();
       byHash.clear();
       byId.clear();
       for (const row of rows) {
+        if (row.revokedAt) continue;
         // A changed JIRAN_SECRET invalidates every old session. Revoking the row
         // in the database (rather than only skipping it in memory) means changing
         // the secret back cannot resurrect credentials issued under the old one.
@@ -112,7 +115,6 @@ function createHubSessionService({
           await store.revokeHubSession(row.sessionId).catch(() => {});
           continue;
         }
-        if (row.revokedAt) continue;
         if (row.expiresAt && Date.parse(row.expiresAt) <= at) {
           await store.revokeHubSession(row.sessionId).catch(() => {});
           continue;
@@ -194,8 +196,12 @@ function createHubSessionService({
 
   function list(currentId = '') {
     const at = now();
-    return [...byId.values()]
-      .filter((row) => isValid(row, at))
+    const active = [];
+    for (const row of byId.values()) {
+      if (isValid(row, at)) active.push(row);
+      else forget(row);
+    }
+    return active
       .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)))
       .map((row) => publicSession(row, currentId));
   }

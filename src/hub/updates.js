@@ -13,6 +13,10 @@ const GITHUB_REPOSITORY = 'IGNGserver/jiran-monitor';
 const DEFAULT_RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100`;
 const DEFAULT_CACHE_MS = 10 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 10 * 1000;
+const FAILURE_COOLDOWN_MS = 60 * 1000;
+const MAX_RELEASE_BYTES = 4 * 1024 * 1024;
+const MAX_CHECKSUM_BYTES = 16 * 1024;
+const MAX_CHECKSUM_CACHE_ENTRIES = 128;
 const ANDROID_ASSET_PREFIX = 'Jiran-Android-';
 const ANDROID_ASSET_SUFFIX = '.apk';
 const SHA256_DIGEST_PATTERN = /^sha256:([a-f0-9]{64})$/i;
@@ -101,11 +105,64 @@ function currentChannelOf(installed, parsedCurrent) {
   return parsedCurrent.revision !== null ? 'test' : 'stable';
 }
 
-async function fetchWithTimeout(fetchImpl, url, { timeoutMs, headers } = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function readBoundedText(response, maxBytes, signal) {
+  if (Number(response.headers?.get?.('content-length')) > maxBytes) {
+    void response.body?.cancel?.().catch(() => {});
+    throw new UpdateCheckError('update_response_too_large');
+  }
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text) > maxBytes) throw new UpdateCheckError('update_response_too_large');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener('abort', cancel, { once: true });
   try {
-    return await fetchImpl(url, { signal: controller.signal, headers });
+    for (;;) {
+      signal.throwIfAborted();
+      const { value, done } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        void reader.cancel().catch(() => {});
+        throw new UpdateCheckError('update_response_too_large');
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, size).toString('utf8');
+  } finally {
+    signal.removeEventListener('abort', cancel);
+    reader.releaseLock();
+  }
+}
+
+async function fetchDocument(fetchImpl, url, { timeoutMs, headers, maxBytes, json = false } = {}) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new UpdateCheckError('update_request_timeout');
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  const operation = (async () => {
+    const response = await fetchImpl(url, { signal: controller.signal, headers });
+    if (controller.signal.aborted) void response.body?.cancel?.().catch(() => {});
+    controller.signal.throwIfAborted();
+    if (!response.ok) {
+      void response.body?.cancel?.().catch(() => {});
+      throw new UpdateCheckError(`github_release_api_${response.status}`);
+    }
+    const text = await readBoundedText(response, maxBytes, controller.signal);
+    return json ? JSON.parse(text) : text;
+  })();
+  try {
+    return await Promise.race([operation, deadline]);
   } finally {
     clearTimeout(timer);
   }
@@ -126,6 +183,8 @@ function createUpdateService({
   const timeout = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   let cached = null;
   let inFlight = null;
+  let failure = null;
+  const checksums = new Map();
 
   function requestHeaders() {
     const headers = {
@@ -141,16 +200,15 @@ function createUpdateService({
     const nowMs = now();
     if (cached && cached.expiresAt > nowMs) return cached.releases;
     if (inFlight) return inFlight;
+    if (failure && failure.retryAt > nowMs) throw failure.error;
     inFlight = (async () => {
       try {
-        const response = await fetchWithTimeout(fetchImpl, releasesUrl, {
+        const payload = await fetchDocument(fetchImpl, releasesUrl, {
           timeoutMs: timeout,
-          headers: requestHeaders()
+          headers: requestHeaders(),
+          maxBytes: MAX_RELEASE_BYTES,
+          json: true
         });
-        if (!response.ok) {
-          throw new UpdateCheckError(`github_release_api_${response.status}`);
-        }
-        const payload = await response.json();
         if (!Array.isArray(payload)) {
           throw new UpdateCheckError('github_release_api_invalid_response');
         }
@@ -159,7 +217,11 @@ function createUpdateService({
           .filter(Boolean)
           .sort((left, right) => compareProjectVersions(right.version, left.version) ?? 0);
         cached = { releases, expiresAt: now() + cacheTtl };
+        failure = null;
         return releases;
+      } catch (error) {
+        failure = { error, retryAt: now() + FAILURE_COOLDOWN_MS };
+        throw error;
       } finally {
         inFlight = null;
       }
@@ -173,17 +235,43 @@ function createUpdateService({
       item.name === `${asset.name}.sha256` || item.name === `${asset.name}.sha256.txt`
     ));
     if (!checksum) return null;
-    try {
-      const response = await fetchWithTimeout(fetchImpl, checksum.downloadUrl, {
-        timeoutMs: timeout,
-        headers: { accept: 'text/plain', 'user-agent': 'jiran-hub-update-check' }
-      });
-      if (!response.ok) return null;
-      const match = SHA256_TEXT_PATTERN.exec(await response.text());
-      return match ? match[1].toLowerCase() : null;
-    } catch (_) {
-      return null;
+    const key = `${checksum.downloadUrl}:${checksum.sha256 || ''}`;
+    const previous = checksums.get(key);
+    if (previous) {
+      if (previous.promise) return previous.promise;
+      if (previous.expiresAt > now()) {
+        checksums.delete(key);
+        checksums.set(key, previous);
+        return previous.sha256;
+      }
+      checksums.delete(key);
     }
+    // Do not evict in-flight entries: that would permit duplicate downloads.
+    if (checksums.size >= MAX_CHECKSUM_CACHE_ENTRIES) {
+      const victim = [...checksums].find(([, entry]) => !entry.promise);
+      if (!victim) return null;
+      checksums.delete(victim[0]);
+    }
+    const entry = { promise: null, sha256: null, expiresAt: 0 };
+    checksums.set(key, entry);
+    entry.promise = (async () => {
+      try {
+        const text = await fetchDocument(fetchImpl, checksum.downloadUrl, {
+          timeoutMs: timeout,
+          headers: { accept: 'text/plain', 'user-agent': 'jiran-hub-update-check' },
+          maxBytes: MAX_CHECKSUM_BYTES
+        });
+        const match = SHA256_TEXT_PATTERN.exec(text);
+        entry.sha256 = match ? match[1].toLowerCase() : null;
+      } catch (_) {
+        entry.sha256 = null;
+      } finally {
+        entry.expiresAt = now() + (entry.sha256 ? cacheTtl : FAILURE_COOLDOWN_MS);
+        entry.promise = null;
+      }
+      return entry.sha256;
+    })();
+    return entry.promise;
   }
 
   async function getInfo({ platform = 'android', currentVersion } = {}) {
@@ -252,7 +340,7 @@ function createUpdateService({
     };
   }
 
-  return Object.freeze({ getInfo, clearCache: () => { cached = null; } });
+  return Object.freeze({ getInfo, clearCache: () => { cached = null; failure = null; checksums.clear(); } });
 }
 
 module.exports = {

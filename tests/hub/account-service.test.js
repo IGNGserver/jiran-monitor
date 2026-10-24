@@ -357,6 +357,7 @@ test('a provider probe that never settles is cut off by the Hub deadline', async
 test('a stalled refresh cycle releases its latch instead of wedging limits', async () => {
   const repository = new MemoryRepository();
   let hang = false;
+  let releaseProbe;
   const service = createHubAccountService({
     store: repository,
     credentialKey: 'hub-key',
@@ -364,7 +365,7 @@ test('a stalled refresh cycle releases its latch instead of wedging limits', asy
     probeDeadlineMs: 600,
     refreshCeilingOverride: 80,
     probe: (provider) => {
-      if (hang) return new Promise(() => {});
+      if (hang) return new Promise((resolve) => { releaseProbe = () => resolve(probeRow(provider)); });
       return Promise.resolve(probeRow(provider));
     }
   });
@@ -378,9 +379,11 @@ test('a stalled refresh cycle releases its latch instead of wedging limits', asy
   assert.ok(Array.isArray(stalled), 'a stalled cycle still resolves');
   assert.ok(Date.now() - stalledStarted >= 500, 'the first cycle should hit the probe deadline');
 
-  // The latch must be free: a healthy probe now succeeds instead of the caller
-  // being handed the dead in-flight cycle forever.
+  // The cycle latch is free, but a timeout is not evidence that its physical
+  // probe stopped. Let it really finish before retrying the same version.
   hang = false;
+  releaseProbe();
+  await new Promise((resolve) => setImmediate(resolve));
   const healthy = await service.refreshAll('test');
   assert.ok(
     healthy.some((row) => row?.status === 'ok'),
