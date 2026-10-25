@@ -1,0 +1,300 @@
+---
+import SectionHead from './SectionHead.astro';
+import { CONTENT, type Lang } from '../i18n/content';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = CONTENT[lang].questions;
+
+// 示意数据：一周七天、四个来源的 Token（百万）
+const week = [
+  [1.9, 1.1, 0.6, 0.4],
+  [2.6, 0.8, 0.9, 0.3],
+  [1.4, 1.6, 0.5, 0.6],
+  [3.1, 1.2, 1.1, 0.5],
+  [2.2, 2.0, 0.7, 0.8],
+  [0.6, 0.4, 0.3, 0.2],
+  [0.9, 0.7, 0.2, 0.3],
+];
+const maxDay = Math.max(...week.map((d) => d.reduce((a, b) => a + b, 0)));
+const seriesColor = ['var(--celadon)', 'var(--dai)', 'var(--rule)', 'var(--celadon-soft)'];
+const UW = 300;
+const UH = 170;
+const colW = UW / week.length;
+
+// 示意数据：三个额度窗口的剩余比例与重置时间
+const quotas = [
+  { left: 0.62, reset: '2h 14m' },
+  { left: 0.37, reset: '3d 06h' },
+  { left: 0.81, reset: '19d' },
+];
+const arc = (r: number) => 2 * Math.PI * r * (330 / 360);
+
+const plan = 20;
+const equiv = 148.3;
+---
+
+<section class="section questions" id="questions" aria-labelledby="questions-title">
+  <div class="wrap">
+    <SectionHead index={2} id="questions" kicker={t.kicker} title={t.title} intro={t.intro} />
+
+    <ol class="q__grid">
+      {t.items.map((item, i) => (
+        <li class="q reveal" style={`--d:${0.1 + i * 0.1}s`} data-instrument>
+          <div class="q__viz" aria-hidden="true">
+            {i === 0 && (
+              <svg viewBox={`0 0 ${UW} ${UH + 26}`} class="viz viz--usage">
+                {[0.25, 0.5, 0.75, 1].map((g) => (
+                  <line x1="0" x2={UW} y1={UH - g * UH} y2={UH - g * UH} class="viz__grid" />
+                ))}
+                {week.map((day, d) => {
+                  let y = UH;
+                  return (
+                    <g>
+                      <line x1={d * colW + colW / 2} x2={d * colW + colW / 2} y1="0" y2={UH} class="viz__rod" />
+                      <g class="viz__col" style={`--i:${d}`}>
+                        {day.map((v, s) => {
+                          const h = (v / maxDay) * (UH - 8);
+                          y -= h;
+                          return <rect x={d * colW + colW * 0.28} y={y + 1} width={colW * 0.44} height={Math.max(1, h - 2)} rx="1.5" fill={seriesColor[s]} />;
+                        })}
+                      </g>
+                      <text x={d * colW + colW / 2} y={UH + 20} class="viz__label" text-anchor="middle">{t.usageAxis[d]}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+            )}
+            {i === 1 && (
+              <svg viewBox="0 0 300 196" class="viz viz--quota">
+                {quotas.map((q, k) => {
+                  const r = 84 - k * 22;
+                  const len = arc(r);
+                  return (
+                    <g style={`--len:${len.toFixed(1)};--fill:${(len * (1 - q.left)).toFixed(1)};--i:${k}`}>
+                      <circle cx="98" cy="98" r={r} class="viz__track" stroke-dasharray={`${len.toFixed(1)} 999`} transform="rotate(-75 98 98)" />
+                      <circle cx="98" cy="98" r={r} class={`viz__arc viz__arc--${k}`} stroke-dasharray={`${len.toFixed(1)} 999`} transform="rotate(-75 98 98)" />
+                    </g>
+                  );
+                })}
+                <line x1="98" y1="6" x2="98" y2="20" class="viz__index" />
+                {quotas.map((q, k) => (
+                  <g transform={`translate(204 ${30 + k * 58})`}>
+                    <text class="viz__label" y="0">{t.quotaWindows[k]}</text>
+                    <text class="viz__value" y="20">{Math.round(q.left * 100)}% <tspan class="viz__label">{t.quotaLeft}</tspan></text>
+                    <text class="viz__label viz__faint" y="34">{q.reset} {t.quotaReset}</text>
+                  </g>
+                ))}
+              </svg>
+            )}
+            {i === 2 && (
+              <svg viewBox="0 0 300 196" class="viz viz--ledger">
+                <text class="viz__label" x="0" y="22">{t.ledger.plan}</text>
+                <text class="viz__value" x="300" y="22" text-anchor="end">{t.ledger.planValue}</text>
+                <rect x="0" y="34" width={300 * (plan / equiv)} height="8" rx="1" class="viz__bar viz__bar--plan" />
+                <text class="viz__label" x="0" y="82">{t.ledger.equiv}</text>
+                <text class="viz__value viz__value--accent" x="300" y="82" text-anchor="end">${equiv.toFixed(2)}</text>
+                <rect x="0" y="94" width="300" height="8" rx="1" class="viz__bar viz__bar--equiv" />
+                {Array.from({ length: 31 }, (_, d) => (
+                  <line x1={d * 10} x2={d * 10} y1="112" y2={d % 5 === 0 ? 120 : 116} class="viz__tick" />
+                ))}
+                <line x1="0" x2="300" y1="148" y2="148" class="viz__grid" />
+                <text class="viz__label" x="0" y="172">{t.ledger.renew}</text>
+                <text class="viz__value" x="300" y="172" text-anchor="end">{t.ledger.renewValue}</text>
+              </svg>
+            )}
+          </div>
+          <p class="q__tag mono"><span>{String(i + 1).padStart(2, '0')}</span>{item.tag}<span class="q__sample">{t.sample}</span></p>
+          <h3 class="q__q">{item.q}</h3>
+          <p class="q__a">{item.a}</p>
+          {i === 0 && (
+            <ul class="q__legend" aria-hidden="true">
+              {t.usageLegend.map((l, s) => <li><span style={`background:${seriesColor[s]}`}></span>{l}</li>)}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>
+
+<style>
+  .q__grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    margin-top: clamp(56px, 7vw, 96px);
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+  .q {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: clamp(24px, 3vw, 40px);
+    background: var(--bg);
+  }
+  .q__viz {
+    height: 200px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: flex-end;
+  }
+  .viz {
+    width: 100%;
+    max-height: 100%;
+    overflow: visible;
+  }
+  .q__tag {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: var(--t-micro);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .q__tag > span:first-child {
+    color: var(--cinnabar);
+  }
+  .q__sample {
+    margin-left: auto;
+    color: var(--fg-faint);
+    letter-spacing: 0.08em;
+  }
+  .q__q {
+    font-family: var(--f-display);
+    font-weight: 400;
+    font-size: var(--t-h3);
+    line-height: 1.2;
+  }
+  :lang(zh) .q__q {
+    font-weight: 600;
+  }
+  .q__a {
+    color: var(--fg-dim);
+    font-size: 0.9375rem;
+  }
+  .q__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-top: 6px;
+    font-size: var(--t-micro);
+    color: var(--fg-faint);
+  }
+  .q__legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .q__legend span {
+    width: 8px;
+    height: 8px;
+    border-radius: 1px;
+  }
+
+  /* --- SVG 仪表 --- */
+  .viz :global(text) {
+    font-family: var(--f-mono);
+  }
+  .viz__grid {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .viz__rod {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .viz__label {
+    font-size: 10px;
+    fill: var(--fg-faint);
+    letter-spacing: 0.04em;
+  }
+  .viz__faint {
+    fill: var(--fg-faint);
+    opacity: 0.8;
+  }
+  .viz__value {
+    font-size: 15px;
+    fill: var(--fg);
+  }
+  .viz__value--accent {
+    fill: var(--cinnabar);
+  }
+  .viz__col {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    transform: scaleY(0.02);
+    transition: transform 1.2s var(--ease-out);
+    transition-delay: calc(var(--i) * 70ms + 0.2s);
+  }
+  .viz__track {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 9;
+  }
+  .viz__arc {
+    fill: none;
+    stroke-width: 9;
+    stroke-dashoffset: var(--len);
+    transition: stroke-dashoffset 1.6s var(--ease-out);
+    transition-delay: calc(var(--i) * 120ms + 0.2s);
+  }
+  .viz__arc--0 {
+    stroke: var(--fg);
+  }
+  .viz__arc--1 {
+    stroke: var(--cinnabar);
+  }
+  .viz__arc--2 {
+    stroke: var(--rule);
+  }
+  .viz__index {
+    stroke: var(--fg);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .viz__bar {
+    transform-box: fill-box;
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    transition: transform 1.4s var(--ease-out) 0.25s;
+  }
+  .viz__bar--plan {
+    fill: var(--fg);
+  }
+  .viz__bar--equiv {
+    fill: var(--cinnabar);
+    transition-delay: 0.45s;
+  }
+  .viz__tick {
+    stroke: var(--fg-faint);
+    stroke-width: 1;
+  }
+
+  .q:global(.is-in) .viz__col {
+    transform: none;
+  }
+  .q:global(.is-in) .viz__arc {
+    stroke-dashoffset: var(--fill);
+  }
+  .q:global(.is-in) .viz__bar {
+    transform: none;
+  }
+  :global(.no-js) .viz__col,
+  :global(.no-js) .viz__bar {
+    transform: none;
+  }
+  :global(.no-js) .viz__arc {
+    stroke-dashoffset: var(--fill);
+  }
+
+  @media (max-width: 1000px) {
+    .q__grid {
+      grid-template-columns: 1fr;
+    }
+    .q__viz {
+      max-width: 420px;
+    }
+  }
+</style>

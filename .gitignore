@@ -2,7 +2,6 @@ node_modules/
 /data/
 build/
 dist/
-_site/
 .agents/
 .claude/
 skills-lock.json
@@ -25,6 +24,6 @@ devlog/
 dist-hub-compose/
 dist-headless/
 
-# Local-only secret material (APT signing key backup). Machine-local
-# .git/info/exclude is not enough: it is absent on a fresh clone or CI checkout.
+# Local-only secret material. Machine-local .git/info/exclude is not enough:
+# it is absent on a fresh clone or CI checkout.
 /.secrets/

@@ -1,0 +1,6 @@
+---
+import type { ReleaseInfo } from '../data/release';
+interface Props { release: ReleaseInfo | null }
+const { release } = Astro.props;
+---
+<span class="btn__meta" data-dl-meta>{release ? release.tag : 'GitHub Releases'}</span>

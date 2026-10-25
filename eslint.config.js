@@ -6,10 +6,10 @@ const globals = require('globals');
 const { includeIgnoreFile } = require('@eslint/compat');
 
 module.exports = [
-  // Respect .gitignore (node_modules, dist, build, tmp, _site, .agents, .claude, data, …)
+  // Respect .gitignore (node_modules, dist, build, tmp, .agents, .claude, data, …)
   includeIgnoreFile(path.resolve(__dirname, '.gitignore')),
-  // site/ is a standalone GitHub Pages property with its own browser conventions
-  { ignores: ['site/**', 'src/shared-ui/vendor/**'] },
+  // website/ is a standalone Astro property with its own browser conventions
+  { ignores: ['website/**', 'src/shared-ui/vendor/**'] },
 
   js.configs.recommended,
 

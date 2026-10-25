@@ -58,7 +58,7 @@ test('release body renders one Chinese section with version injected everywhere'
   assert.match(body, /^# Jiran v0\.47\.0$/m);
   assert.match(body, /<!-- app-update-notes:zh:start -->\n### 修复\n- 本版说明。\n<!-- app-update-notes:zh:end -->/);
   assert.match(body, /Jiran-0\.47\.0\.deb/);
-  assert.match(body, /https:\/\/github\.com\/IGNGserver\/jiran#readme/);
+  assert.match(body, /https:\/\/github\.com\/IGNGserver\/jiran-monitor#readme/);
   assert.doesNotMatch(body, /\{\{|\}\}/);
 });
 
@@ -83,7 +83,7 @@ test('download list is built from the artifact table and covers every published 
   assert.equal(lines.length, RELEASE_ARTIFACTS.length);
   for (const line of lines) assert.match(line, /^- \*\*.+\*\* — \[.+\]\(https:\/\/github\.com\/acme\/repo\/releases\/download\/v1\.2\.3\/.+\)(（[^）]+）)?$/);
   assert.ok(lines.some((line) => line.includes('Jiran-Android-1.2.3.apk')), 'Android APK must never be missing from the list');
-  assert.ok(lines.some((line) => line.includes('Jiran-1.2.3.deb')), 'The .deb must be listed for App Center / APT users');
+  assert.ok(lines.some((line) => line.includes('Jiran-1.2.3.deb')), 'The .deb must be listed for Linux users');
   assert.ok(lines.some((line) => line.includes('Jiran-Setup-1.2.3.exe')));
   assert.ok(lines.some((line) => line.includes('Jiran-1.2.3-arm64.dmg')));
   assert.ok(lines.some((line) => line.includes('Jiran-1.2.3.AppImage')));

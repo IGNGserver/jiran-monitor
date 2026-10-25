@@ -11,8 +11,13 @@
 </p>
 
 <p align="center">
-    <a href="https://github.com/IGNGserver/jiran/releases"><img src="https://img.shields.io/github/v/release/IGNGserver/jiran?include_prereleases&style=flat-square&label=release&color=22c55e" alt="最新版本" /></a>
-    <a href="https://github.com/IGNGserver/jiran/releases"><img src="https://img.shields.io/github/downloads/IGNGserver/jiran/total?style=flat-square&color=22c55e" alt="累计下载" /></a>
+    <a href="https://jiran.igng.net/">官网</a> ·
+    <a href="https://jiran.igng.net/en/">English site</a>
+</p>
+
+<p align="center">
+    <a href="https://github.com/IGNGserver/jiran-monitor/releases"><img src="https://img.shields.io/github/v/release/IGNGserver/jiran-monitor?include_prereleases&style=flat-square&label=release&color=22c55e" alt="最新版本" /></a>
+    <a href="https://github.com/IGNGserver/jiran-monitor/releases"><img src="https://img.shields.io/github/downloads/IGNGserver/jiran-monitor/total?style=flat-square&color=22c55e" alt="累计下载" /></a>
     <img src="https://img.shields.io/badge/Windows-10%2B-0078D4?style=flat-square" alt="Windows 10 及以上" />
     <img src="https://img.shields.io/badge/macOS-12%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 及以上" />
     <img src="https://img.shields.io/badge/Linux-x64-64748b?style=flat-square&logo=linux&logoColor=white" alt="Linux x64" />
@@ -87,7 +92,7 @@ AI 编程环境通常只有两个数字说不清，计然都从数据所在的�
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/IGNGserver/jiran/releases) 下载当前版本：
+从 [GitHub Releases](https://github.com/IGNGserver/jiran-monitor/releases) 下载当前版本：
 
 | 平台 | 文件 |
 |---|---|
@@ -97,17 +102,14 @@ AI 编程环境通常只有两个数字说不清，计然都从数据所在的�
 | Android | `Jiran-Android-<version>.apk`（Hub 的读端） |
 | 无界面 / 服务器 | `Jiran-Headless-<version>.tar.gz`，需 Node.js 22.13+，装好依赖用 `npm ci --omit=dev` |
 
-Linux 上可以挂 APT 仓库，让包管理器负责升级。请先与同目录下的
-`jiran-archive-keyring-fingerprint.txt` 核对密钥指纹：
+Linux 上直接下载 Release 里的 `.deb` 安装：
 
 ```bash
-curl -fsSL https://igngserver.github.io/jiran/apt/jiran-archive-keyring.asc \
-  | gpg --dearmor \
-  | sudo tee /usr/share/keyrings/jiran-archive-keyring.gpg >/dev/null
-curl -fsSL https://igngserver.github.io/jiran/apt/jiran.sources \
-  | sudo tee /etc/apt/sources.list.d/jiran.sources >/dev/null
-sudo apt update && sudo apt install jiran
+sudo apt install ./Jiran-<version>.deb
 ```
+
+AppImage 是单文件替代方案。项目不再维护 APT 仓库：下载与升级都以 GitHub Releases 为准，
+升级就是安装新的 `.deb`，而不是 `apt upgrade`。
 
 打包版会自动检查 GitHub Releases 并给出更新提示；在平台支持自装的前提下，管理页的「行为」组里
 提供「检查更新」与「重启安装」。更新通道跟随**已安装**的版本：正式版（`1.2.3`）只考虑非
@@ -240,9 +242,8 @@ v0.47.0-rev.37 把产品改名为 计然 / Jiran。这是改名，不是重来�
   `X-Jiran-Secret` 并行。
 - 过渡期内，发布同时向 `ghcr.io/igngserver/jiran-hub` 与 `ghcr.io/igngserver/token-monitor-hub`
   推送完全相同的标签。
-- APT 同时发布 `jiran` 与依赖它的 `token-monitor` 过渡包，已装机器 `apt upgrade` 就会被带到新包名。
-  **但仍需一次手工操作**：GitHub Pages 的 URL 不随仓库改名重定向，指向
-  `…/token-monitor-suite/apt` 的源文件现在会 404，请重跑上面那条 `curl … | sudo tee`。
+- Linux 安装包改为直接从 GitHub Releases 下载；APT 仓库及其 `token-monitor` 过渡包已于 2026-10
+  退役。已配置旧 APT 源的用户应删除旧源文件，改用 Releases 里的 `.deb`。
 - 有意保留不动的是身份类标识：Electron `appId`（`com.igng.tokenmonitor`）、Android
   `applicationId`、MySQL 默认库名与用户名、签名项目的 slug。
 

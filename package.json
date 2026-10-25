@@ -21,7 +21,6 @@
     "dist:win": "electron-builder --config scripts/electron-builder.config.js --win --x64 --publish never",
     "dist:linux": "electron-builder --config scripts/electron-builder.config.js --linux --x64 --publish never",
     "verify:deb": "node scripts/verify-deb-package.js",
-    "build:apt": "node scripts/build-apt-repository.js",
     "verify:release-artifact-names": "node scripts/verify-updater-artifact-names.js dist",
     "verify:release-version": "node scripts/verify-release-version.js",
     "package:headless": "node scripts/package-headless.js",
@@ -162,11 +161,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/IGNGserver/jiran.git"
+    "url": "git+https://github.com/IGNGserver/jiran-monitor.git"
   },
-  "homepage": "https://github.com/IGNGserver/jiran#readme",
+  "homepage": "https://jiran.igng.net/",
   "bugs": {
-    "url": "https://github.com/IGNGserver/jiran/issues"
+    "url": "https://github.com/IGNGserver/jiran-monitor/issues"
   },
   "dependencies": {
     "chokidar": "^4.0.3",

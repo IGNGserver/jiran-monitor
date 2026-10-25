@@ -645,75 +645,7 @@ jobs:
             artifacts/*.zip
             artifacts/*.blockmap
           body_path: release-body.md
-
-  apt-pages:
-    needs: [build, hub-image]
-    if: needs.hub-image.outputs.release_type == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      pages: write
-      id-token: write
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: jiran-linux
-          path: artifacts
-      - name: Check APT repository signing configuration
-        id: config
-        shell: bash
+      - name: Trigger website deploy
         env:
-          APT_REPOSITORY_GPG_PRIVATE_KEY: ${{ secrets.TOKEN_MONITOR_APT_GPG_PRIVATE_KEY }}
-          APT_REPOSITORY_GPG_KEY_ID: ${{ secrets.TOKEN_MONITOR_APT_GPG_KEY_ID }}
-        run: |
-          if [ -z "$APT_REPOSITORY_GPG_PRIVATE_KEY" ] || [ -z "$APT_REPOSITORY_GPG_KEY_ID" ]; then
-            echo "APT repository signing is not configured; skipping Pages APT deployment."
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build signed APT repository
-        if: steps.config.outputs.enabled == 'true'
-        shell: bash
-        env:
-          APT_REPOSITORY_GPG_PRIVATE_KEY: ${{ secrets.TOKEN_MONITOR_APT_GPG_PRIVATE_KEY }}
-          APT_REPOSITORY_GPG_KEY_ID: ${{ secrets.TOKEN_MONITOR_APT_GPG_KEY_ID }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$APT_REPOSITORY_GPG_PRIVATE_KEY" | gpg --batch --import
-          node site/build.mjs
-          node scripts/build-apt-repository.js \
-            --input-dir artifacts \
-            --output-dir _site/apt \
-            --suite stable \
-            --signing-key "$APT_REPOSITORY_GPG_KEY_ID" \
-            --require-signature
-          cp packaging/linux/jiran.sources _site/apt/jiran.sources
-          # legacy filename kept in sync: existing installs reference token-monitor.sources
-          cp packaging/linux/jiran.sources _site/apt/token-monitor.sources
-          gpg --armor --export "$APT_REPOSITORY_GPG_KEY_ID" > _site/apt/jiran-archive-keyring.asc
-          cp _site/apt/jiran-archive-keyring.asc _site/apt/token-monitor-archive-keyring.asc
-          fingerprint="$(gpg --with-colons --fingerprint "$APT_REPOSITORY_GPG_KEY_ID" | awk -F: '$1 == "fpr" { print $10; exit }')"
-          test -n "$fingerprint"
-          printf '%s\n' "$fingerprint" > _site/apt/jiran-archive-keyring-fingerprint.txt
-          cp _site/apt/jiran-archive-keyring-fingerprint.txt _site/apt/token-monitor-archive-keyring-fingerprint.txt
-          echo "Published APT archive key fingerprint: $fingerprint"
-      - name: Upload Pages artifact
-        if: steps.config.outputs.enabled == 'true'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: _site
-      - name: Deploy Pages artifact
-        if: steps.config.outputs.enabled == 'true'
-        id: deployment
-        uses: actions/deploy-pages@v5
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=release-published

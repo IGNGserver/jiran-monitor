@@ -1,0 +1,70 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from './Nav.astro';
+import Hero from './Hero.astro';
+import Name from './Name.astro';
+import Questions from './Questions.astro';
+import Rules from './Rules.astro';
+import Flow from './Flow.astro';
+import Privacy from './Privacy.astro';
+import Sources from './Sources.astro';
+import Install from './Install.astro';
+import Footer from './Footer.astro';
+import { getRelease } from '../data/release';
+import type { Lang } from '../i18n/content';
+// 首屏标题（中文标题与印章、英文标题）与正文用到的字体。预加载让浏览器不必等样式算完才开始下载，
+// Cloudflare Pages 还会把它们转成 103 Early Hints，在 HTML 返回前就开始传输。
+// fontsource 包的 exports 只开放 CSS，所以按文件路径引用；与样式表里的 url() 是同一个产物文件。
+import notoA600 from '../assets/fonts/noto-serif-sc-a-600.woff2?url';
+import sansLatin from '../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2?url';
+import serifLatin from '../../node_modules/@fontsource/instrument-serif/files/instrument-serif-latin-400-normal.woff2?url';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const release = await getRelease();
+const preloadFonts = [notoA600, sansLatin, ...(lang === 'en' ? [serifLatin] : [])];
+---
+<Base lang={lang}>
+  {preloadFonts.map((href) => <link slot="head" rel="preload" href={href} as="font" type="font/woff2" crossorigin />)}
+  <Nav lang={lang} />
+  <main id="main">
+    <Hero lang={lang} release={release} />
+    <div class="content">
+      <Name lang={lang} />
+      <Questions lang={lang} />
+      <Rules lang={lang} />
+      <Flow lang={lang} />
+      <Privacy lang={lang} />
+      <Sources lang={lang} />
+      <Install lang={lang} release={release} />
+    </div>
+  </main>
+  <Footer lang={lang} />
+  <script type="application/json" id="release-data" set:html={JSON.stringify(release)} />
+</Base>
+
+<style>
+  .content {
+    position: relative;
+    background: var(--bg);
+  }
+</style>
+
+<script>
+  import { initRelease } from '../scripts/release';
+  import { REPO } from '../data/product';
+  initRelease(REPO);
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          e.target.classList.add('is-in');
+          io.unobserve(e.target);
+        }
+      }
+    },
+    { rootMargin: '0px 0px -12% 0px', threshold: 0.05 },
+  );
+  document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+</script>

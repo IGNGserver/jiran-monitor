@@ -8,11 +8,11 @@ dist
 build
 tmp
 tests
-site
+website
 .agents
 .claude
 
-# Local-only secret material (APT signing key backup)
+# Local-only secret material
 .secrets
 scripts
 !scripts/prune-hub-deps.js

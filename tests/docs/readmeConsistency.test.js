@@ -87,13 +87,15 @@ test('READMEs say provider credentials belong to the Hub', () => {
   }
 });
 
-test('READMEs carry the rename migration and its one manual step', () => {
-  // GitHub Pages URLs do not follow a repository rename, so an APT source left pointing at the
-  // old path 404s and `apt update` fails outright; the transitional package cannot help there.
+test('READMEs carry the rename migration and the retired APT repository', () => {
+  // APT is no longer a supported upgrade path: Linux users install the Releases .deb directly.
+  // The READMEs must say so, or users will keep looking for a repository that no longer exists.
   for (const file of readmeFiles) {
     const text = read(file);
     assert.match(text, /Token Monitor/, `${file}: the former product name is not documented`);
-    assert.match(text, /token-monitor-suite/, `${file}: the dead APT source URL is not called out`);
+    assert.match(text, /APT/, `${file}: the retired APT repository is not mentioned`);
+    assert.match(text, /(retired|退役)/, `${file}: the reader is not told that APT was retired`);
+    assert.match(text, /\.deb/, `${file}: the direct .deb download is not documented`);
   }
 });
 

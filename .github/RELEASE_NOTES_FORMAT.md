@@ -33,7 +33,7 @@ changelog 是英文 PR 列表，且没有任何 workflow 步骤去填充它，�
 <details>
 <summary><strong>首次启动与其他说明</strong></summary>
 
-（各平台首次启动、签名、AppImage 执行权限、`.deb` / APT、Android 覆盖安装、tokscale 依赖）
+（各平台首次启动、签名、AppImage 执行权限、`.deb` 直接安装、Android 覆盖安装、tokscale 依赖）
 
 </details>
 

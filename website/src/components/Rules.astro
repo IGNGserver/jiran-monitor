@@ -1,0 +1,391 @@
+---
+import SectionHead from './SectionHead.astro';
+import { CONTENT, type Lang } from '../i18n/content';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = CONTENT[lang].rules;
+// 五条规矩的演示各用不同字段；按位置收窄类型
+type Item = (typeof t.items)[number];
+type With<K extends string> = Item & { [P in K]: string[] };
+const [r1, r2, r3] = t.items;
+const r4 = t.items[3] as With<'tabs' | 'tabNotes'>;
+const r5 = t.items[4] as With<'devices'>;
+// 示意数字：每个标签页各自的总量
+const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
+---
+
+<section class="section rules" id="rules" aria-labelledby="rules-title">
+  <div class="wrap">
+    <SectionHead index={3} id="rules" kicker={t.kicker} title={t.title} intro={t.intro} />
+
+    <ol class="rules__list">
+      <li class="rule reveal">
+        <span class="rule__glyph" aria-hidden="true">{r1.glyph}</span>
+        <div class="rule__text"><h3>{r1.title}</h3><p>{r1.body}</p></div>
+        <div class="rule__demo demo-tilde" aria-hidden="true">
+          <div><span class="mono demo-big">12,431</span><span class="note">{r1.demoMeasured}</span></div>
+          <div><span class="mono demo-big demo-est">~12.4K</span><span class="note">{r1.demoEstimated}</span></div>
+        </div>
+      </li>
+
+      <li class="rule reveal">
+        <span class="rule__glyph rule__glyph--mono" aria-hidden="true">{r2.glyph}</span>
+        <div class="rule__text"><h3>{r2.title}</h3><p>{r2.body}</p></div>
+        <div class="rule__demo demo-credits" aria-hidden="true">
+          <span class="mono demo-big demo-est">~1.24M <small>tok</small></span>
+          <span class="demo-sep">≠ +</span>
+          <span class="mono demo-big demo-cr">312.5 <small>cr</small></span>
+        </div>
+      </li>
+
+      <li class="rule reveal">
+        <span class="rule__glyph" aria-hidden="true">{r3.glyph}</span>
+        <div class="rule__text"><h3>{r3.title}</h3><p>{r3.body}</p></div>
+        <div class="rule__demo demo-hold" data-hold>
+          <button class="demo-hold__value mono" type="button" data-hold-value aria-describedby="hold-hint">~3,204,118</button>
+          <span class="demo-hold__state note"><i data-hold-dot></i><span data-hold-state data-live={r3.demoLive} data-held={r3.demoHeld}>{r3.demoLive}</span><span data-hold-queue></span></span>
+          <span class="note" id="hold-hint">{r3.demoHint}</span>
+        </div>
+      </li>
+
+      <li class="rule reveal">
+        <span class="rule__glyph rule__glyph--mono" aria-hidden="true">{r4.glyph}</span>
+        <div class="rule__text"><h3>{r4.title}</h3><p>{r4.body}</p></div>
+        <div class="rule__demo demo-tabs" data-tabs>
+          <div class="demo-tabs__bar" role="tablist" aria-label={r4.title}>
+            {r4.tabs.map((tab, i) => (
+              <button type="button" role="tab" aria-selected={i === 2 ? 'true' : 'false'} data-tab={i}>{tab}</button>
+            ))}
+          </div>
+          <div class="demo-tabs__panel" role="tabpanel" aria-live="polite">
+            <span class="mono demo-big" data-tab-value>{tabValues[2]}</span>
+            <span class="note" data-tab-note>{r4.tabNotes[2]}</span>
+          </div>
+          <script type="application/json" data-tab-data set:html={JSON.stringify({ values: tabValues, notes: r4.tabNotes })} />
+        </div>
+      </li>
+
+      <li class="rule reveal">
+        <span class="rule__glyph" aria-hidden="true">{r5.glyph}</span>
+        <div class="rule__text"><h3>{r5.title}</h3><p>{r5.body}</p></div>
+        <div class="rule__demo demo-stale" data-stale aria-hidden="true">
+          <ul>
+            {r5.devices.map((d, i) => (
+              <li data-device={i}>
+                <i></i><span class="demo-stale__name">{d}</span>
+                <span class="mono demo-stale__age" data-age>0:00</span>
+              </li>
+            ))}
+          </ul>
+          <span class="note">{r5.lastSeen} · {r5.demoClock}</span>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<style>
+  .rules__list {
+    margin-top: clamp(56px, 7vw, 96px);
+    border-top: 1px solid var(--line);
+  }
+  .rule {
+    display: grid;
+    grid-template-columns: clamp(64px, 9vw, 132px) minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: clamp(20px, 3vw, 48px);
+    align-items: center;
+    padding-block: clamp(28px, 3.4vw, 44px);
+    border-bottom: 1px solid var(--line);
+  }
+  .rule__glyph {
+    font-family: var(--f-display);
+    font-size: clamp(3rem, 6vw, 5.2rem);
+    line-height: 1;
+    color: var(--dai);
+    white-space: nowrap;
+  }
+  .rule__glyph--mono {
+    font-family: var(--f-mono);
+    font-size: clamp(1.8rem, 3.4vw, 2.8rem);
+    letter-spacing: -0.04em;
+  }
+  .rule__text h3 {
+    font-family: var(--f-display);
+    font-weight: 400;
+    font-size: var(--t-h3);
+    line-height: 1.2;
+    margin-bottom: 10px;
+  }
+  :lang(zh) .rule__text h3 {
+    font-weight: 600;
+  }
+  .rule__text p {
+    color: var(--fg-dim);
+    font-size: 0.9375rem;
+    max-width: 38em;
+  }
+  .rule__demo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 28px;
+    padding: 20px 22px;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    min-height: 112px;
+  }
+  .rule__demo > div,
+  .demo-tilde > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .demo-big {
+    font-size: clamp(1.3rem, 2vw, 1.7rem);
+    color: var(--fg);
+    letter-spacing: -0.02em;
+  }
+  .demo-big small {
+    font-size: 0.55em;
+    color: var(--fg-faint);
+    letter-spacing: 0.04em;
+  }
+  .demo-est {
+    color: var(--fg-dim);
+  }
+  .demo-cr {
+    color: var(--celadon);
+  }
+  .demo-sep {
+    font-family: var(--f-mono);
+    color: var(--cinnabar);
+    font-size: 0.9rem;
+  }
+
+  /* 刷新不打断 */
+  .demo-hold {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .demo-hold__value {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: clamp(1.3rem, 2vw, 1.7rem);
+    letter-spacing: -0.02em;
+    cursor: default;
+    transition: color 0.3s;
+  }
+  .demo-hold.is-held .demo-hold__value {
+    color: var(--fg-dim);
+  }
+  .demo-hold__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .demo-hold__state i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--celadon);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--celadon) 18%, transparent);
+  }
+  .demo-hold.is-held .demo-hold__state i {
+    background: var(--rule);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--rule) 18%, transparent);
+  }
+
+  /* 标签页归属 */
+  .demo-tabs {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .demo-tabs__bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .demo-tabs__bar button {
+    padding: 5px 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: none;
+    font-size: var(--t-small);
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: all 0.25s;
+  }
+  .demo-tabs__bar button:hover {
+    color: var(--fg);
+    border-color: var(--line-2);
+  }
+  .demo-tabs__bar button[aria-selected='true'] {
+    background: var(--fg);
+    border-color: var(--fg);
+    color: var(--bg);
+  }
+  .demo-tabs__panel {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  /* 置灰的设备 */
+  .demo-stale {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .demo-stale ul {
+    display: grid;
+    gap: 6px;
+  }
+  .demo-stale li {
+    display: grid;
+    grid-template-columns: 10px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.875rem;
+    transition: opacity 0.5s, color 0.5s;
+  }
+  .demo-stale li i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--celadon);
+    transition: background 0.5s;
+  }
+  .demo-stale li.is-stale {
+    color: var(--fg-faint);
+  }
+  .demo-stale li.is-stale i {
+    background: var(--fg-faint);
+  }
+  .demo-stale__age {
+    font-size: 0.8125rem;
+    color: var(--fg-dim);
+  }
+  .demo-stale li.is-stale .demo-stale__age {
+    color: var(--cinnabar);
+  }
+
+  @media (max-width: 1000px) {
+    .rule {
+      grid-template-columns: 64px minmax(0, 1fr);
+    }
+    .rule__demo {
+      grid-column: 2;
+    }
+  }
+  @media (max-width: 560px) {
+    .rule {
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    .rule__demo {
+      grid-column: 1;
+    }
+  }
+</style>
+
+<script>
+  const fmt = new Intl.NumberFormat('en-US');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 刷新不打断：指针停留或聚焦时推迟写入，离开后一次性应用最新一帧
+  const hold = document.querySelector<HTMLElement>('[data-hold]');
+  if (hold) {
+    const value = hold.querySelector<HTMLElement>('[data-hold-value]')!;
+    const state = hold.querySelector<HTMLElement>('[data-hold-state]')!;
+    const queue = hold.querySelector<HTMLElement>('[data-hold-queue]')!;
+    let n = 3204118;
+    let held = false;
+    let pending = 0;
+    const setHeld = (h: boolean) => {
+      held = h;
+      hold.classList.toggle('is-held', h);
+      state.textContent = h ? state.dataset.held! : state.dataset.live!;
+      if (!h) {
+        value.textContent = '~' + fmt.format(n);
+        pending = 0;
+        queue.textContent = '';
+      }
+    };
+    value.addEventListener('pointerenter', () => setHeld(true));
+    value.addEventListener('pointerleave', () => setHeld(false));
+    value.addEventListener('focus', () => setHeld(true));
+    value.addEventListener('blur', () => setHeld(false));
+    if (!reduced) {
+      setInterval(() => {
+        n += 1200 + Math.floor(Math.random() * 9000);
+        if (held) {
+          pending++;
+          queue.textContent = ` · +${pending}`;
+        } else value.textContent = '~' + fmt.format(n);
+      }, 1400);
+    }
+  }
+
+  // 标签页：每个数字只属于问它的那个标签页
+  const tabs = document.querySelector<HTMLElement>('[data-tabs]');
+  if (tabs) {
+    const data = JSON.parse(tabs.querySelector('[data-tab-data]')!.textContent!);
+    const v = tabs.querySelector<HTMLElement>('[data-tab-value]')!;
+    const note = tabs.querySelector<HTMLElement>('[data-tab-note]')!;
+    const buttons = [...tabs.querySelectorAll<HTMLButtonElement>('[data-tab]')];
+    const select = (i: number) => {
+      buttons.forEach((b, j) => {
+        b.setAttribute('aria-selected', String(i === j));
+        b.tabIndex = i === j ? 0 : -1;
+      });
+      v.textContent = data.values[i];
+      note.textContent = data.notes[i];
+    };
+    buttons.forEach((b, i) => {
+      b.addEventListener('click', () => select(i));
+      b.addEventListener('keydown', (e) => {
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d) return;
+        const next = (i + d + buttons.length) % buttons.length;
+        select(next);
+        buttons[next].focus();
+      });
+    });
+    select(2);
+  }
+
+  // 置灰的设备：演示时钟 ×60（1 秒 = 1 分钟）。第三台设备停止上报，超过 10 分钟即置灰
+  const stale = document.querySelector<HTMLElement>('[data-stale]');
+  if (stale && !reduced) {
+    const rows = [...stale.querySelectorAll<HTMLElement>('[data-device]')];
+    const ages = [1, 3, 6];
+    const cadence = [4, 5, Infinity];
+    let silentFor = 0;
+    const render = () =>
+      rows.forEach((row, i) => {
+        const m = Math.floor(ages[i]);
+        row.querySelector('[data-age]')!.textContent = `${m}:${String(Math.floor((ages[i] % 1) * 60)).padStart(2, '0')}`;
+        row.classList.toggle('is-stale', ages[i] > 10);
+      });
+    let visible = false;
+    new IntersectionObserver(([e]) => (visible = e.isIntersecting)).observe(stale);
+    setInterval(() => {
+      if (!visible) return;
+      for (let i = 0; i < ages.length; i++) {
+        ages[i] += 0.25;
+        if (ages[i] >= cadence[i]) ages[i] = 0;
+      }
+      if (ages[2] > 10) silentFor += 0.25;
+      if (silentFor > 8) {
+        ages[2] = 0;
+        silentFor = 0;
+      }
+      render();
+    }, 250);
+    render();
+  }
+</script>
