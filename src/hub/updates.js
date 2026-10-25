@@ -1,5 +1,7 @@
 'use strict';
 
+const { retryAfterMs } = require('../shared/repositoryUpdateFeed');
+
 const {
   compareProjectVersions,
   parseProjectTag,
@@ -156,7 +158,9 @@ async function fetchDocument(fetchImpl, url, { timeoutMs, headers, maxBytes, jso
     controller.signal.throwIfAborted();
     if (!response.ok) {
       void response.body?.cancel?.().catch(() => {});
-      throw new UpdateCheckError(`github_release_api_${response.status}`);
+      const error = new UpdateCheckError(`github_release_api_${response.status}`);
+      error.retryDelayMs = retryAfterMs(response.headers, Date.now());
+      throw error;
     }
     const text = await readBoundedText(response, maxBytes, controller.signal);
     return json ? JSON.parse(text) : text;
@@ -220,7 +224,9 @@ function createUpdateService({
         failure = null;
         return releases;
       } catch (error) {
-        failure = { error, retryAt: now() + FAILURE_COOLDOWN_MS };
+        const count = Math.min(10, (failure?.count || 0) + 1);
+        const delay = Math.max(error.retryDelayMs || 0, Math.min(6 * 60 * 60 * 1000, FAILURE_COOLDOWN_MS * 2 ** (count - 1)));
+        failure = { error, count, retryAt: now() + delay };
         throw error;
       } finally {
         inFlight = null;
@@ -252,7 +258,7 @@ function createUpdateService({
       if (!victim) return null;
       checksums.delete(victim[0]);
     }
-    const entry = { promise: null, sha256: null, expiresAt: 0 };
+    const entry = { promise: null, sha256: null, expiresAt: 0, failureCooldownMs: FAILURE_COOLDOWN_MS };
     checksums.set(key, entry);
     entry.promise = (async () => {
       try {
@@ -263,10 +269,11 @@ function createUpdateService({
         });
         const match = SHA256_TEXT_PATTERN.exec(text);
         entry.sha256 = match ? match[1].toLowerCase() : null;
-      } catch (_) {
+      } catch (error) {
         entry.sha256 = null;
+        entry.failureCooldownMs = Math.max(FAILURE_COOLDOWN_MS, error.retryDelayMs || 0);
       } finally {
-        entry.expiresAt = now() + (entry.sha256 ? cacheTtl : FAILURE_COOLDOWN_MS);
+        entry.expiresAt = now() + (entry.sha256 ? cacheTtl : entry.failureCooldownMs);
         entry.promise = null;
       }
       return entry.sha256;

@@ -19,8 +19,8 @@ import okhttp3.Request
 
 /**
  * The only hosts an update may come from: GitHub's release page and the CDN it
- * redirects downloads to. The Hub supplies the URL, but a compromised or
- * misconfigured Hub must not be able to point the installer at arbitrary code.
+ * redirects downloads to. The repository index supplies the URL, but a malformed or
+ * misconfigured index must not point the installer at arbitrary code.
  */
 internal interface DownloadUrlPolicy {
   fun requireAllowed(raw: String): HttpUrl

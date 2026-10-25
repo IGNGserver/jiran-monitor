@@ -176,7 +176,7 @@ test('reading the form back produces the right value types', () => {
 
   const fields = [
     ['startAtLogin', 'checkbox', true], ['closeToTray', 'checkbox', false],
-    ['updateChannel', 'text', 'prerelease'],
+    ['updateChannel', 'text', 'preview'],
     ['deviceId', 'text', ' renamed '], ['hubUrl', 'text', ' http://hub:17321 ']
   ];
   const nodes = fields.map(([name, type, value]) => ({ name, type, value: String(value), checked: value === true }));
@@ -200,7 +200,7 @@ test('reading the form back produces the right value types', () => {
   assert.equal(patch.closeToTray, false);
   assert.equal(patch.deviceId, 'renamed', 'text fields are trimmed');
   assert.equal(patch.hubUrl, 'http://hub:17321');
-  assert.equal(patch.updateChannel, 'prerelease');
+  assert.equal(patch.updateChannel, 'preview');
   assert.equal(patch.hubMode, 'client');
   assert.equal(patch.language, 'zh-CN');
   assert.equal(patch.reduceMotion, 'on');
@@ -224,7 +224,7 @@ test('the surface control round-trips through the dropdown', () => {
 test('the update panel shows the channel and only offers an install that can work', () => {
   const { renderDesktopSettings } = loadView({
     desktopAppUpdate: {
-      currentVersion: '1.4.3', installedChannel: 'prerelease', channel: 'stable',
+      currentVersion: '1.4.3', installedChannel: 'preview', channel: 'stable',
       latest: { version: '1.2.1', prerelease: false }, hasUpdate: false, currentAhead: true,
       downloaded: false, installSupported: true, lastCheckedAt: '2026-10-25T12:00:00Z'
     }

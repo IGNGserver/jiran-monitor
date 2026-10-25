@@ -126,11 +126,11 @@ sudo apt install ./Jiran-<version>.deb
 The AppImage is a single-file alternative. There is no APT repository: GitHub Releases is the
 download and upgrade source, so an upgrade is a new `.deb` install rather than an `apt upgrade`.
 
-Packaged builds check GitHub Releases; where the platform supports self-install, Management's
+Desktop and Android devices check a repository-owned static update index directly, without a Hub or GitHub REST release enumeration. Where the platform supports self-install, Management's
 **Behaviour** group offers **Check for updates**, **Download and install**, and an update channel.
 The channel is an explicit user choice: **Stable** receives formal releases only; **Prerelease**
 receives prerelease builds earlier and also accepts newer formal releases. Switching back to stable
-never downgrades automatically; the app moves over when the next formal release ships.
+never downgrades; the app moves over when a strictly newer formal release ships. Request caching, server cooldowns and installer verification are described in [Device updates](docs/DEVICE_UPDATES.md).
 
 **First run needs no setup.** Local mode is the default: launch the app and it starts tracking
 this device — no Hub, no agent, no `.env`.

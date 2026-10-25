@@ -12,15 +12,15 @@
 
 ## 更新通道与 Latest 标记
 
-桌面客户端的更新通道是用户设置（默认 `stable`），不再根据已安装版本字符串推断：
+桌面与 Android 客户端的更新通道是本机用户设置（默认 `stable`），不再根据已安装版本字符串推断：
 
 - `stable` 只接受 `prerelease: false` 且版本号不带 prerelease 后缀的发布；
-- `prerelease` 接受预发布构建，也接受更新的正式版；
-- 从预发布通道切回稳定版不会自动降级，客户端会在下一个正式版发布时更新。
+- `preview` 接受预发布构建，也接受更新的正式版（旧 `prerelease` 设置自动迁移）；
+- 从预发布通道切回稳定版不会自动降级，客户端只在严格更高的正式版发布时更新。
 
 版本号与发布类型相互独立：`1.4.3` 可以是 semver 意义上的正式版本，同时在 GitHub 上标记为 prerelease。客户端以 GitHub 的 prerelease 标记为准。
 
-`softprops/action-gh-release` 必须显式设置 `make_latest`：正式版为 `true`，prerelease 为 `false`。否则 GitHub 的 `/releases/latest` 会停留在旧正式版（例如 `v1.2.1` 发布后仍指向 `v1.0.0`），electron-updater 的稳定通道路径就解析不到新版本。
+`softprops/action-gh-release` 仍显式设置 `make_latest`：正式版为 `true`，prerelease 为 `false`，兼容历史客户端。当前桌面与 Android 使用仓库 `updates` 分支的静态更新索引并固定所选 tag 下载，不再依赖 `/releases/latest` 或中枢检查。请求缓存、退避和历史版本兼容规则见 [Device updates](DEVICE_UPDATES.md)。
 
 ## 首次配置 Android 签名
 

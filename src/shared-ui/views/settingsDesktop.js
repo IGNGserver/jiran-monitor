@@ -40,7 +40,7 @@ const REDUCE_MOTION = [
 ];
 const UPDATE_CHANNEL_OPTIONS = [
   ['stable', 'desktop.settings.channelStable'],
-  ['prerelease', 'desktop.settings.channelPrerelease']
+  ['preview', 'desktop.settings.channelPrerelease']
 ];
 const UPDATE_ERROR_KEYS = {
   rateLimited: 'desktop.settings.updateErrorRateLimited',
@@ -70,7 +70,7 @@ function optionLabels(pairs) {
 
 function channelLabel(channel) {
   if (!channel) return '';
-  return tr(channel === 'prerelease' ? 'desktop.settings.channelPrerelease' : 'desktop.settings.channelStable');
+  return tr(channel === 'preview' ? 'desktop.settings.channelPrerelease' : 'desktop.settings.channelStable');
 }
 
 function versionWithChannel(version, channel) {
@@ -83,7 +83,7 @@ function versionWithChannel(version, channel) {
 
 function releaseChannelOf(release) {
   if (!release) return null;
-  return release.prerelease === true ? 'prerelease' : 'stable';
+  return release.prerelease === true ? 'preview' : 'stable';
 }
 
 function formatCheckedAt(value) {
@@ -258,7 +258,7 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   // release-list check and electron-updater read it. The install action only
   // appears when the pushed state actually has something to install.
   const update = appState()?.desktopAppUpdate;
-  const updateChannel = settings.updateChannel === 'prerelease' ? 'prerelease' : 'stable';
+  const updateChannel = settings.updateChannel === 'preview' ? 'preview' : 'stable';
   const currentVersion = update?.currentVersion || info.version || '';
   const installedChannel = update?.installedChannel || null;
   const latest = update?.latest || null;
@@ -301,7 +301,7 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   const releaseButton = installVisible && !installSupported
     ? actionButton('open-release-page', 'desktop.settings.openReleasePage', 'primary')
     : '';
-  const prereleaseNotice = update?.installedChannel === 'prerelease' && updateChannel === 'stable'
+  const prereleaseNotice = update?.installedChannel === 'preview' && updateChannel === 'stable'
     ? `<div class="desktop-update-notice">
         <span class="row-sub">${escapeHtml(tr('desktop.settings.prereleaseNotice', { version: currentVersion }))}</span>
         <fluent-button appearance="transparent" type="button" class="ghost-btn" data-desktop-action="switch-to-prerelease-channel">${escapeHtml(tr('desktop.settings.switchToPrerelease'))}</fluent-button>

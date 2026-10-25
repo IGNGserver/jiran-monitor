@@ -233,3 +233,35 @@ test('the Hub route serves update metadata and advertises the capability', async
     await hub.stop();
   }
 });
+
+test('legacy Hub clients respect Retry-After and exponential failure cooldown', async () => {
+  let time = 1_000_000;
+  let calls = 0;
+  const service = serviceFor([], {
+    now: () => time,
+    fetchImpl: async () => { calls++; return new Response('', { status: 429, headers: { 'retry-after': '3600' } }); }
+  });
+  await assert.rejects(service.getInfo({ platform: 'android', currentVersion: '1.0.0' }), /github_release_api_429/);
+  time += 120_000;
+  await assert.rejects(service.getInfo({ platform: 'android', currentVersion: '1.0.0' }), /github_release_api_429/);
+  assert.equal(calls, 1);
+  time += 3_600_000;
+  await assert.rejects(service.getInfo({ platform: 'android', currentVersion: '1.0.0' }), /github_release_api_429/);
+  assert.equal(calls, 2);
+});
+test('legacy checksum requests also respect the upstream Retry-After cooldown', async () => {
+  let time = 1_000_000;
+  let checksumCalls = 0;
+  const data = release('1.3.1', { assets: [asset('Jiran-Android-1.3.1.apk', { digest: null }), asset('Jiran-Android-1.3.1.apk.sha256')] });
+  const service = serviceFor([data], {
+    now: () => time,
+    fetchImpl: async (url) => {
+      if (url.endsWith('.sha256')) { checksumCalls++; return new Response('', { status: 429, headers: { 'retry-after': '3600' } }); }
+      return jsonResponse([data]);
+    }
+  });
+  assert.equal((await service.getInfo({ platform: 'android', currentVersion: '1.0.0-rev.1' })).installable, false);
+  time += 120_000;
+  await service.getInfo({ platform: 'android', currentVersion: '1.0.0-rev.1' });
+  assert.equal(checksumCalls, 1);
+});

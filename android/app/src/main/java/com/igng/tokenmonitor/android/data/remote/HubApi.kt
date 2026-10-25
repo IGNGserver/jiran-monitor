@@ -42,9 +42,11 @@ interface HubApi {
   @GET("api/auth/session") suspend fun authSession(): AuthSessionResponseDto
   @DELETE("api/auth/session") suspend fun logout(): Response<Unit>
   /**
-   * Release metadata for this Android build. The Hub resolves the release
+   * Legacy endpoint retained for old Hub protocol tests. AppUpdateRepository does
+   * not call it: device updates read the static repository feed directly.
+   * The legacy Hub resolves the release
    * channel from [currentVersion] and returns the APK URL and SHA-256; the
-   * phone never talks to GitHub for the check itself.
+   * old phone did not talk to GitHub for the check itself.
    */
   @GET("api/updates") suspend fun updateInfo(
     @Query("platform") platform: String = "android",

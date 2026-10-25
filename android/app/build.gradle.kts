@@ -69,6 +69,9 @@ private fun releaseVersionCode(version: String): Int {
   } else {
     0L
   }
+  require(minor in 0..99 && patch in 0..99 && revision in 0..9999) {
+    "Android version components exceed their encoding slots: $version"
+  }
   val baseVersionCode = major * 10000L + minor * 100L + patch
   val versionCode = baseVersionCode * 10000L + revision
   require(versionCode in 1..Int.MAX_VALUE.toLong()) {

@@ -35,7 +35,7 @@ test('starting a user-requested download restores its dismissed notification', (
 
 test('the release-list check receives the selected channel', () => {
   const check = sourceBetween('async function runAppUpdateCheck', 'function maybeRunBackgroundUpdateCheck');
-  assert.match(check, /checkLatestRelease\(app\.getVersion\(\), normalizeUpdateChannel\(settings\?\.updateChannel\)\)/);
+  assert.match(check, /checkLatestRelease\(app\.getVersion\(\), normalizeUpdateChannel\(settings\?\.updateChannel\), \{ feedClient: repositoryFeedClient, manual: force/);
 });
 
 test('the native updater follows the selected channel and never overwrites the release-list latest', () => {
@@ -62,4 +62,21 @@ test('the update state exposes the selected channel, installed channel and chann
   assert.match(derive, /noChannelRelease/);
   assert.match(derive, /lastErrorKind: appUpdateLastErrorKind/);
   assert.match(derive, /releaseListUrl: RELEASES_HTML_URL/);
+});
+
+test('fixed-tag downloads retain independent no-downgrade and native support guards', () => {
+  const download = sourceBetween('async function downloadAndPrepareAppUpdate', 'async function installDownloadedAppUpdate');
+  assert.match(download, /provider: 'generic'/);
+  assert.match(download, /encodeURIComponent\(latest\.tag\)/);
+  assert.match(download, /result\?\.isUpdateAvailable !== true/);
+  assert.match(download, /compareProjectVersions\(version, app\.getVersion\(\)\) !== 1/);
+  assert.match(download, /allowDowngrade = needsLegacyRevisionCompatibility\(latest\.version, app\.getVersion\(\)\)/);
+  assert.match(download, /finally \{\s*autoUpdater\.allowDowngrade = false/);
+  const install = sourceBetween('async function installDownloadedAppUpdate', 'function isAllowedExternalUrl');
+  assert.match(install, /compareProjectVersions\(latest\?\.version, app\.getVersion\(\)\) !== 1/);
+});
+test('background failures retain visible error state instead of claiming the cached version is current', () => {
+  const check = sourceBetween('async function runAppUpdateCheck', 'function maybeRunBackgroundUpdateCheck');
+  assert.match(check, /appUpdateLastError = result\.error \|\| 'Update check failed'/);
+  assert.doesNotMatch(check, /appUpdateLastError = force \?/);
 });
