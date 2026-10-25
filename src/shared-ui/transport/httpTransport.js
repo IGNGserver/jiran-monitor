@@ -7,6 +7,7 @@
 
 const STORAGE_SECRET = 'token-monitor.hub.secret';
 import { createSseFrameSplitter } from '../core/sseFrames.js';
+import { copyTextWithFallback } from './clipboard.js';
 const STORAGE_SECRET_SESSION = 'token-monitor.hub.secret.session';
 const STORAGE_PREFS = 'token-monitor.hub.prefs';
 
@@ -447,12 +448,7 @@ export function createHttpTransport(options = {}) {
     openExternal(url) {
       if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
     },
-    copyText(text) {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        return navigator.clipboard.writeText(String(text ?? ''));
-      }
-      return Promise.resolve(false);
-    },
+    copyText: copyTextWithFallback,
     confirm(message) {
       return Promise.resolve(typeof window !== 'undefined' ? window.confirm(message) : false);
     },

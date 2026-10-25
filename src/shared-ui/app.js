@@ -3609,7 +3609,7 @@ function bindEvents() {
           if (ok === false) throw new Error('clipboard_unavailable');
           showToast(tr('accounts.oauthLinkCopied'));
         } catch {
-          showToast(tr('error.generic'));
+          showToast(tr('accounts.oauthLinkCopyFailed'));
         }
       })();
       return;

@@ -12,6 +12,8 @@
 // than silently falling through to a browser global that does not exist in
 // Electron.
 
+import { copyTextWithFallback } from './clipboard.js';
+
 let activeTransport = null;
 
 /** @typedef {ReturnType<typeof import('./contract.js').describeContract>} TransportContract */
@@ -166,10 +168,7 @@ export function openExternal(url) {
 export function copyText(text) {
   const transport = getTransport();
   if (typeof transport.copyText === 'function') return transport.copyText(text);
-  if (typeof navigator !== 'undefined' && navigator.clipboard) {
-    return navigator.clipboard.writeText(String(text ?? ''));
-  }
-  return Promise.resolve(false);
+  return copyTextWithFallback(text);
 }
 
 /** Confirm a destructive action. Desktop routes this to a native dialog. */
