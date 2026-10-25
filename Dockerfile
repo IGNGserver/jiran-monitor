@@ -9,7 +9,7 @@ FROM node:22.13.1-bookworm-slim AS web-assets
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
-COPY scripts/build-web.js ./scripts/build-web.js
+COPY scripts/build-web.js scripts/build-pwa-icons.js ./scripts/
 COPY src/shared-ui ./src/shared-ui
 COPY src/hub/web ./src/hub/web
 RUN npm run build:web

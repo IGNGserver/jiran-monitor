@@ -2821,6 +2821,49 @@ for (const [locale, messages] of Object.entries(PAGE_MESSAGES)) {
   Object.assign(MESSAGES[locale], messages);
 }
 
+const BROWSER_PWA_MESSAGES = {
+  en: {
+    'pwa.manage': 'App and updates', 'pwa.close': 'Done', 'pwa.update': 'Update and reopen',
+    'pwa.updateReady': 'An app update is ready.',
+    'pwa.updateDraft': 'Updating reopens this page. Save your current input first. Update now?',
+    'pwa.helpIos': 'iPhone / iPad: in Safari, choose Share → Add to Home Screen and enable Open as Web App.',
+    'pwa.helpAndroid': 'Android: use Install when available, or the browser menu → Install app / Add to Home Screen. Available options depend on the browser.',
+    'pwa.helpOffline': 'The app shell can reopen offline. Usage and account data still require a connection to your hub.'
+  },
+  'zh-CN': {
+    'pwa.manage': '应用与更新', 'pwa.close': '完成', 'pwa.update': '更新并重新打开',
+    'pwa.updateReady': '应用新版本已就绪。',
+    'pwa.updateDraft': '更新会重新打开页面。请先保存当前输入，现在更新吗？',
+    'pwa.helpIos': 'iPhone / iPad：在 Safari 分享菜单中选择“添加到主屏幕”，并开启“作为网页 App 打开”。',
+    'pwa.helpAndroid': '安卓：可以安装时点击安装按钮，或使用浏览器菜单中的“安装应用／添加到主屏幕”。具体选项因浏览器而异。',
+    'pwa.helpOffline': '离线时可以重新打开应用界面。用量与账号数据仍需连接中枢后查看。'
+  },
+  'zh-TW': {
+    'pwa.manage': '應用程式與更新', 'pwa.close': '完成', 'pwa.update': '更新並重新開啟',
+    'pwa.updateReady': '應用程式新版本已就緒。',
+    'pwa.updateDraft': '更新會重新開啟頁面。請先儲存目前輸入，現在更新嗎？',
+    'pwa.helpIos': 'iPhone / iPad：在 Safari 分享選單選擇「加入主畫面」，並開啟「作為網頁 App 開啟」。',
+    'pwa.helpAndroid': 'Android：可以安裝時按安裝按鈕，或使用瀏覽器選單的「安裝應用程式／加入主畫面」。可用選項依瀏覽器而異。',
+    'pwa.helpOffline': '離線時可重新開啟應用程式介面。用量與帳號資料仍需連線至中樞。'
+  },
+  ja: {
+    'pwa.manage': 'アプリと更新', 'pwa.close': '完了', 'pwa.update': '更新して開き直す',
+    'pwa.updateReady': 'アプリの更新が利用できます。',
+    'pwa.updateDraft': '更新するとページを開き直します。入力内容を先に保存してください。今すぐ更新しますか？',
+    'pwa.helpIos': 'iPhone / iPad：Safari の共有メニューから「ホーム画面に追加」を選び、「Web アプリとして開く」を有効にします。',
+    'pwa.helpAndroid': 'Android：利用可能な場合はインストールボタン、またはブラウザメニューの「アプリをインストール／ホーム画面に追加」を使います。選択肢はブラウザにより異なります。',
+    'pwa.helpOffline': 'オフラインでもアプリ画面を開けます。使用量とアカウント情報には Hub への接続が必要です。'
+  },
+  ko: {
+    'pwa.manage': '앱 및 업데이트', 'pwa.close': '완료', 'pwa.update': '업데이트 후 다시 열기',
+    'pwa.updateReady': '앱 업데이트가 준비되었습니다.',
+    'pwa.updateDraft': '업데이트하면 페이지가 다시 열립니다. 입력 내용을 먼저 저장하세요. 지금 업데이트할까요?',
+    'pwa.helpIos': 'iPhone / iPad: Safari 공유 메뉴에서 홈 화면에 추가를 선택하고 웹 앱으로 열기를 켭니다.',
+    'pwa.helpAndroid': 'Android: 사용 가능한 설치 버튼이나 브라우저 메뉴의 앱 설치 / 홈 화면에 추가를 이용하세요. 옵션은 브라우저에 따라 다릅니다.',
+    'pwa.helpOffline': '오프라인에서도 앱 화면을 열 수 있습니다. 사용량 및 계정 데이터는 Hub 연결이 필요합니다.'
+  }
+};
+for (const [locale, messages] of Object.entries(BROWSER_PWA_MESSAGES)) Object.assign(MESSAGES[locale], messages);
 export const SUPPORTED_LOCALES = Object.keys(MESSAGES);
 
 // Per-locale key lists, so a test can catch a string that only exists in English

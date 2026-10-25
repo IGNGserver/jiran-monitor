@@ -8,6 +8,8 @@ const { createReadStream, createWriteStream } = require('node:fs');
 const { pipeline } = require('node:stream/promises');
 const zlib = require('node:zlib');
 const esbuild = require('esbuild-wasm');
+const { injectManifest } = require('workbox-build');
+const { buildPwaIcons } = require('./build-pwa-icons');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -53,20 +55,39 @@ async function buildWeb({ outdir = path.join(ROOT, 'dist/web') } = {}) {
   for (const name of ['icons', 'favicon.png', 'manifest.webmanifest']) {
     await fs.cp(path.join(source, name), path.join(outdir, name), { recursive: true });
   }
-  const html = (await fs.readFile(path.join(source, 'index.html'), 'utf8'))
+  const icons = await buildPwaIcons({ source, outdir });
+  const versionIcons = (text) => Object.entries(icons).reduce((result, [old, url]) => result.replaceAll(old, url), text);
+  const webManifest = versionIcons(await fs.readFile(path.join(source, 'manifest.webmanifest'), 'utf8'));
+  await fs.writeFile(path.join(outdir, 'manifest.webmanifest'), webManifest);
+  const html = versionIcons(await fs.readFile(path.join(source, 'index.html'), 'utf8'))
     .replace('/ui/styles/app.css', publicPath(stylesheet))
-    .replace('/js/boot.js', publicPath(script));
+    .replace('/js/boot.js', publicPath(script))
+    .replace('</head>', '<meta name="jiran-pwa-build" content="1" /></head>');
   await fs.writeFile(path.join(outdir, 'index.html'), html);
   const template = await fs.readFile(path.join(source, 'sw.js'), 'utf8');
-  const revision = crypto.createHash('sha256').update(html).update(template);
+  const revision = crypto.createHash('sha256').update(html).update(webManifest).update(template);
   for (const file of outputs.sort()) revision.update(await fs.readFile(file));
   const version = revision.digest('hex').slice(0, 20);
-  // Required resources come from the bundler graph, not a hand-maintained list
-  // of modules. All application code is in the one JS file, including lazy imports.
-  const precache = ['/index.html', ...outputs.map(publicPath)];
-  const sw = template.replace("'jiran-web-development'", `'jiran-web-${version}'`)
-    .replace('/* generated-precache */ []', JSON.stringify(precache));
-  await fs.writeFile(path.join(outdir, 'sw.js'), sw);
+  // The bundler and generated icons supply the complete graph. A shell version
+  // activates only after every listed resource is available.
+  const precache = ['/index.html', '/manifest.webmanifest', ...outputs.map(publicPath), ...Object.values(icons)];
+  const workerBundle = await esbuild.build({
+    absWorkingDir: ROOT,
+    stdin: { contents: template.replace("'jiran-web-development'", `'jiran-web-${version}'`), resolveDir: path.join(source), sourcefile: 'sw.js' },
+    bundle: true, format: 'iife', platform: 'browser', target: ['safari15'], minify: true,
+    define: { 'process.env.NODE_ENV': '"production"' }, write: false
+  });
+  const candidate = path.join(outdir, '.sw-inject.js');
+  await fs.writeFile(candidate, workerBundle.outputFiles[0].text);
+  try {
+    await injectManifest({
+      swSrc: candidate, swDest: path.join(outdir, 'sw.js'), globDirectory: outdir, globPatterns: [],
+      additionalManifestEntries: await Promise.all(precache.map(async (url) => ({
+        url, revision: url.startsWith('/assets/') || url.startsWith('/icons/pwa-') ? null
+          : crypto.createHash('sha256').update(await fs.readFile(path.join(outdir, url.slice(1)))).digest('hex')
+      })))
+    });
+  } finally { await fs.rm(candidate, { force: true }); }
   const manifest = { version, precache, outputs: result.metafile.outputs };
   await fs.writeFile(path.join(outdir, 'asset-manifest.json'), JSON.stringify(manifest, null, 2));
   await precompressWebFiles(outdir);

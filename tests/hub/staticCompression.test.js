@@ -26,7 +26,7 @@ test('public static files negotiate compression, revalidate and preserve securit
     assert.equal(unchanged.status, 304);
     assert.equal(await unchanged.text(), '');
     const sw = await fetch(`${base}/sw.js`);
-    assert.equal(sw.headers.get('cache-control'), 'no-cache');
+    assert.equal(sw.headers.get('cache-control'), 'no-store, no-cache, max-age=0, must-revalidate');
     await sw.text();
   } finally { await hub.stop(); }
 });
@@ -79,7 +79,7 @@ test('precompressed streams preserve representation bytes, validators, HEAD and 
     assert.deepEqual(identity.body, body);
     assert.equal(identity.headers['content-length'], String(body.length));
     assert.equal(identity.headers['content-encoding'], undefined);
-    assert.equal(identity.headers['cache-control'], name.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+    assert.equal(identity.headers['cache-control'], name.startsWith('assets/') ? 'public, max-age=31536000, immutable' : name === 'js/boot.js' ? 'no-cache' : 'no-store, no-cache, max-age=0, must-revalidate');
     for (const [encoding, encoded] of [['gzip', gzip], ['br', br]]) {
       const headers = { 'accept-encoding': encoding };
       const response = await request(`/${name}`, { headers });

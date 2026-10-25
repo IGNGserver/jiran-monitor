@@ -18,6 +18,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
     <link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/ui/styles/app.css" />
   </head>
@@ -51,7 +52,7 @@
               <p id="pageMeta" class="page-meta">—</p>
             </div>
           </div>
-          <div class="page-commands"><fluent-button appearance="transparent" icon-only type="button" id="refreshBtn" class="icon-btn" title="Refresh" aria-label="Refresh"><span class="ui-icon-slot" data-ui-icon="refresh"></span></fluent-button><fluent-button appearance="transparent" icon-only type="button" id="settingsOpenTop" class="icon-btn mobile-only" title="Settings" aria-label="Settings" data-i18n-aria="nav.settings"><span class="ui-icon-slot" data-ui-icon="settings"></span></fluent-button></div>
+          <div class="page-commands"><button type="button" class="ghost-btn" data-pwa-help data-i18n="pwa.install">Install</button><fluent-button appearance="transparent" icon-only type="button" id="refreshBtn" class="icon-btn" title="Refresh" aria-label="Refresh"><span class="ui-icon-slot" data-ui-icon="refresh"></span></fluent-button><fluent-button appearance="transparent" icon-only type="button" id="settingsOpenTop" class="icon-btn mobile-only" title="Settings" aria-label="Settings" data-i18n-aria="nav.settings"><span class="ui-icon-slot" data-ui-icon="settings"></span></fluent-button></div>
         </header>
         <div class="topbar-actions scope-commandbar" role="group" aria-label="Filters and actions">
             <label class="device-filter">
@@ -96,6 +97,7 @@
           <span data-i18n="auth.remember">Remember on this device</span>
         </label>
         <p id="authError" class="form-error hidden"></p>
+        <button type="button" class="ghost-btn" data-pwa-help data-i18n="pwa.title">Install Jiran</button>
         <fluent-button appearance="primary" type="submit" class="primary-btn" data-i18n="auth.connect">Open dashboard</fluent-button>
       </form>
     </div>
@@ -190,6 +192,23 @@
         <fluent-button appearance="transparent" type="button" id="pwaDismissBtn" class="ghost-btn" data-i18n="pwa.dismiss">Not now</fluent-button>
       </div>
     </div>
+    <dialog id="pwaHelp" class="pwa-help" aria-labelledby="pwaHelpTitle">
+      <h2 id="pwaHelpTitle" data-i18n="pwa.title">Install Jiran</h2>
+      <p id="pwaHelpStatus"></p>
+      <p data-i18n="pwa.helpIos">iPhone / iPad: in Safari, choose Share → Add to Home Screen and enable Open as Web App.</p>
+      <p data-i18n="pwa.helpAndroid">Android: use Install when available, or the browser menu → Install app / Add to Home Screen. Available options depend on the browser.</p>
+      <p class="muted" data-i18n="pwa.helpOffline">The app shell can reopen offline. Usage and account data still require a connection to your hub.</p>
+      <div class="pwa-help-actions">
+        <button type="button" class="primary-btn" data-browser-install hidden data-i18n="pwa.install">Install</button>
+        <button type="button" class="primary-btn" data-pwa-update hidden data-i18n="pwa.update">Update and reopen</button>
+        <button type="button" class="ghost-btn" data-pwa-close data-i18n="pwa.close">Done</button>
+      </div>
+    </dialog>
+    <aside id="pwaUpdate" class="pwa-update" role="status" hidden>
+      <span data-i18n="pwa.updateReady">An app update is ready.</span>
+      <button type="button" class="ghost-btn" data-pwa-later data-i18n="pwa.dismiss">Not now</button>
+      <button type="button" class="primary-btn" data-pwa-update data-i18n="pwa.update">Update and reopen</button>
+    </aside>
     <div id="toast" class="toast hidden" role="status"></div>
     <div id="navScrim" class="nav-scrim hidden"></div>
 

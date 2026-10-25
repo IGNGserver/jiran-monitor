@@ -43,10 +43,10 @@ function contentTypeFor(filePath) {
 }
 
 function cacheControlFor(filePath, { revalidate = false } = {}) {
-  if (/[/\\]assets[/\\][\w-]+-[A-Z0-9]{8}\.(js|css)$/.test(filePath)) return 'public, max-age=31536000, immutable';
+  if (/[/\\]assets[/\\][\w-]+-[A-Z0-9]{8}\.(js|css)$/.test(filePath) || /[/\\]icons[/\\]pwa-[a-f0-9]{16}-[^/\\]+\.png$/.test(filePath)) return 'public, max-age=31536000, immutable';
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.html' || ext === '.webmanifest' || path.basename(filePath) === 'sw.js') {
-    return 'no-cache';
+    return 'no-store, no-cache, max-age=0, must-revalidate';
   }
   // The shared UI is deployed from the same source tree as the Hub and its
   // module URLs are intentionally stable. Revalidate those modules so a normal
