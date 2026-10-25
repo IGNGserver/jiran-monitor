@@ -1,3 +1,5 @@
+import { setupBrowserPwa } from './core/browserPwa.js';
+let browserPwaControls = null;
 import { finishFluentRender, setupFluentInteractions, syncFluentMotion, animateNavigation, animateDataUpdate, setFluentDropdownValue } from './core/fluent.js';
 import {
   capabilities,
@@ -858,6 +860,7 @@ function pwaStatusText() {
 }
 
 function refreshPwaUi() {
+  browserPwaControls?.refresh();
   if (els.aboutLine) {
     const base = `${tr('brand.name')} hub web · ${state.health?.now ? new Date(state.health.now).toLocaleString(state.locale) : 'ready'}`;
     els.aboutLine.textContent = `${base} · ${pwaStatusText()}`;
@@ -4326,12 +4329,21 @@ async function init() {
   render();
   markLoadingStage('shell');
 
-  if (isCapable('pwa') && 'serviceWorker' in navigator && window.isSecureContext) {
-    try {
-      void navigator.serviceWorker.register('/sw.js', { scope: '/' }).then((reg) => reg.update?.()).catch(() => {});
-    } catch {
-      /* optional when the browser rejects the worker */
-    }
+  if (isCapable('pwa')) {
+    browserPwaControls = setupBrowserPwa({
+      translate: tr,
+      confirmUpdate: confirmAction,
+      canInstall: () => Boolean(state.deferredInstall),
+      hasDraft: () => [...state.formDrafts.values()].some((draft) => draft?.dirty)
+        || Boolean(els.content.querySelector('[data-dirty]')),
+      install: async () => {
+        const prompt = state.deferredInstall;
+        if (!prompt) return;
+        state.deferredInstall = null;
+        try { await prompt.prompt(); await prompt.userChoice; } catch { /* native sheet dismissed */ }
+        refreshPwaUi();
+      }
+    });
   }
   if (isCapable('pwa')) refreshPwaUi();
 

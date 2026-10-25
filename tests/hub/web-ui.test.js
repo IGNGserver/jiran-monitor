@@ -98,8 +98,8 @@ test('hub serves the web UI on the same port without a secret', async () => {
     assert.match(sw.headers.get('content-type') || '', /javascript/);
     const swSource = await sw.text();
     assert.match(swSource, /jiran-web-(?:development|[a-f0-9]{20})/);
-    assert.match(swSource, /url\.pathname\.startsWith\('\/api\/'\)/);
-    assert.ok(!/self\.skipWaiting\(/.test(swSource), 'an update must not mix an open tab with a new resource graph');
+    assert.match(swSource, /\/api\//); // API bypass behavior is exercised in pwaLifecycle.test.js.
+    assert.match(swSource, /ACTIVATE_UPDATE/, 'activation is an explicit user action');
     // Built-graph reachability is tested against esbuild's manifest in web-build;
     // source development intentionally has no offline module precache promise.
 

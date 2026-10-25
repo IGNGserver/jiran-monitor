@@ -84,6 +84,9 @@ To dry-run the agent without posting: `node src/agent/agent.js --once --dry-run`
 
 ## Architecture
 
+The Hub PWA installation, Workbox graph, icon generation, adaptive viewport and proxy cache contract live in `docs/browser-pwa.md`.
+
+
 The desktop app, Docker Compose Hub, and headless agent share `src/shared/`, and the desktop app and the Hub dashboard additionally share `src/shared-ui/`:
 
 - **`src/shared-ui/`** — the one UI both hosts render. Views, i18n, formatting, pure data transforms, client icons and styles live here. Every host-specific call goes through `src/shared-ui/transport/`: `httpTransport` for the Hub (fetch + SSE, same-origin) and `ipcTransport` for Electron (IPC to the main process, which owns the secret and the stream lifecycle). `scripts/verify-shared-ui-boundary.js` enforces that no view reaches for `fetch`, storage, `history`, dialogs or `window.tokenMonitor` directly — that is what keeps one implementation viable in both.

@@ -17,3 +17,5 @@ website
 scripts
 !scripts/prune-hub-deps.js
 !scripts/build-web.js
+
+!scripts/build-pwa-icons.js

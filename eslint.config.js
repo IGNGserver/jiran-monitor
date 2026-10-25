@@ -73,7 +73,7 @@ module.exports = [
   {
     files: ['src/hub/web/sw.js'],
     languageOptions: {
-      sourceType: 'script',
+      sourceType: 'module',
       globals: { ...globals.serviceworker, ...globals.browser },
     },
   },

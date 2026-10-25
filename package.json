@@ -193,7 +193,11 @@
     "electron-builder": "26.15.3",
     "esbuild-wasm": "0.28.2",
     "eslint": "^10.8.0",
-    "globals": "^17.9.0"
+    "globals": "^17.9.0",
+    "sharp": "^0.34.5",
+    "workbox-build": "^7.4.1",
+    "workbox-precaching": "^7.4.1",
+    "workbox-routing": "^7.4.1"
   },
   "engines": {
     "node": ">=22.13.0"
