@@ -30,7 +30,7 @@ function copyWithSelection(text) {
   textarea.style.opacity = '0';
   textarea.style.pointerEvents = 'none';
 
-  let copied = false;
+  let copied;
   parent.appendChild(textarea);
   try {
     restoreFocus(textarea);
