@@ -29,7 +29,7 @@ test('正式版不在第一页时仍能找到', async () => {
     assets: [],
   });
   const pages: Record<string, unknown[]> = {
-    '1': Array.from({ length: 100 }, (_, i) => release(`v9.9.${i}`, true)),
+    '1': Array.from({ length: 30 }, (_, i) => release(`v9.9.${i}`, true)),
     '2': [release('v1.2.1', false)],
   };
   const calls: string[] = [];

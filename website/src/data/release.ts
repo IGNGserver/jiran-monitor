@@ -26,7 +26,7 @@ export function pickStable(list: GhRelease[]): ReleaseInfo | null {
   return { tag: rel.tag_name, url: rel.html_url, publishedAt: rel.published_at, assets };
 }
 
-const RELEASES_PER_PAGE = 100;
+const RELEASES_PER_PAGE = 30;
 const MAX_RELEASE_PAGES = 10;
 
 /**
