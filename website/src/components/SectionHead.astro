@@ -1,0 +1,19 @@
+---
+import { NUMERALS } from '../i18n/content';
+interface Props { index: number; kicker: string; title: string; intro?: string; id: string }
+const { index, kicker, title, intro, id } = Astro.props;
+---
+<header class="shead">
+  <p class="kicker reveal">
+    <span class="kicker__numeral" aria-hidden="true">{NUMERALS[index]}</span>
+    <span>{String(index).padStart(2, '0')} · {kicker}</span>
+    <span class="kicker__rule" aria-hidden="true"></span>
+  </p>
+  <h2 class="h2 reveal" id={`${id}-title`} style="--d:.08s">{title}</h2>
+  {intro && <p class="lead shead__intro reveal" style="--d:.16s">{intro}</p>}
+</header>
+<style>
+  .shead__intro {
+    margin-top: clamp(20px, 2.6vw, 32px);
+  }
+</style>

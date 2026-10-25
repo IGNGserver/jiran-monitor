@@ -1,0 +1,223 @@
+---
+import Mark from './Mark.astro';
+import { CONTENT, LANGS, NUMERALS, SECTION_IDS, type Lang } from '../i18n/content';
+import { REPO_URL } from '../data/product';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = CONTENT[lang];
+const other: Lang = lang === 'zh' ? 'en' : 'zh';
+---
+
+<header class="nav" data-nav>
+  <div class="nav__inner">
+    <a class="nav__brand" href={LANGS[lang].path} aria-label={lang === 'zh' ? '计然 首页' : 'Jiran home'}>
+      <Mark size={26} />
+      <span class="nav__word">{lang === 'zh' ? '计然' : 'Jiran'}</span>
+    </a>
+
+    <nav class="nav__index" aria-label={lang === 'zh' ? '章节' : 'Sections'}>
+      <ol>
+        {SECTION_IDS.map((id, i) => (
+          <li>
+            <a href={`#${id}`} data-nav-link={id}>
+              <span class="nav__numeral" aria-hidden="true">{NUMERALS[i + 1]}</span>
+              <span class="nav__label">{t.nav.sections[i]}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </nav>
+
+    <div class="nav__actions">
+      <a class="nav__lang" href={LANGS[other].path} hreflang={LANGS[other].htmlLang} lang={LANGS[other].htmlLang}>
+        {t.nav.langSwitch}
+      </a>
+      <a class="nav__gh" href={REPO_URL} rel="noopener" aria-label="GitHub">
+        <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <a class="nav__dl" href="#install">{t.nav.download}</a>
+    </div>
+  </div>
+  <div class="nav__progress" aria-hidden="true"><span data-nav-progress></span></div>
+</header>
+
+<style>
+  .nav {
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 50;
+    height: var(--nav-h);
+    transition: background 0.4s, border-color 0.4s;
+    border-bottom: 1px solid transparent;
+  }
+  .nav.is-solid {
+    background: rgb(242 237 227 / 0.8);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    border-color: var(--line);
+  }
+  .nav__inner {
+    height: 100%;
+    max-width: var(--max);
+    margin-inline: auto;
+    padding-inline: var(--gutter);
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .nav__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    flex: none;
+  }
+  .nav__word {
+    font-family: var(--f-display);
+    font-size: 1.35rem;
+    line-height: 1;
+    letter-spacing: 0.02em;
+  }
+  :global(:lang(zh)) .nav__word {
+    font-weight: 600;
+    font-size: 1.15rem;
+    letter-spacing: 0.12em;
+  }
+  .nav__index {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+  }
+  .nav__index ol {
+    display: flex;
+    gap: clamp(6px, 1.4vw, 22px);
+  }
+  .nav__index a {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px 4px;
+    font-size: var(--t-small);
+    color: var(--fg-dim);
+    text-decoration: none;
+  }
+  .nav__numeral {
+    font-family: var(--f-display);
+    font-size: 0.95rem;
+    color: var(--fg-faint);
+    transition: color 0.3s;
+  }
+  .nav__index a:hover,
+  .nav__index a.is-active {
+    color: var(--fg);
+  }
+  .nav__index a.is-active .nav__numeral {
+    color: var(--cinnabar);
+  }
+  .nav__actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    margin-left: auto;
+  }
+  .nav__lang,
+  .nav__gh {
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 10px;
+    font-size: var(--t-small);
+    color: var(--fg-dim);
+    text-decoration: none;
+    border-radius: 999px;
+  }
+  .nav__lang:hover,
+  .nav__gh:hover {
+    color: var(--fg);
+  }
+  .nav__dl {
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 16px;
+    margin-left: 6px;
+    border-radius: 999px;
+    border: 1px solid var(--line-2);
+    font-size: var(--t-small);
+    font-weight: 500;
+    text-decoration: none;
+    transition: background 0.3s, color 0.3s, border-color 0.3s;
+  }
+  .nav__dl:hover {
+    background: var(--fg);
+    color: var(--bg);
+    border-color: var(--fg);
+  }
+  .nav__progress {
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 1px;
+  }
+  .nav__progress span {
+    display: block;
+    height: 100%;
+    width: 100%;
+    background: var(--cinnabar);
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+  }
+
+  @media (max-width: 1080px) {
+    .nav__label {
+      display: none;
+    }
+  }
+  @media (max-width: 760px) {
+    .nav__index {
+      display: none;
+    }
+    .nav__gh {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const nav = document.querySelector<HTMLElement>('[data-nav]');
+  const bar = document.querySelector<HTMLElement>('[data-nav-progress]');
+  const links = new Map(
+    [...document.querySelectorAll<HTMLAnchorElement>('[data-nav-link]')].map((a) => [a.dataset.navLink!, a]),
+  );
+
+  let ticking = false;
+  const update = () => {
+    ticking = false;
+    const y = window.scrollY;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    nav?.classList.toggle('is-solid', y > window.innerHeight * 0.6);
+    if (bar) bar.style.transform = `scaleX(${max > 0 ? Math.min(1, y / max) : 0})`;
+  };
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(update);
+    }
+  }, { passive: true });
+  update();
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        links.forEach((a, id) => a.classList.toggle('is-active', id === e.target.id));
+      }
+    },
+    { rootMargin: '-45% 0px -50% 0px' },
+  );
+  links.forEach((_, id) => {
+    const el = document.getElementById(id);
+    if (el) io.observe(el);
+  });
+</script>

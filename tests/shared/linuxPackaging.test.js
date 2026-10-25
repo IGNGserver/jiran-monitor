@@ -10,10 +10,6 @@ const {
   normalizeReleaseDate,
   prepareLinuxPackageMetadata
 } = require('../../scripts/prepare-linux-package-metadata');
-const {
-  parseArgs: parseAptArgs,
-  renderReleaseFile
-} = require('../../scripts/build-apt-repository');
 
 test('Linux AppStream metadata renders the package version and release date', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jiran-metainfo-'));
@@ -50,73 +46,17 @@ test('Linux package metadata rejects malformed release dates', () => {
   assert.throws(() => normalizeReleaseDate('2026/09/12'), /YYYY-MM-DD/);
 });
 
-test('APT repository arguments keep signature requirements explicit', () => {
-  assert.deepEqual(
-    parseAptArgs([
-      '--input-dir', 'dist',
-      '--output-dir', 'apt',
-      '--suite', 'preview',
-      '--signing-key', 'release@example.com',
-      '--require-signature'
-    ]),
-    {
-      inputDir: 'dist',
-      outputDir: 'apt',
-      suite: 'preview',
-      component: 'main',
-      architecture: 'amd64',
-      signingKey: 'release@example.com',
-      requireSignature: true,
-      releaseDate: new Date().toISOString().slice(0, 10)
-    }
-  );
-});
-
-test('APT Release metadata lists checksums for compressed indexes', () => {
-  const release = renderReleaseFile({
-    suite: 'stable',
-    component: 'main',
-    architecture: 'amd64',
-    releaseDate: '2026-09-12',
-    files: [
-      {
-        relativePath: 'main/binary-amd64/Packages',
-        size: 12,
-        md5: 'md5sum',
-        sha256: 'sha256sum'
-      }
-    ]
-  });
-  assert.match(release, /Suite: stable/);
-  assert.match(release, /Architectures: amd64/);
-  assert.match(release, / md5sum 12 main\/binary-amd64\/Packages/);
-  assert.match(release, / sha256sum 12 main\/binary-amd64\/Packages/);
-});
-
 test('Linux release workflow verifies the built Debian package', () => {
   const workflowPath = path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml');
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /name: Verify Debian package metadata and version/);
   assert.match(workflow, /npm run verify:deb -- "\$deb_path" --version "\$version"/);
-  assert.match(workflow, /name: Build signed APT repository/);
-  assert.match(workflow, /--require-signature/);
-  assert.match(workflow, /actions\/deploy-pages@v5/);
 });
 
-test('APT source configuration uses a local keyring and the stable suite', () => {
-  const sourcePath = path.join(__dirname, '..', '..', 'packaging', 'linux', 'jiran.sources');
-  const source = fs.readFileSync(sourcePath, 'utf8');
-  assert.match(source, /URIs: https:\/\/igngserver\.github\.io\/jiran\/apt/);
-  assert.match(source, /Suites: stable/);
-  assert.match(source, /Signed-By: \/usr\/share\/keyrings\/jiran-archive-keyring\.gpg/);
-  assert.doesNotMatch(source, /trusted=yes/);
-});
-
-test('Pages workflow preserves the APT repository when the site is rebuilt', () => {
-  const workflowPath = path.join(__dirname, '..', '..', '.github', 'workflows', 'pages.yml');
+test('release pipeline no longer publishes an APT repository or GitHub Pages site', () => {
+  const workflowPath = path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml');
   const workflow = fs.readFileSync(workflowPath, 'utf8');
-  assert.match(workflow, /releases\/latest/);
-  assert.match(workflow, /gh release download "\$latest_tag" --pattern '\*\.deb'/);
-  assert.match(workflow, /--require-signature/);
-  assert.match(workflow, /refusing to deploy a Pages site that would erase the APT repository/);
+  assert.doesNotMatch(workflow, /build-apt-repository/);
+  assert.doesNotMatch(workflow, /deploy-pages/);
+  assert.doesNotMatch(workflow, /_site\/apt/);
 });

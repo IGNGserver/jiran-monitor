@@ -2,7 +2,7 @@
 Collaboration: solo
 Baseline: main
 Default branch: main
-Release: tag + Actions（`.github/workflows/` 4 个，含各平台 dist 与 verify:deb）
+Release: tag + Actions（`.github/workflows/` 4 个，含各平台 dist、website 与 verify:deb）
 Validation: 以 package.json 实际存在的脚本为准（`npm test`、`npm run test:mysql`、`npm run verify:deb` 等），不得臆造
 Worktree: `~/项目/.wt/token记录系统/<slug>`
 
@@ -19,7 +19,7 @@ Worktree: `~/项目/.wt/token记录系统/<slug>`
 
 # AGENTS.md
 
-The product is **计然 / Jiran** (renamed from Token Monitor in 2026-09; zh locales render 计然, en/ja/ko render Jiran — the user-visible name always comes from the `brand.name` i18n key, including native surfaces (menu bar, tray tooltip, About panel, window title), while `app.setName('Jiran')` stays the ASCII directory/install identity). The rename is a compatibility event, not a reset: `TOKEN_MONITOR_*` env names fold into `JIRAN_*` (legacy wins), `X-Token-Monitor-Secret` stays accepted beside `X-Jiran-Secret`, both userData and shared runtime state migrate from the legacy `Token Monitor` folder into `Jiran` (`src/electron/userDataMigration.js` + `src/shared/sharedDataMigration.js` — copy-forward, never overwriting the target, because a still-running pre-rename desktop/agent keeps writing the legacy folder, so `pidFileCandidates()` reads old and new `agent.pid`), apt publishes a `token-monitor` transitional stub beside the renamed `jiran` package, and releases dual-push both GHCR image names until the transition window closes. Identity surfaces deliberately did NOT move: `appId com.igng.tokenmonitor`, Android `applicationId com.igng.tokenmonitor.android`, the MySQL default database/user, SignPath `project-slug`, and GitHub Actions secret names.
+The product is **计然 / Jiran** (renamed from Token Monitor in 2026-09; zh locales render 计然, en/ja/ko render Jiran — the user-visible name always comes from the `brand.name` i18n key, including native surfaces (menu bar, tray tooltip, About panel, window title), while `app.setName('Jiran')` stays the ASCII directory/install identity). The rename is a compatibility event, not a reset: `TOKEN_MONITOR_*` env names fold into `JIRAN_*` (legacy wins), `X-Token-Monitor-Secret` stays accepted beside `X-Jiran-Secret`, both userData and shared runtime state migrate from the legacy `Token Monitor` folder into `Jiran` (`src/electron/userDataMigration.js` + `src/shared/sharedDataMigration.js` — copy-forward, never overwriting the target, because a still-running pre-rename desktop/agent keeps writing the legacy folder, so `pidFileCandidates()` reads old and new `agent.pid`), Linux `.deb` is a direct GitHub Releases download (the APT repository was retired in 2026-10), and releases dual-push both GHCR image names until the transition window closes. Identity surfaces deliberately did NOT move: `appId com.igng.tokenmonitor`, Android `applicationId com.igng.tokenmonitor.android`, the MySQL default database/user, SignPath `project-slug`, and GitHub Actions secret names.
 
 This is the single source of project guidance, shared by every coding agent (Claude Code, Codex, Cursor, …). `CLAUDE.md` is a Claude Code compatibility shim that just imports this file — edit **this** file, not `CLAUDE.md`.
 
@@ -35,6 +35,8 @@ npm run verify:product-scope # enforce the approved two-mode / Compose-only prod
 npm run verify:android       # Android Fluent colour + component-boundary guards
 npm run verify     # product-scope + shared-UI boundary + css-var + Android guards, lint, test
 npm run build:web  # esbuild-wasm browser bundle + generated PWA graph (CI/local scratch only)
+cd website && pnpm install && pnpm build  # official site (Astro 7); build in scratch, never on the NAS volume
+cd website && pnpm test                   # Playwright e2e + facts checks (run after pnpm build)
 ```
 
 Automated verification is `npm run verify` (= `npm run verify:product-scope && npm run verify:shared-ui && npm run verify:css-vars && npm run verify:android-fluent-contrast && npm run verify:android-fluent-boundary && npm run lint && npm test`); CI (`.github/workflows/ci.yml`) runs lint + test on push/PR across Node 22 & 24, and a separate `android` job compiles the client and runs `:app:testDebugUnitTest` — the Android toolchain is not reachable from the Node matrix. The toolchain (ESLint 10 + the node:test glob) needs Node 22.13+, which is why `engines.node` is `>=22.13.0` (Node 18 & 20 are both EOL as of 2026-06).
@@ -48,6 +50,24 @@ Android JVM tests cannot load `androidx.compose.*` runtime classes, so anything 
 reach stays free of Compose types and keeps its `CompositionLocal` in a separate file
 (`DisplayFx.kt` is the precedent); behaviour that only exists inside a composable is asserted by
 the Node guards or by hand instead.
+
+### Website (`website/`)
+
+The official site is Astro 7 + TypeScript in `website/`, deployed to the Cloudflare Pages project
+`jiran-website` at <https://jiran.igng.net/> by `.github/workflows/website.yml`. It is part of this
+repository; the old `site/` GitHub Pages page and the separate `jiran-website` repository are
+retired (the repository is archived). Keep the site and the product in one PR when a product fact
+changes.
+
+- Use pnpm from `website/`, never npm; the root package manager stays npm.
+- Never install dependencies or write `dist/` on the NAS project volume. Build in
+  `$BUILD_SCRATCH_ROOT/token记录系统/<slug>` — see `website/docs/WORKSPACE.md`.
+- Site facts live in `website/src/data/product.ts`; keep the matrix and counts aligned with
+  `docs/supported-tools.md` and the README when a client or capability changes.
+- Publish is automatic on `main` and on a published Release; it needs repository secrets
+  `CLOUDFLARE_API_TOKEN` (Pages:Edit) and `CLOUDFLARE_ACCOUNT_ID`. Rollback is a Cloudflare
+  deployment restore — see `website/docs/HOSTING.md`.
+- Linux installs use the GitHub Releases `.deb`/AppImage directly; there is no APT repository.
 
 
 ### Version and release policy

@@ -1,0 +1,76 @@
+---
+import '../styles/global.css';
+import { CONTENT, LANGS, type Lang } from '../i18n/content';
+
+interface Props {
+  lang: Lang;
+  title?: string;
+  description?: string;
+  noindex?: boolean;
+}
+
+const { lang, title, description, noindex = false } = Astro.props;
+const t = CONTENT[lang];
+const pageTitle = title ?? t.meta.title;
+const pageDesc = description ?? t.meta.description;
+const site = Astro.site;
+const abs = (path: string) => (site ? new URL(path, site).href : path);
+const ogImage = abs(`/og/og-${lang}.jpg`);
+---
+
+<!doctype html>
+<html lang={LANGS[lang].htmlLang} class="no-js">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDesc} />
+    <meta name="theme-color" content="#f2ede3" />
+    <meta name="color-scheme" content="light" />
+    <meta name="msvalidate.01" content="B411826ACAE5C5CD20EA5574C3F8A6E4" />
+    {noindex && <meta name="robots" content="noindex" />}
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    {site && <link rel="canonical" href={abs(LANGS[lang].path)} />}
+    {
+      (Object.keys(LANGS) as Lang[]).map((l) => (
+        <link rel="alternate" hreflang={LANGS[l].htmlLang} href={abs(LANGS[l].path)} />
+      ))
+    }
+    <link rel="alternate" hreflang="x-default" href={abs('/')} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={lang === 'zh' ? '计然' : 'Jiran'} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDesc} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={t.meta.ogAlt} />
+    <meta property="og:locale" content={lang === 'zh' ? 'zh_CN' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json" set:html={JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: lang === 'zh' ? '计然' : 'Jiran',
+      alternateName: ['Jiran', '计然', 'Token Monitor'],
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Windows 10+, macOS 12+, Linux x64, Android',
+      description: pageDesc,
+      license: 'https://opensource.org/licenses/MIT',
+      codeRepository: 'https://github.com/IGNGserver/jiran-monitor',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    })} />
+
+    <slot name="head" />
+
+    <script is:inline>
+      document.documentElement.classList.replace('no-js', 'js');
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">{t.nav.skip}</a>
+    <slot />
+  </body>
+</html>

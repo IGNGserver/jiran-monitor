@@ -18,8 +18,8 @@
     <category>Development</category>
   </categories>
   <content_rating type="oars-1.1" />
-  <url type="homepage">https://github.com/IGNGserver/jiran</url>
-  <url type="bugtracker">https://github.com/IGNGserver/jiran/issues</url>
+  <url type="homepage">https://jiran.igng.net/</url>
+  <url type="bugtracker">https://github.com/IGNGserver/jiran-monitor/issues</url>
   <launchable type="desktop-id">jiran.desktop</launchable>
   <icon type="stock">jiran</icon>
   <provides>

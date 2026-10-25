@@ -1,0 +1,49 @@
+---
+import Base from '../layouts/Base.astro';
+import Mark from '../components/Mark.astro';
+import { CONTENT } from '../i18n/content';
+const zh = CONTENT.zh.notFound;
+const en = CONTENT.en.notFound;
+---
+<Base lang="zh" title="404 · 计然 Jiran" noindex>
+  <main id="main" class="nf">
+    <Mark size={56} />
+    <p class="nf__code mono">~404</p>
+    <h1>{zh.title}</h1>
+    <p lang="en" class="nf__en">{en.title}</p>
+    <p class="nf__body">{zh.body} <span lang="en">{en.body}</span></p>
+    <p class="nf__links"><a href="/">{zh.back}</a> · <a href="/en/" lang="en">{en.back}</a></p>
+  </main>
+</Base>
+<style>
+  .nf {
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    text-align: center;
+  }
+  .nf__code {
+    font-size: clamp(3rem, 12vw, 7rem);
+    color: var(--cinnabar);
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+  }
+  .nf__en {
+    font-family: var(--f-display);
+    font-style: italic;
+    font-size: 1.3rem;
+    color: var(--fg-dim);
+  }
+  .nf__body {
+    color: var(--fg-dim);
+  }
+</style>

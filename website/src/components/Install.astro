@@ -1,0 +1,334 @@
+---
+import SectionHead from './SectionHead.astro';
+import { CONTENT, type Lang } from '../i18n/content';
+import { DOCS, HUB_SNIPPET, RELEASES_URL, type AssetKey } from '../data/product';
+import type { ReleaseInfo } from '../data/release';
+interface Props { lang: Lang; release: ReleaseInfo | null }
+const { lang, release } = Astro.props;
+const t = CONTENT[lang].install;
+
+/** 没取到发布信息时显示的文件名模板（与产品 README 的 Install 表一致）。 */
+const PATTERN: Record<AssetKey, string> = {
+  macArm: 'Jiran-<version>-arm64.dmg',
+  macIntel: 'Jiran-<version>-x64.dmg',
+  winSetup: 'Jiran-Setup-<version>.exe',
+  winPortable: 'Jiran-<version>.exe',
+  appImage: 'Jiran-<version>.AppImage',
+  deb: 'Jiran-<version>.deb',
+  android: 'Jiran-Android-<version>.apk',
+  headless: 'Jiran-Headless-<version>.tar.gz',
+  hubCompose: 'Jiran-Hub-Compose-<version>.zip',
+};
+const mb = (n: number) => `${(n / 1048576).toFixed(n > 10485760 ? 0 : 1)} MB`;
+---
+
+<section class="section install" id="install" aria-labelledby="install-title">
+  <div class="wrap">
+    <SectionHead index={7} id="install" kicker={t.kicker} title={t.title} intro={t.intro} />
+
+    <div class="dl reveal" data-dl>
+      <div class="dl__head">
+        <p class="dl__release">
+          <span class="note">{t.latest}</span>
+          <a class="mono dl__tag" href={release?.url ?? RELEASES_URL} rel="noopener" data-release-url>
+            <span data-release-tag>{release?.tag ?? 'GitHub Releases'}</span> ↗
+          </a>
+          {release && (
+            <span class="note">{t.published} <time datetime={release.publishedAt} data-release-date>{release.publishedAt.slice(0, 10)}</time></span>
+          )}
+        </p>
+        <p class="note dl__detected" data-dl-detected hidden>{t.detected}</p>
+      </div>
+
+      <div class="dl__tabs" role="tablist" aria-label={t.title}>
+        {t.platforms.map((p, i) => (
+          <button type="button" role="tab" id={`dl-tab-${p.id}`} aria-controls={`dl-panel-${p.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-platform={p.id}>
+            {p.name}
+          </button>
+        ))}
+      </div>
+
+      {t.platforms.map((p, i) => (
+        <div class="dl__panel" role="tabpanel" id={`dl-panel-${p.id}`} aria-labelledby={`dl-tab-${p.id}`} hidden={i !== 0} data-panel={p.id}>
+          <p class="dl__req">{p.req}</p>
+          <ul class="dl__assets">
+            {p.assets.map(([key, label]) => {
+              const a = release?.assets[key as AssetKey];
+              return (
+                <li>
+                  <a class="dl__asset" href={a?.url ?? RELEASES_URL} rel="noopener" data-asset={key}>
+                    <span class="dl__asset-label">{label}</span>
+                    <span class="mono dl__asset-name" data-asset-name>{a?.name ?? PATTERN[key as AssetKey]}</span>
+                    <span class="mono dl__asset-size" data-asset-size>{a ? mb(a.size) : ''}</span>
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v9m0 0L4.5 7.5M8 11l3.5-3.5M3 14h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+
+      <a class="dl__all" href={RELEASES_URL} rel="noopener">{t.fallback} ↗</a>
+    </div>
+
+    <div class="hub reveal">
+      <div class="hub__text">
+        <h3>{t.hubTitle}</h3>
+        <p>{t.hubBody}</p>
+        <a href={DOCS.hub} rel="noopener">{t.hubGuide} ↗</a>
+      </div>
+      <div class="code">
+        <button type="button" class="code__copy mono" data-copy data-label={t.copy} data-done={t.copied}>{t.copy}</button>
+        <pre><code>{HUB_SNIPPET}</code></pre>
+      </div>
+    </div>
+
+    <p class="install__tested note reveal">{t.tested}</p>
+  </div>
+</section>
+
+<style>
+  .dl {
+    margin-top: clamp(48px, 6vw, 80px);
+    border: 1px solid var(--line-2);
+    background: var(--bg-2);
+  }
+  .dl__head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px 24px;
+    padding: 22px 26px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dl__release {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 16px;
+  }
+  .dl__tag {
+    font-size: 1.35rem;
+    text-decoration: none;
+  }
+  .dl__detected {
+    color: var(--celadon);
+  }
+  .dl__tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+    scrollbar-width: none;
+  }
+  .dl__tabs button {
+    flex: none;
+    padding: 16px 24px;
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: none;
+    font-size: 0.9375rem;
+    color: var(--fg-dim);
+    cursor: pointer;
+    position: relative;
+    transition: color 0.25s, background 0.25s;
+  }
+  .dl__tabs button:hover {
+    color: var(--fg);
+  }
+  .dl__tabs button[aria-selected='true'] {
+    color: var(--fg);
+    background: var(--bg-3);
+  }
+  .dl__tabs button[aria-selected='true']::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 2px;
+    background: var(--cinnabar);
+  }
+  .dl__panel {
+    padding: 26px;
+  }
+  .dl__req {
+    color: var(--fg-dim);
+    font-size: 0.9375rem;
+    margin-bottom: 18px;
+  }
+  .dl__assets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    gap: 10px;
+  }
+  .dl__asset {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 4px 16px;
+    align-items: center;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    text-decoration: none;
+    transition: border-color 0.25s, background 0.25s;
+  }
+  .dl__asset:hover {
+    border-color: var(--fg);
+    background: var(--bg-3);
+  }
+  .dl__asset-label {
+    font-size: 1.0625rem;
+  }
+  .dl__asset-name {
+    grid-row: 2;
+    font-size: 0.75rem;
+    color: var(--fg-faint);
+    overflow-wrap: anywhere;
+  }
+  .dl__asset-size {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 0.75rem;
+    color: var(--fg-faint);
+    text-align: right;
+  }
+  .dl__asset svg {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    width: 16px;
+    height: 16px;
+    color: var(--cinnabar);
+  }
+  .dl__all {
+    display: block;
+    padding: 16px 26px;
+    border-top: 1px solid var(--line);
+    font-size: var(--t-small);
+    color: var(--fg-dim);
+  }
+
+  .hub {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: clamp(28px, 4vw, 64px);
+    margin-top: clamp(56px, 7vw, 96px);
+    align-items: start;
+  }
+  .hub__text h3 {
+    font-family: var(--f-display);
+    font-weight: 400;
+    font-size: var(--t-h3);
+    margin-bottom: 12px;
+  }
+  :lang(zh) .hub__text h3 {
+    font-weight: 600;
+  }
+  .hub__text p {
+    color: var(--fg-dim);
+    margin-bottom: 16px;
+  }
+  .hub__text a {
+    font-size: var(--t-small);
+  }
+  .code {
+    position: relative;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+  }
+  .code pre {
+    margin: 0;
+    padding: 22px 24px;
+    overflow-x: auto;
+    font-family: var(--f-mono);
+    font-size: 0.8125rem;
+    line-height: 1.8;
+    color: var(--fg);
+  }
+  .code__copy {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 5px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--bg);
+    font-size: 0.6875rem;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+  .code__copy:hover {
+    color: var(--fg);
+    border-color: var(--fg);
+  }
+  .install__tested {
+    margin-top: clamp(40px, 5vw, 64px);
+    max-width: 70em;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    line-height: 1.7;
+  }
+  @media (max-width: 560px) {
+    .dl__tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .dl__tabs button {
+      padding: 14px 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    .dl__head,
+    .dl__panel {
+      padding: 20px 18px;
+    }
+  }
+  @media (max-width: 860px) {
+    .hub {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>
+
+<script>
+  import { detectPlatform } from '../scripts/release';
+
+  const root = document.querySelector<HTMLElement>('[data-dl]');
+  if (root) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-platform]')];
+    const select = (id: string, focus = false) => {
+      tabs.forEach((b) => {
+        const on = b.dataset.platform === id;
+        b.setAttribute('aria-selected', String(on));
+        b.tabIndex = on ? 0 : -1;
+        if (on && focus) b.focus();
+      });
+      root.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== id));
+    };
+    tabs.forEach((b, i) => {
+      b.addEventListener('click', () => select(b.dataset.platform!));
+      b.addEventListener('keydown', (e) => {
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (d) select(tabs[(i + d + tabs.length) % tabs.length].dataset.platform!, true);
+      });
+    });
+    const platform = detectPlatform();
+    if (platform) {
+      select(platform);
+      root.querySelector<HTMLElement>('[data-dl-detected]')!.hidden = false;
+    }
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const code = btn.parentElement?.querySelector('code')?.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(code);
+        btn.textContent = btn.dataset.done!;
+        setTimeout(() => (btn.textContent = btn.dataset.label!), 1600);
+      } catch {
+        /* 剪贴板不可用时保持原样 */
+      }
+    });
+  });
+</script>

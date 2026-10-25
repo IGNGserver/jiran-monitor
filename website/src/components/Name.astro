@@ -1,0 +1,92 @@
+---
+import { Image } from 'astro:assets';
+import macro from '../assets/renders/kelou-macro.webp';
+import SectionHead from './SectionHead.astro';
+import { CONTENT, type Lang } from '../i18n/content';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = CONTENT[lang].name;
+---
+<section class="section name" id="name" aria-labelledby="name-title">
+  <div class="wrap name__grid">
+    <div class="name__text">
+      <SectionHead index={1} id="name" kicker={t.kicker} title={t.title} />
+      <div class="name__body">
+        {t.body.map((p, i) => <p class="reveal" style={`--d:${0.1 + i * 0.08}s`}>{p}</p>)}
+      </div>
+    </div>
+    <figure class="name__figure reveal" style="--d:.1s">
+      <Image src={macro} alt={t.imageAlt} widths={[480, 800, 1200]} sizes="(max-width: 900px) 100vw, 46vw" format="webp" quality={80} loading="lazy" />
+      <blockquote class="name__quote" lang="zh-CN">
+        <p>{CONTENT.zh.name.quote}</p>
+      </blockquote>
+      <figcaption class="name__cap">
+        {lang === 'en' && <span class="name__trans">{t.quote}</span>}
+        <span class="note">{t.quoteSource}</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<style>
+  .name__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(40px, 7vw, 120px);
+    align-items: center;
+  }
+  .name__body {
+    display: grid;
+    gap: 1.1em;
+    margin-top: clamp(28px, 3vw, 40px);
+    max-width: 34em;
+    color: var(--fg-dim);
+    font-size: 1.0625rem;
+  }
+  .name__body p:first-child {
+    color: var(--fg);
+  }
+  .name__figure {
+    position: relative;
+    margin: 0;
+  }
+  .name__figure img {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: cover;
+    filter: saturate(1.05);
+    mask-image: radial-gradient(120% 100% at 50% 40%, #000 55%, transparent 100%);
+  }
+  /* 竖排引文：像压在图上的一行题跋 */
+  .name__quote {
+    position: absolute;
+    top: 6%;
+    right: 5%;
+    writing-mode: vertical-rl;
+    font-family: 'Noto Serif SC', 'Songti SC', serif;
+    font-size: clamp(0.95rem, 1.5vw, 1.2rem);
+    letter-spacing: 0.32em;
+    line-height: 2;
+    color: var(--fg);
+    text-shadow: 0 0 14px var(--bg), 0 0 4px var(--bg);
+    max-height: 86%;
+  }
+  .name__cap {
+    display: grid;
+    gap: 6px;
+    margin-top: 14px;
+  }
+  .name__trans {
+    font-family: var(--f-display);
+    font-style: italic;
+    font-size: 1.15rem;
+    line-height: 1.45;
+    color: var(--fg-dim);
+  }
+  @media (max-width: 900px) {
+    .name__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

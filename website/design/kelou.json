@@ -1,0 +1,33 @@
+{
+  "$comment": "计然「刻漏」的唯一几何、节奏与配色定义。站点 Three.js 场景（src/scripts/hero/scene.ts）与静帧工具（design/tools/stills.mjs，渲染的就是同一个场景）都读这一份。单位：米 / 秒；Y 轴向上；vessels[].pos 是壶底中心（站在石台上）。",
+  "palette": {
+    "paper": "#f2ede3",
+    "paper2": "#ebe5d8",
+    "paper3": "#e2dacb",
+    "ink": "#1f1e1c",
+    "inkDim": "#5e5a52",
+    "inkFaint": "#8e887c",
+    "celadon": "#a9c1b5",
+    "celadonDeep": "#5d7f75",
+    "water": "#46625f",
+    "waterLight": "#dfe7e1",
+    "drop": "#5b7f7a",
+    "dai": "#3b4a55",
+    "wood": "#4b3f34",
+    "stone": "#cfc6b5",
+    "ivory": "#efe6d2",
+    "brass": "#a8834a",
+    "cinnabar": "#c3402b"
+  },
+  "gravity": 2.2,
+  "vessels": [
+    { "id": "source", "pos": [-2.55, 2.3, -1.75], "radius": 1.0, "height": 0.6, "level": 0.72 },
+    { "id": "level", "pos": [-0.7, 1.15, -0.5], "radius": 0.74, "height": 0.62, "level": 0.7 },
+    { "id": "receive", "pos": [0.98, 0.1, 0.55], "radius": 0.6, "height": 0.92, "level": 0.78 }
+  ],
+  "credits": { "pos": [2.1, 0.06, 1.55], "radius": 0.22, "height": 0.34, "level": 0.6, "interval": 4.6, "phase": 0.35 },
+  "drips": { "source": 0.82, "level": 1.12 },
+  "rod": { "width": 0.07, "above": 1.5, "below": 0.25, "period": 2.4, "marks": 10, "tokensPerMark": 2400, "pointer": 0.82 },
+  "sources": { "count": 59, "height": 6.5, "speed": 1.7, "settle": 0.35, "base": 2.6, "growth": 0.12, "spread": 0.7, "estimated": 0.22, "radius": 0.044 },
+  "count": { "min": 600, "spread": 2600 }
+}

@@ -173,8 +173,8 @@ function verifyProductScope() {
     'docs/privacy.md',
     'docs/wsl-sqlite-setup.md',
     'docs/wsl-sqlite-setup.zh-CN.md',
-    'site/index.html',
-    'site/scripts/i18n.js'
+    'website/src/i18n/content.ts',
+    'website/src/data/product.ts'
   ];
   const removedSurfaceTerms = [
     'npm run hub',

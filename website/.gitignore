@@ -1,0 +1,38 @@
+# 依赖与构建产物（构建缓存按设备级规范放共享目录，不进工作区）
+node_modules/
+dist/
+build/
+.output/
+.wrangler/
+.cache/
+coverage/
+playwright-report/
+test-results/
+
+# 环境与凭据
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# 日志与本地状态
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Astro 生成的类型目录
+.astro/

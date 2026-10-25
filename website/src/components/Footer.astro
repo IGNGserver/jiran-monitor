@@ -1,0 +1,116 @@
+---
+import Mark from './Mark.astro';
+import { CONTENT, LANGS, type Lang } from '../i18n/content';
+import { DOCS, REPO_URL, RELEASES_URL } from '../data/product';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = CONTENT[lang].footer;
+const other: Lang = lang === 'zh' ? 'en' : 'zh';
+const product = [
+  [t.links.repo, REPO_URL],
+  [t.links.releases, RELEASES_URL],
+  [t.links.tools, DOCS.tools],
+  [t.links.privacy, DOCS.privacy],
+];
+const docs = [
+  [t.links.hub, DOCS.hub],
+  [t.links.agent, DOCS.agent],
+  [t.links.config, DOCS.config],
+  [t.links.api, DOCS.api],
+];
+---
+<footer class="foot">
+  <div class="wrap foot__grid">
+    <div class="foot__brand">
+      <p class="foot__word"><Mark size={40} /> <span>{t.line}</span></p>
+      <p class="foot__tag">{t.tagline}</p>
+    </div>
+    <nav class="foot__col" aria-label={t.product}>
+      <h2 class="note">{t.product}</h2>
+      <ul>{product.map(([l, h]) => <li><a href={h} rel="noopener">{l}</a></li>)}</ul>
+    </nav>
+    <nav class="foot__col" aria-label={t.docs}>
+      <h2 class="note">{t.docs}</h2>
+      <ul>{docs.map(([l, h]) => <li><a href={h} rel="noopener">{l}</a></li>)}</ul>
+    </nav>
+  </div>
+  <div class="wrap foot__base">
+    <p>{t.credits.split(/(\{\w+\})/).map((part) =>
+      part === '{tokscale}' ? <a href={DOCS.tokscale} rel="noopener">tokscale</a>
+      : part === '{MIT}' ? <a href={DOCS.license} rel="noopener">MIT</a>
+      : part)}</p>
+    <p>{t.site}</p>
+    <p><a href={LANGS[other].path} hreflang={LANGS[other].htmlLang} lang={LANGS[other].htmlLang}>{CONTENT[lang].nav.langSwitch}</a> · © IGNGserver</p>
+  </div>
+</footer>
+<style>
+  .foot {
+    position: relative;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    padding-top: clamp(72px, 10vw, 140px);
+  }
+  .foot__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 40px;
+  }
+  .foot__word {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-family: var(--f-display);
+    font-size: clamp(2.4rem, 6vw, 4.6rem);
+    line-height: 1;
+  }
+  :lang(zh) .foot__word {
+    font-weight: 600;
+  }
+  .foot__tag {
+    margin-top: 18px;
+    color: var(--fg-dim);
+    font-size: var(--t-lead);
+  }
+  .foot__col h2 {
+    margin-bottom: 16px;
+  }
+  .foot__col ul {
+    display: grid;
+    gap: 10px;
+  }
+  .foot__col a {
+    text-decoration: none;
+    color: var(--fg-dim);
+  }
+  .foot__col a:hover {
+    color: var(--fg);
+  }
+  .foot__base {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px 32px;
+    position: relative;
+    margin-top: clamp(64px, 8vw, 120px);
+    padding-block: 28px 40px;
+  }
+  .foot__base::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--gutter);
+    right: var(--gutter);
+    height: 1px;
+    background: var(--line);
+    font-size: var(--t-small);
+    color: var(--fg-faint);
+  }
+  @media (max-width: 760px) {
+    .foot__grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .foot__brand {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DEFAULT_REPOSITORY = 'IGNGserver/jiran';
+const DEFAULT_REPOSITORY = 'IGNGserver/jiran-monitor';
 const DEFAULT_TEMPLATE = '.github/RELEASE_TEMPLATE.md';
 const DEFAULT_NOTES_DIR = '.github/release-notes';
 const DEFAULT_OUTPUT = 'release-body.md';
@@ -28,7 +28,7 @@ const RELEASE_ARTIFACTS = Object.freeze([
   { label: 'Windows 安装版', file: 'Jiran-Setup-{version}.exe', note: '推荐' },
   { label: 'Windows 便携版', file: 'Jiran-{version}.exe', note: '免安装' },
   { label: 'Linux x64 AppImage', file: 'Jiran-{version}.AppImage', note: '应用内自动更新用这个' },
-  { label: 'Linux x64 Debian 包', file: 'Jiran-{version}.deb', note: 'App Center / APT 更新链路用这个' },
+  { label: 'Linux x64 Debian 包', file: 'Jiran-{version}.deb', note: '直接安装；不再提供 APT 仓库' },
   { label: 'Android 手机端', file: 'Jiran-Android-{version}.apk', note: 'Hub 的读端，已用长期签名密钥签名' }
 ]);
 
@@ -97,7 +97,7 @@ function hubDeploymentSection({ version, repositoryOwner, releaseType }) {
   ];
   if (releaseType === 'release') lines.push(`docker pull ${image}:latest`);
   lines.push('```', '');
-  lines.push('> Hub 镜像已随项目改名迁移到 `jiran-hub`；`token-monitor-hub` 在过渡期内仍推送完全相同的标签，建议尽快更新 compose 中的镜像名。deb 包同样改名为 `jiran`，旧 `token-monitor` 包将作为过渡依赖包把已安装用户自动带过去。');
+  lines.push('> Hub 镜像已随项目改名迁移到 `jiran-hub`；`token-monitor-hub` 在过渡期内仍推送完全相同的标签，建议尽快更新 compose 中的镜像名。deb 包同样改名为 `jiran`；Linux 用户直接从 Release 下载 `.deb`，APT 仓库已退役。');
   if (releaseType === 'release') {
     lines.push(`Compose：在 \`.env\` 里设 \`JIRAN_VERSION=${version}\`（或 \`latest\`），然后 \`docker compose pull && docker compose up -d\`。`);
   } else {

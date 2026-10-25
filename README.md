@@ -11,8 +11,13 @@
 </p>
 
 <p align="center">
-    <a href="https://github.com/IGNGserver/jiran/releases"><img src="https://img.shields.io/github/v/release/IGNGserver/jiran?include_prereleases&style=flat-square&label=release&color=22c55e" alt="Latest release" /></a>
-    <a href="https://github.com/IGNGserver/jiran/releases"><img src="https://img.shields.io/github/downloads/IGNGserver/jiran/total?style=flat-square&color=22c55e" alt="Total downloads" /></a>
+    <a href="https://jiran.igng.net/">Website</a> ·
+    <a href="https://jiran.igng.net/en/">English</a>
+</p>
+
+<p align="center">
+    <a href="https://github.com/IGNGserver/jiran-monitor/releases"><img src="https://img.shields.io/github/v/release/IGNGserver/jiran-monitor?include_prereleases&style=flat-square&label=release&color=22c55e" alt="Latest release" /></a>
+    <a href="https://github.com/IGNGserver/jiran-monitor/releases"><img src="https://img.shields.io/github/downloads/IGNGserver/jiran-monitor/total?style=flat-square&color=22c55e" alt="Total downloads" /></a>
     <img src="https://img.shields.io/badge/Windows-10%2B-0078D4?style=flat-square" alt="Windows 10 or later" />
     <img src="https://img.shields.io/badge/macOS-12%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 or later" />
     <img src="https://img.shields.io/badge/Linux-x64-64748b?style=flat-square&logo=linux&logoColor=white" alt="Linux x64" />
@@ -102,7 +107,7 @@ opt-in that could silently under-count.
 
 ## Install
 
-Grab the current build from [GitHub Releases](https://github.com/IGNGserver/jiran/releases):
+Grab the current build from [GitHub Releases](https://github.com/IGNGserver/jiran-monitor/releases):
 
 | Platform | Artifact |
 |---|---|
@@ -112,17 +117,14 @@ Grab the current build from [GitHub Releases](https://github.com/IGNGserver/jira
 | Android | `Jiran-Android-<version>.apk` — a Hub read client |
 | Headless / server | `Jiran-Headless-<version>.tar.gz` — Node.js 22.13+, then `npm ci --omit=dev` |
 
-On Linux, the APT repository keeps the app upgraded through the package manager. Verify the key
-fingerprint against `jiran-archive-keyring-fingerprint.txt` published beside it:
+On Linux, download the `.deb` from the release assets and install it directly:
 
 ```bash
-curl -fsSL https://igngserver.github.io/jiran/apt/jiran-archive-keyring.asc \
-  | gpg --dearmor \
-  | sudo tee /usr/share/keyrings/jiran-archive-keyring.gpg >/dev/null
-curl -fsSL https://igngserver.github.io/jiran/apt/jiran.sources \
-  | sudo tee /etc/apt/sources.list.d/jiran.sources >/dev/null
-sudo apt update && sudo apt install jiran
+sudo apt install ./Jiran-<version>.deb
 ```
+
+The AppImage is a single-file alternative. There is no APT repository: GitHub Releases is the
+download and upgrade source, so an upgrade is a new `.deb` install rather than an `apt upgrade`.
 
 Packaged builds check GitHub Releases and surface an update indicator; where the platform supports
 self-install, Management's **Behaviour** group offers **Check for updates** and **Restart to
@@ -275,10 +277,9 @@ v0.47.0-rev.37 renamed the product to 计然 / Jiran. It is a rename, not a rese
   beside the new `JIRAN_*` / `X-Jiran-Secret` spellings.
 - Releases push identical tags to both `ghcr.io/igngserver/jiran-hub` and
   `ghcr.io/igngserver/token-monitor-hub` during the transition.
-- APT publishes `jiran` and a `token-monitor` transitional package that depends on it, so
-  `apt upgrade` carries existing installs over. **One manual step is still required**: GitHub
-  Pages URLs do not follow a repository rename, so a source file pointing at
-  `…/token-monitor-suite/apt` now 404s — re-run the `curl … | sudo tee` line above once.
+- Linux packages are downloaded directly from GitHub Releases; the APT repository (and its
+  `token-monitor` transitional package) was retired in 2026-10. Existing APT users should remove
+  the old source file and install the `.deb` from Releases.
 - Deliberately unchanged, because they are identity surfaces: the Electron `appId`
   (`com.igng.tokenmonitor`), the Android `applicationId`, the MySQL default database and user,
   and the code-signing project slug.

@@ -1,6 +1,0 @@
-Types: deb
-URIs: https://igngserver.github.io/jiran/apt
-Suites: stable
-Components: main
-Architectures: amd64
-Signed-By: /usr/share/keyrings/jiran-archive-keyring.gpg
