@@ -64,9 +64,10 @@ test('invalid feed is rejected and does not replace a trusted cache', async () =
 test('platform selection requires installer and metadata from the same tagged release', () => {
   const tag = 'v1.5.0';
   const release = { tag, assets: ['latest.yml', 'Jiran-Setup-1.5.0.exe'].map((name) => ({ name, state: 'uploaded', size: 100, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `https://github.com/IGNGserver/jiran-monitor/releases/download/${tag}/${name}` })) };
-  assert.equal(releaseHasPlatformAssets(release, { platform: 'win32' }), true);
-  assert.equal(releaseHasPlatformAssets({ ...release, assets: release.assets.slice(0, 1) }, { platform: 'win32' }), false);
-  assert.equal(releaseHasPlatformAssets({ ...release, tag: 'v1.4.0' }, { platform: 'win32' }), false);
+  assert.equal(releaseHasPlatformAssets(release, { platform: 'win32', arch: 'x64' }), true);
+  assert.equal(releaseHasPlatformAssets(release, { platform: 'win32', arch: 'arm64' }), false, 'Windows packages are x64 only');
+  assert.equal(releaseHasPlatformAssets({ ...release, assets: release.assets.slice(0, 1) }, { platform: 'win32', arch: 'x64' }), false);
+  assert.equal(releaseHasPlatformAssets({ ...release, tag: 'v1.4.0' }, { platform: 'win32', arch: 'x64' }), false);
 });
 
 test('legacy revisions use the released project ordering and never offer lower revisions', () => {
@@ -75,7 +76,7 @@ test('legacy revisions use the released project ordering and never offer lower r
 });
 
 test('feed check does not offer a newer release missing this platform assets', async () => {
-  const result = await checkLatestRelease('1.0.0', 'preview', { feedClient: { load: async () => ({ payload: { ...payload, releases: [{ tag_name: 'v1.5.0', html_url: 'https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.5.0', assets: [] }] } }) }, platformOptions: { platform: 'win32' } });
+  const result = await checkLatestRelease('1.0.0', 'preview', { feedClient: { load: async () => ({ payload: { ...payload, releases: [{ tag_name: 'v1.5.0', html_url: 'https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.5.0', assets: [] }] } }) }, platformOptions: { platform: 'win32', arch: 'x64' } });
   assert.equal(result.ok, true);
   assert.equal(result.newer, false);
   assert.equal(result.noChannelRelease, true);
@@ -114,4 +115,14 @@ test('cached results retain the real validation time instead of postponing backg
   const cached = await f.client.load();
   assert.equal(cached.cached, true);
   assert.equal(cached.checkedAt, checked.checkedAt);
+});
+test('macOS eligibility requires the ZIP matching the target architecture', () => {
+  const tag = 'v1.5.0';
+  const asset = (name) => ({ name, state: 'uploaded', size: 100, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: `https://github.com/IGNGserver/jiran-monitor/releases/download/${tag}/${name}` });
+  const arm = { tag, assets: ['latest-mac.yml', 'Jiran-1.5.0-arm64.zip'].map(asset) };
+  assert.equal(releaseHasPlatformAssets(arm, { platform: 'darwin', arch: 'arm64' }), true);
+  assert.equal(releaseHasPlatformAssets(arm, { platform: 'darwin', arch: 'x64' }), false);
+  const intel = { tag, assets: ['latest-mac.yml', 'Jiran-1.5.0-x64.zip'].map(asset) };
+  assert.equal(releaseHasPlatformAssets(intel, { platform: 'darwin', arch: 'x64' }), true);
+  assert.equal(releaseHasPlatformAssets(intel, { platform: 'darwin', arch: 'arm64' }), false);
 });
