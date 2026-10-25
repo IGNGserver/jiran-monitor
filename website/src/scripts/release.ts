@@ -4,15 +4,18 @@
  * 2. 按访客系统挑一个直链给首屏主按钮，并在「取」一节预选对应平台；
  * 3. 后台向 GitHub 刷新一次「当前正式版」，失败就保留烘焙值（本站唯一的外部请求）。
  */
-import { findStableRelease, type ReleaseInfo } from '../data/release';
+import { findStableRelease, RELEASE_SEGMENT, type ReleaseInfo } from '../data/release';
 import { REPO_URL, type AssetKey } from '../data/product';
 
-const RELEASE_PREFIX = `${REPO_URL}/releases/`;
+/** Build the href from repository constants plus validated segments; never assign API URLs. */
+function setAssetHref(anchor: HTMLAnchorElement, tag: string, name: string) {
+  if (!RELEASE_SEGMENT.test(tag) || !RELEASE_SEGMENT.test(name)) return;
+  anchor.href = `${REPO_URL}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+}
 
-/** Only accept URLs built for this repository's Releases; never assign arbitrary API URLs. */
-function setHref(anchor: HTMLAnchorElement, value: string) {
-  if (!value.startsWith(RELEASE_PREFIX)) return;
-  anchor.href = value;
+function setReleaseHref(anchor: HTMLAnchorElement, tag: string) {
+  if (!RELEASE_SEGMENT.test(tag)) return;
+  anchor.href = `${REPO_URL}/releases/tag/${encodeURIComponent(tag)}`;
 }
 
 type Platform = 'mac' | 'win' | 'linux' | 'android' | 'server';
@@ -81,8 +84,8 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
   // 「取」一节里每个资产链接
   document.querySelectorAll<HTMLAnchorElement>('[data-asset]').forEach((a) => {
     const asset = info?.assets[a.dataset.asset as AssetKey];
-    if (!asset) return;
-    setHref(a, asset.url);
+    if (!info || !asset) return;
+    setAssetHref(a, info.tag, asset.name);
     a.removeAttribute('aria-disabled');
     const name = a.querySelector('[data-asset-name]');
     if (name) name.textContent = asset.name;
@@ -93,7 +96,7 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
     if (info) el.textContent = info.tag;
   });
   document.querySelectorAll<HTMLAnchorElement>('[data-release-url]').forEach((a) => {
-    if (info) setHref(a, info.url);
+    if (info) setReleaseHref(a, info.tag);
   });
   document.querySelectorAll<HTMLTimeElement>('[data-release-date]').forEach((el) => {
     if (!info) return;
@@ -105,9 +108,9 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
   const primary = document.querySelector<HTMLAnchorElement>('[data-dl-primary]');
   const meta = document.querySelector<HTMLElement>('[data-dl-meta]');
   const asset = platform && info ? info.assets[PRIMARY[platform]] : undefined;
-  if (primary && asset && platform) {
-    setHref(primary, asset.url);
-    if (meta) meta.textContent = `${LABEL[platform]} · ${info!.tag}`;
+  if (primary && asset && platform && info) {
+    setAssetHref(primary, info.tag, asset.name);
+    if (meta) meta.textContent = `${LABEL[platform]} · ${info.tag}`;
   } else if (meta && info) {
     meta.textContent = info.tag;
   }

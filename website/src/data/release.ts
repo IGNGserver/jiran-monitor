@@ -13,7 +13,7 @@ interface GhRelease { tag_name: string; published_at: string; draft: boolean; pr
 // Only use API values that can be safely placed in a path segment. The download and
 // release URLs are then built from OUR repository constants, never from the API's
 // html_url/browser_download_url fields.
-const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
+export const RELEASE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
 const releaseTagUrl = (tag: string) => `${REPO_URL}/releases/tag/${encodeURIComponent(tag)}`;
 const releaseAssetUrl = (tag: string, name: string) => `${REPO_URL}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 
@@ -24,10 +24,10 @@ const releaseAssetUrl = (tag: string, name: string) => `${REPO_URL}/releases/dow
  */
 export function pickStable(list: GhRelease[]): ReleaseInfo | null {
   const rel = list.find((r) => !r.draft && !r.prerelease);
-  if (!rel || !SAFE_SEGMENT.test(rel.tag_name)) return null;
+  if (!rel || !RELEASE_SEGMENT.test(rel.tag_name)) return null;
   const assets: ReleaseInfo['assets'] = {};
   for (const [key, re] of Object.entries(ASSET_PATTERNS) as [AssetKey, RegExp][]) {
-    const hit = rel.assets.find((a) => re.test(a.name) && SAFE_SEGMENT.test(a.name));
+    const hit = rel.assets.find((a) => re.test(a.name) && RELEASE_SEGMENT.test(a.name));
     if (hit) assets[key] = { name: hit.name, url: releaseAssetUrl(rel.tag_name, hit.name), size: hit.size };
   }
   return { tag: rel.tag_name, url: releaseTagUrl(rel.tag_name), publishedAt: rel.published_at, assets };
