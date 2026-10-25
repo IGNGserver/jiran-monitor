@@ -26,7 +26,7 @@ const RETAINED_KEYS = [
   'theme', 'systemGlass', 'macosGlassStyle', 'windowsBackdrop', 'reduceMotion',
   'language', 'currency', 'currencyRates',
   'heatmapMetric', 'homeActiveDaysWindow', 'homeLimitAccountCount',
-  'startAtLogin', 'closeToTray', 'startHidden', 'collectionPaused',
+  'startAtLogin', 'closeToTray', 'startHidden', 'collectionPaused', 'updateChannel',
   'windowBounds', 'lastViewState', 'lastPostedDeviceId', 'zoomFactor', 'appUpdate'
 ];
 
@@ -102,7 +102,7 @@ test('no settings key survives without a writer', () => {
   const writers = new Set([
     // settingsDesktop form controls (plus the folded window-material dropdown).
     'language', 'windowSurface', 'reduceMotion', 'startAtLogin', 'startHidden',
-    'closeToTray', 'hubMode', 'hubUrl', 'allowInsecureHubHttp', 'deviceId',
+    'closeToTray', 'updateChannel', 'hubMode', 'hubUrl', 'allowInsecureHubHttp', 'deviceId',
     'systemGlass', 'windowsBackdrop', 'secret',
     // shared-UI preferences persisted through the prefs bridge. On the desktop
     // host there is no 偏好 section, so 显示 carries the theme and currency
@@ -129,6 +129,15 @@ test('the glass preference is normalized to a boolean on both paths', () => {
     'a stored glass string must normalize on read');
   assert.match(main, /systemGlass: parseBoolean\(patch\.systemGlass \?\? settings\.systemGlass, true\)/,
     'the settings:update path must normalize the glass value');
+});
+
+test('the update channel is normalized on both the read and write paths', () => {
+  assert.match(main, /merged\.updateChannel = normalizeUpdateChannel\(merged\.updateChannel\)/,
+    'a stored channel value must normalize on read');
+  assert.match(main, /updateChannel: requestedUpdateChannel/,
+    'the settings:update path must store the normalized channel');
+  assert.match(main, /if \(updateChannelChanged\) resetAppUpdateChannelCache\(\)/,
+    'changing the channel must drop cached release data from the previous channel');
 });
 
 test('an implicit device ID stays blank while runtime code keeps the hostname fallback', () => {

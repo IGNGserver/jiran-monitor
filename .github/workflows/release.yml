@@ -632,6 +632,10 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Jiran ${{ steps.ver.outputs.tag }}
           prerelease: ${{ needs.hub-image.outputs.prerelease }}
+          # electron-updater's stable path resolves `releases/latest`; without
+          # this, a formal release that was first published as a prerelease
+          # never becomes Latest (v1.0.0 stayed Latest after v1.2.1 shipped).
+          make_latest: ${{ needs.hub-image.outputs.release_type == 'release' }}
           files: |
             artifacts/*.exe
             artifacts/*.AppImage

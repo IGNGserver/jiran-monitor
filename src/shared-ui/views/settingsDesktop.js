@@ -38,9 +38,95 @@ const REDUCE_MOTION = [
   ['on', 'desktop.settings.motionOn'],
   ['off', 'desktop.settings.motionOff']
 ];
+const UPDATE_CHANNEL_OPTIONS = [
+  ['stable', 'desktop.settings.channelStable'],
+  ['prerelease', 'desktop.settings.channelPrerelease']
+];
+const UPDATE_ERROR_KEYS = {
+  rateLimited: 'desktop.settings.updateErrorRateLimited',
+  timeout: 'desktop.settings.updateErrorTimeout',
+  network: 'desktop.settings.updateErrorNetwork',
+  githubUnavailable: 'desktop.settings.updateErrorGithubUnavailable',
+  metadata: 'desktop.settings.updateErrorMetadata',
+  unknown: 'desktop.settings.updateErrorUnknown'
+};
+const INSTALL_ERROR_KEYS = {
+  'channel-mismatch': 'desktop.settings.installErrorChannelMismatch',
+  'installer-did-not-start': 'desktop.settings.installErrorInstaller',
+  'installer-did-not-start-spent': 'desktop.settings.installErrorInstaller',
+  'install-spent-by-failure': 'desktop.settings.installErrorAttemptSpent',
+  'attempt-spent': 'desktop.settings.installErrorAttemptSpent'
+};
+const INSTALL_SUPPORT_KEYS = {
+  unpackaged: 'desktop.settings.installBlockedUnpackaged',
+  'windows-portable': 'desktop.settings.installBlockedWindowsPortable',
+  'linux-not-appimage': 'desktop.settings.installBlockedLinux',
+  'unsupported-platform': 'desktop.settings.installBlockedUnsupported'
+};
 
 function optionLabels(pairs) {
   return pairs.map(([value, key]) => [value, tr(key)]);
+}
+
+function channelLabel(channel) {
+  if (!channel) return '';
+  return tr(channel === 'prerelease' ? 'desktop.settings.channelPrerelease' : 'desktop.settings.channelStable');
+}
+
+function versionWithChannel(version, channel) {
+  if (!version) return '';
+  const label = channelLabel(channel);
+  return label
+    ? tr('desktop.settings.versionWithChannel', { version, channel: label })
+    : String(version);
+}
+
+function releaseChannelOf(release) {
+  if (!release) return null;
+  return release.prerelease === true ? 'prerelease' : 'stable';
+}
+
+function formatCheckedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return date.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  } catch (_) {
+    return date.toISOString();
+  }
+}
+
+function updateErrorText(update) {
+  if (!update?.lastError) return '';
+  return tr(UPDATE_ERROR_KEYS[update.lastErrorKind] || UPDATE_ERROR_KEYS.unknown);
+}
+
+function installErrorText(update) {
+  return tr(INSTALL_ERROR_KEYS[update?.installErrorKind] || 'desktop.settings.installErrorUnknown');
+}
+
+export function appUpdateInstallErrorText(update) {
+  return installErrorText(update);
+}
+
+/** Shown after a manual check; keeps the row and the toast on the same wording. */
+export function appUpdateToastText(update) {
+  if (!update) return tr('desktop.settings.upToDate');
+  if (update.lastError) return updateErrorText(update);
+  if (update.hasUpdate) {
+    return tr('desktop.settings.updateAvailableWithVersion', {
+      version: versionWithChannel(update.latest?.version, releaseChannelOf(update.latest))
+    });
+  }
+  if (update.currentAhead) {
+    return tr('desktop.settings.aheadOfChannel', { channel: channelLabel(update.channel) });
+  }
+  if (update.noChannelRelease) {
+    return tr('desktop.settings.noChannelRelease', { channel: channelLabel(update.channel) });
+  }
+  return tr('desktop.settings.upToDate');
 }
 
 // Fold the stored keys into the single dropdown value.
@@ -110,8 +196,8 @@ function textField(name, labelKey, value, { id = '', placeholder = '', type = 't
   return `<fluent-text-input class="field" type="${type}" name="${name}"${idAttr} value="${escapeHtml(String(value ?? ''))}" spellcheck="false"${placeholder ? ` placeholder="${escapeHtml(placeholder)}"` : ''}>${escapeHtml(tr(labelKey))}</fluent-text-input>`;
 }
 
-function actionButton(action, labelKey, appearance = 'transparent') {
-  return `<fluent-button appearance="${appearance}" type="button" class="ghost-btn" data-desktop-action="${escapeHtml(action)}">${escapeHtml(tr(labelKey))}</fluent-button>`;
+function actionButton(action, labelKey, appearance = 'transparent', { disabled = false } = {}) {
+  return `<fluent-button appearance="${appearance}" type="button" class="ghost-btn" data-desktop-action="${escapeHtml(action)}"${disabled ? ' disabled' : ''}>${escapeHtml(tr(labelKey))}</fluent-button>`;
 }
 
 /**
@@ -168,19 +254,78 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   // Closing the window is not quitting the app by default; the collector keeps
   // running and the tray is the way back.
   behaviourRows.push(checkbox('closeToTray', 'desktop.settings.closeToTray', settings.closeToTray !== false));
-  // Update controls are always reachable: checking is safe at any time, and the
-  // install row only becomes actionable once the pushed updater state offers one.
+  // Update controls: the channel is an explicit user choice, and both the
+  // release-list check and electron-updater read it. The install action only
+  // appears when the pushed state actually has something to install.
   const update = appState()?.desktopAppUpdate;
-  behaviourRows.push(`<div class="desktop-setting-row">
-      <span class="row-sub">${update?.currentVersion ? escapeHtml(`v${update.currentVersion}${update.latest?.version ? ` → ${update.latest.version}` : ''} · ${update.hasUpdate ? tr('desktop.settings.updateAvailable') : tr('desktop.settings.upToDate')}`) : ''}</span>
-      <span class="drawer-actions">${actionButton('check-updates', 'desktop.settings.checkUpdates')}${actionButton('download-install-update', 'desktop.settings.installUpdate', 'primary')}</span>
+  const updateChannel = settings.updateChannel === 'prerelease' ? 'prerelease' : 'stable';
+  const currentVersion = update?.currentVersion || info.version || '';
+  const installedChannel = update?.installedChannel || null;
+  const latest = update?.latest || null;
+  const checkedAt = formatCheckedAt(update?.lastCheckedAt);
+  const currentVersionText = currentVersion
+    ? tr('desktop.settings.currentVersion', { version: versionWithChannel(currentVersion, installedChannel) })
+    : '';
+  const latestText = latest
+    ? tr('desktop.settings.latestVersion', { version: versionWithChannel(latest.version, releaseChannelOf(latest)) })
+    : '';
+  const installVisible = Boolean(update?.hasUpdate || update?.downloaded);
+  const installSupported = update?.installSupported !== false;
+  const installBlockedKey = INSTALL_SUPPORT_KEYS[update?.installSupportReason] || 'desktop.settings.installBlockedUnsupported';
+  const statusText = (() => {
+    if (!update) return tr('desktop.settings.notCheckedYet');
+    if (update.checking) return tr('desktop.settings.checkingUpdates');
+    if (update.lastError) return updateErrorText(update);
+    if (update.installPhase === 'downloading') {
+      return tr('desktop.settings.updateProgress', { pct: Math.round(Number(update.installProgress) || 0) });
+    }
+    if (update.installPhase === 'error') return installErrorText(update);
+    if (update.downloaded) return tr('desktop.settings.readyToInstall');
+    if (update.hasUpdate) return tr('desktop.settings.updateAvailable');
+    if (update.currentAhead) return tr('desktop.settings.aheadOfChannel', { channel: channelLabel(updateChannel) });
+    if (update.latest) return tr('desktop.settings.upToDate');
+    if (update.noChannelRelease) return tr('desktop.settings.noChannelRelease', { channel: channelLabel(updateChannel) });
+    return tr('desktop.settings.notCheckedYet');
+  })();
+  const checkButton = actionButton('check-updates', 'desktop.settings.checkUpdates', 'transparent', {
+    disabled: Boolean(update?.checking)
+  });
+  const installButton = installVisible && installSupported
+    ? actionButton(
+      'download-install-update',
+      update?.downloaded ? 'desktop.settings.installUpdate' : 'desktop.settings.downloadInstallUpdate',
+      'primary',
+      { disabled: Boolean(update?.installBusy || update?.installRetryBlocked) }
+    )
+    : '';
+  const releaseButton = installVisible && !installSupported
+    ? actionButton('open-release-page', 'desktop.settings.openReleasePage', 'primary')
+    : '';
+  const prereleaseNotice = update?.installedChannel === 'prerelease' && updateChannel === 'stable'
+    ? `<div class="desktop-update-notice">
+        <span class="row-sub">${escapeHtml(tr('desktop.settings.prereleaseNotice', { version: currentVersion }))}</span>
+        <fluent-button appearance="transparent" type="button" class="ghost-btn" data-desktop-action="switch-to-prerelease-channel">${escapeHtml(tr('desktop.settings.switchToPrerelease'))}</fluent-button>
+      </div>`
+    : '';
+  behaviourRows.push(`<div class="desktop-setting-block desktop-update-panel">
+      <div class="desktop-setting-row">
+        <div class="desktop-setting-switch-copy">
+          <span class="desktop-setting-switch-label">${escapeHtml(currentVersionText)}</span>
+          <span class="desktop-setting-switch-description">${escapeHtml(statusText)}</span>
+        </div>
+        <label class="field desktop-update-channel"><span>${escapeHtml(tr('desktop.settings.updateChannel'))}</span>
+          <fluent-dropdown name="updateChannel" id="desktopUpdateChannelInput">${settingsOptionList(optionLabels(UPDATE_CHANNEL_OPTIONS), updateChannel)}</fluent-dropdown>
+        </label>
+      </div>
+      ${latestText ? `<span class="row-sub">${escapeHtml(latestText)}</span>` : ''}
+      <div class="desktop-setting-row">
+        <span class="row-sub">${checkedAt ? escapeHtml(tr('desktop.settings.lastChecked', { time: checkedAt })) : ''}</span>
+        <span class="drawer-actions">${checkButton}${installButton}${releaseButton}</span>
+      </div>
+      <p class="row-sub">${escapeHtml(tr('desktop.settings.updateChannelHint'))}</p>
+      ${installVisible && !installSupported ? `<p class="row-sub">${escapeHtml(tr(installBlockedKey))}</p>` : ''}
+      ${prereleaseNotice}
     </div>`);
-  if (update?.installPhase === 'downloading') {
-    behaviourRows.push(`<p class="row-sub">${escapeHtml(tr('desktop.settings.updateProgress', { pct: Math.round(Number(update.installProgress) || 0) }))}</p>`);
-  }
-  if (update && !update.installSupported && update.installSupportReason) {
-    behaviourRows.push(`<p class="row-sub">${escapeHtml(update.installSupportReason)}</p>`);
-  }
   groups.push(group('behaviour', 'desktop.settings.groupBehaviour', behaviourRows.join('')));
 
   // --- Connection ----------------------------------------------------------
@@ -249,6 +394,8 @@ export function readDesktopSettingsPatch(form) {
   if (surface) Object.assign(patch, settingsPatchForSurface(String(surface.value || '')));
   const language = form.querySelector('[name="language"]');
   if (language) patch.language = String(language.value || 'auto');
+  const updateChannel = form.querySelector('[name="updateChannel"]');
+  if (updateChannel) patch.updateChannel = String(updateChannel.value || 'stable');
   const reduceMotion = form.querySelector('[name="reduceMotion"]');
   if (reduceMotion) patch.reduceMotion = String(reduceMotion.value || 'system');
   // The two appearance keys the Hub keeps in 偏好; the main process normalizes

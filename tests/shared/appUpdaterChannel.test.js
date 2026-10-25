@@ -1,17 +1,20 @@
 'use strict';
 
-// The update channel is decided by what is installed, not by a setting: a formal
-// release must never be moved onto a `-rev.N` prerelease, while a prerelease build
-// follows the newest publish. Both the GitHub release-list check and electron-updater's
-// own feed go through these two functions, so the rule is asserted here once.
+// The update channel is an explicit user setting, not something inferred from
+// the installed version string: normal project releases are published as GitHub
+// prereleases while their version is plain semver (1.4.3), so the old suffix
+// heuristic classified them as stable and filtered them out.
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  isPrereleaseVersion,
+  normalizeUpdateChannel,
   parseLatestReleasePayload,
-  releaseMatchesInstalledChannel
+  parseReleaseListPayload,
+  releaseChannel,
+  releaseMatchesChannel,
+  selectLatestForChannel
 } = require('../../src/shared/appUpdater');
 
 function releasePayload(tag, prerelease) {
@@ -19,35 +22,81 @@ function releasePayload(tag, prerelease) {
     tag_name: tag,
     prerelease,
     name: tag,
-    html_url: `https://github.com/IGNGserver/jiran/releases/tag/${tag}`,
-    published_at: '2026-09-25T00:00:00Z'
+    html_url: `https://github.com/IGNGserver/jiran-monitor/releases/tag/${tag}`,
+    published_at: '2026-10-25T00:00:00Z'
   };
 }
 
-test('the version scheme maps onto the release channel', () => {
-  assert.equal(isPrereleaseVersion('0.47.0-rev.8'), true);
-  assert.equal(isPrereleaseVersion('1.2.0'), false);
-  assert.equal(isPrereleaseVersion('v1.2.0'), false);
-  assert.equal(isPrereleaseVersion('not a version'), false);
+function fixture() {
+  return parseReleaseListPayload([
+    releasePayload('v1.4.3', true),
+    releasePayload('v1.2.1', false),
+    releasePayload('v1.0.0', false)
+  ]);
+}
+
+test('the channel setting only accepts the two supported values', () => {
+  assert.equal(normalizeUpdateChannel('stable'), 'stable');
+  assert.equal(normalizeUpdateChannel('PRERELEASE'), 'prerelease');
+  assert.equal(normalizeUpdateChannel('beta'), 'stable', 'unknown values fall back to stable');
+  assert.equal(normalizeUpdateChannel(undefined), 'stable');
+  assert.equal(normalizeUpdateChannel('nonsense', 'prerelease'), 'prerelease');
 });
 
-test('the prerelease flag survives payload parsing', () => {
-  // GitHub's flag is authoritative; the version suffix is the fallback so a
-  // mis-marked release cannot pull a formal install onto it.
-  assert.equal(parseLatestReleasePayload(releasePayload('v1.3.0-rev.2', true)).prerelease, true);
-  assert.equal(parseLatestReleasePayload(releasePayload('v1.3.0', false)).prerelease, false);
-  assert.equal(parseLatestReleasePayload(releasePayload('v1.4.0-rev.1', false)).prerelease, true,
-    'a -rev.N tag is a prerelease even if the release was mislabelled');
+test('the GitHub flag and the -rev suffix both identify prereleases', () => {
+  assert.equal(releaseChannel(parseLatestReleasePayload(releasePayload('v1.4.3', true))), 'prerelease');
+  assert.equal(releaseChannel(parseLatestReleasePayload(releasePayload('v1.4.3', false))), 'stable');
+  assert.equal(releaseChannel(parseLatestReleasePayload(releasePayload('v1.4.3-rev.1', false))), 'prerelease',
+    'a mislabelled -rev.N release must never reach a stable install');
 });
 
-test('a formal install only matches formal candidates', () => {
-  const prerelease = { version: '1.4.0-rev.1', prerelease: true };
-  const formal = { version: '1.3.0', prerelease: false };
-  assert.equal(releaseMatchesInstalledChannel(prerelease, '1.2.0'), false);
-  assert.equal(releaseMatchesInstalledChannel(formal, '1.2.0'), true);
+test('stable rejects prereleases while the prerelease channel accepts both', () => {
+  const prerelease = { version: '1.4.3', prerelease: true };
+  const formal = { version: '1.2.1', prerelease: false };
+  assert.equal(releaseMatchesChannel(prerelease, 'stable'), false);
+  assert.equal(releaseMatchesChannel(formal, 'stable'), true);
+  assert.equal(releaseMatchesChannel(prerelease, 'prerelease'), true);
+  assert.equal(releaseMatchesChannel(formal, 'prerelease'), true);
+  assert.equal(releaseMatchesChannel({ version: '0.47.0-rev.2', prerelease: false }, 'stable'), false);
 });
 
-test('a prerelease install follows the newest publish', () => {
-  assert.equal(releaseMatchesInstalledChannel({ version: '1.4.0-rev.3', prerelease: true }, '1.4.0-rev.1'), true);
-  assert.equal(releaseMatchesInstalledChannel({ version: '1.3.0', prerelease: false }, '1.4.0-rev.1'), true);
+test('a stable install never selects a prerelease even when it is newest', () => {
+  const selection = selectLatestForChannel(fixture(), '1.0.0', 'stable');
+  assert.equal(selection.latest.version, '1.2.1');
+  assert.equal(selection.newer, true);
+  assert.equal(selection.currentAhead, false);
+  assert.equal(selection.installedChannel, 'stable');
+  assert.equal(selection.noChannelRelease, false);
+});
+
+test('a prerelease install sees the newest publish on the prerelease channel', () => {
+  const selection = selectLatestForChannel(fixture(), '1.4.3', 'prerelease');
+  assert.equal(selection.latest.version, '1.4.3');
+  assert.equal(selection.newer, false);
+  assert.equal(selection.currentAhead, false);
+  assert.equal(selection.installedChannel, 'prerelease');
+});
+
+test('a plain-version build installed from a prerelease keeps its channel label', () => {
+  const selection = selectLatestForChannel(fixture(), '1.4.3', 'stable');
+  assert.equal(selection.latest.version, '1.2.1');
+  assert.equal(selection.newer, false);
+  assert.equal(selection.currentAhead, true);
+  assert.equal(selection.installedChannel, 'prerelease');
+});
+
+test('a legacy -rev.N build is offered the newer plain release', () => {
+  const selection = selectLatestForChannel(fixture(), '0.47.0-rev.39', 'prerelease');
+  assert.equal(selection.latest.version, '1.4.3');
+  assert.equal(selection.newer, true);
+  assert.equal(selection.installedChannel, 'prerelease');
+});
+
+test('a channel with no matching release reports an empty state, not an error', () => {
+  const releases = parseReleaseListPayload([releasePayload('v1.4.3', true)]);
+  const selection = selectLatestForChannel(releases, '1.2.1', 'stable');
+  assert.equal(selection.latest, null);
+  assert.equal(selection.newer, false);
+  assert.equal(selection.currentAhead, false);
+  assert.equal(selection.noChannelRelease, true);
 });

@@ -48,7 +48,11 @@ import { renderLimits } from './views/limits.js';
 import { renderHome } from './views/home.js';
 import { renderUsage, renderTokenMix } from './views/usage.js';
 import { renderDevices } from './views/devices.js';
-import { readDesktopSettingsPatch } from './views/settingsDesktop.js';
+import {
+  appUpdateInstallErrorText,
+  appUpdateToastText,
+  readDesktopSettingsPatch
+} from './views/settingsDesktop.js';
 import { managementSections, normalizeManagementSection, renderSettingsPage } from './views/settings.js';
 import { submitTransfer } from './views/transfer.js';
 import { usageMetricCard } from './views/rows.js';
@@ -4142,9 +4146,9 @@ async function runDesktopAction(action, element) {
       case 'check-updates': {
         element?.setAttribute('disabled', 'disabled');
         const update = await desktop.checkAppUpdateNow();
-        showToast(update?.latest ? tr('desktop.settings.updateAvailable') : tr('desktop.settings.upToDate'));
+        state.desktopAppUpdate = update || await desktop.getAppUpdateState();
+        showToast(appUpdateToastText(state.desktopAppUpdate));
         element?.removeAttribute('disabled');
-        state.desktopAppUpdate = await desktop.getAppUpdateState();
         render();
         break;
       }
@@ -4152,13 +4156,40 @@ async function runDesktopAction(action, element) {
         // One click, one intent: fetch the update and quit into the installer.
         // The confirm gate is the quit, not the download; without a pending
         // update the install side is a no-op.
-        const confirmed = await confirmAction(tr('desktop.settings.installUpdate'), { danger: true });
+        const update = state.desktopAppUpdate;
+        if (!update || (!update.hasUpdate && !update.downloaded)) {
+          showToast(tr('desktop.settings.upToDate'));
+          return;
+        }
+        const version = update.latest?.version || update.installVersion || '';
+        const confirmed = await confirmAction(
+          update.downloaded
+            ? tr('desktop.settings.installConfirm', { version })
+            : tr('desktop.settings.downloadInstallConfirm', { version }),
+          { danger: true }
+        );
         if (!confirmed) return;
         element?.setAttribute('disabled', 'disabled');
         await desktop.downloadAppUpdate();
-        state.desktopAppUpdate = await desktop.getAppUpdateState();
+        const next = await desktop.getAppUpdateState();
+        state.desktopAppUpdate = next || null;
         render();
+        if (next?.installPhase !== 'downloaded') {
+          showToast(appUpdateInstallErrorText(next));
+          return;
+        }
         await desktop.installAppUpdate();
+        break;
+      }
+      case 'switch-to-prerelease-channel': {
+        await saveDesktopSettings({ updateChannel: 'prerelease' });
+        render();
+        break;
+      }
+      case 'open-release-page': {
+        const url = state.desktopAppUpdate?.latest?.htmlUrl
+          || state.desktopAppUpdate?.releaseListUrl;
+        if (url) await openExternal(url);
         break;
       }
       case 'save-hub-secret': {
