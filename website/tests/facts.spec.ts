@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { COUNTS, TOOLS } from '../src/data/product';
-import { findStableRelease } from '../src/data/release';
+import { findStableRelease, pickStable } from '../src/data/release';
 import { CONTENT } from '../src/i18n/content';
 
 // 站点上的数字必须与支持矩阵自洽（产品 README「Supported tools」表）
@@ -20,13 +20,12 @@ test('首屏统计数字来自同一份计数', () => {
 });
 
 test('正式版不在第一页时仍能找到', async () => {
-  const release = (tag: string, prerelease: boolean) => ({
+  const release = (tag: string, prerelease: boolean, assets: { name: string; size: number }[] = []) => ({
     tag_name: tag,
-    html_url: `https://example.test/${tag}`,
     published_at: '2026-01-01T00:00:00Z',
     draft: false,
     prerelease,
-    assets: [],
+    assets,
   });
   const pages: Record<string, unknown[]> = {
     '1': Array.from({ length: 30 }, (_, i) => release(`v9.9.${i}`, true)),
@@ -43,6 +42,33 @@ test('正式版不在第一页时仍能找到', async () => {
   const info = await findStableRelease('owner/repo', {}, fakeFetch);
   expect(info?.tag).toBe('v1.2.1');
   expect(calls).toHaveLength(2);
+});
+
+test('发布链接只由仓库常量和安全段构造', () => {
+  const info = pickStable([
+    {
+      tag_name: 'v1.2.1',
+      published_at: '2026-01-01T00:00:00Z',
+      draft: false,
+      prerelease: false,
+      assets: [{ name: 'Jiran-1.2.1.deb', size: 1 }],
+    },
+  ]);
+  expect(info?.url).toBe('https://github.com/IGNGserver/jiran-monitor/releases/tag/v1.2.1');
+  expect(info?.assets.deb?.url).toBe(
+    'https://github.com/IGNGserver/jiran-monitor/releases/download/v1.2.1/Jiran-1.2.1.deb',
+  );
+  expect(
+    pickStable([
+      {
+        tag_name: 'bad/tag',
+        published_at: '2026-01-01T00:00:00Z',
+        draft: false,
+        prerelease: false,
+        assets: [],
+      },
+    ]),
+  ).toBeNull();
 });
 
 test('中英文案结构一致', () => {

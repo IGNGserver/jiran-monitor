@@ -1,4 +1,4 @@
-import { ASSET_PATTERNS, REPO, RELEASES_URL, type AssetKey } from './product';
+import { ASSET_PATTERNS, REPO, REPO_URL, RELEASES_URL, type AssetKey } from './product';
 
 export interface ReleaseInfo {
   tag: string;
@@ -7,8 +7,15 @@ export interface ReleaseInfo {
   assets: Partial<Record<AssetKey, { name: string; url: string; size: number }>>;
 }
 
-interface GhAsset { name: string; browser_download_url: string; size: number }
-interface GhRelease { tag_name: string; html_url: string; published_at: string; draft: boolean; prerelease: boolean; assets: GhAsset[] }
+interface GhAsset { name: string; size: number }
+interface GhRelease { tag_name: string; published_at: string; draft: boolean; prerelease: boolean; assets: GhAsset[] }
+
+// Only use API values that can be safely placed in a path segment. The download and
+// release URLs are then built from OUR repository constants, never from the API's
+// html_url/browser_download_url fields.
+const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
+const releaseTagUrl = (tag: string) => `${REPO_URL}/releases/tag/${encodeURIComponent(tag)}`;
+const releaseAssetUrl = (tag: string, name: string) => `${REPO_URL}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 
 /**
  * 取「当前正式版」：最新一个既非 draft 也非 prerelease 的发布。
@@ -17,13 +24,13 @@ interface GhRelease { tag_name: string; html_url: string; published_at: string; 
  */
 export function pickStable(list: GhRelease[]): ReleaseInfo | null {
   const rel = list.find((r) => !r.draft && !r.prerelease);
-  if (!rel) return null;
+  if (!rel || !SAFE_SEGMENT.test(rel.tag_name)) return null;
   const assets: ReleaseInfo['assets'] = {};
   for (const [key, re] of Object.entries(ASSET_PATTERNS) as [AssetKey, RegExp][]) {
-    const hit = rel.assets.find((a) => re.test(a.name));
-    if (hit) assets[key] = { name: hit.name, url: hit.browser_download_url, size: hit.size };
+    const hit = rel.assets.find((a) => re.test(a.name) && SAFE_SEGMENT.test(a.name));
+    if (hit) assets[key] = { name: hit.name, url: releaseAssetUrl(rel.tag_name, hit.name), size: hit.size };
   }
-  return { tag: rel.tag_name, url: rel.html_url, publishedAt: rel.published_at, assets };
+  return { tag: rel.tag_name, url: releaseTagUrl(rel.tag_name), publishedAt: rel.published_at, assets };
 }
 
 const RELEASES_PER_PAGE = 30;

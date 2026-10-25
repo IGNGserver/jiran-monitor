@@ -5,7 +5,15 @@
  * 3. 后台向 GitHub 刷新一次「当前正式版」，失败就保留烘焙值（本站唯一的外部请求）。
  */
 import { findStableRelease, type ReleaseInfo } from '../data/release';
-import type { AssetKey } from '../data/product';
+import { REPO_URL, type AssetKey } from '../data/product';
+
+const RELEASE_PREFIX = `${REPO_URL}/releases/`;
+
+/** Only accept URLs built for this repository's Releases; never assign arbitrary API URLs. */
+function setHref(anchor: HTMLAnchorElement, value: string) {
+  if (!value.startsWith(RELEASE_PREFIX)) return;
+  anchor.href = value;
+}
 
 type Platform = 'mac' | 'win' | 'linux' | 'android' | 'server';
 const PRIMARY: Record<Platform, AssetKey> = {
@@ -74,7 +82,7 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
   document.querySelectorAll<HTMLAnchorElement>('[data-asset]').forEach((a) => {
     const asset = info?.assets[a.dataset.asset as AssetKey];
     if (!asset) return;
-    a.href = asset.url;
+    setHref(a, asset.url);
     a.removeAttribute('aria-disabled');
     const name = a.querySelector('[data-asset-name]');
     if (name) name.textContent = asset.name;
@@ -85,7 +93,7 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
     if (info) el.textContent = info.tag;
   });
   document.querySelectorAll<HTMLAnchorElement>('[data-release-url]').forEach((a) => {
-    if (info) a.href = info.url;
+    if (info) setHref(a, info.url);
   });
   document.querySelectorAll<HTMLTimeElement>('[data-release-date]').forEach((el) => {
     if (!info) return;
@@ -98,7 +106,7 @@ function apply(info: ReleaseInfo | null, platform: Platform | null) {
   const meta = document.querySelector<HTMLElement>('[data-dl-meta]');
   const asset = platform && info ? info.assets[PRIMARY[platform]] : undefined;
   if (primary && asset && platform) {
-    primary.href = asset.url;
+    setHref(primary, asset.url);
     if (meta) meta.textContent = `${LABEL[platform]} · ${info!.tag}`;
   } else if (meta && info) {
     meta.textContent = info.tag;
