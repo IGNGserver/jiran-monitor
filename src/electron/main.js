@@ -2895,15 +2895,15 @@ async function downloadAndPrepareAppUpdate() {
       setNativeAppUpdateState({ phase: 'idle', version, progress: null, error: null });
       return deriveAppUpdateState();
     }
-    if (latest && semver.lt(version, latest.version)) {
-      // The native feed resolved something older than the channel check. That
-      // means the two sources disagree, so installing would silently downgrade
-      // relative to the release the user was shown.
+    if (!latest || version !== latest.version) {
+      // Install exactly the release the channel check showed the user. A
+      // different version can mean the stale/Latest marker or a provider
+      // channel mismatch, and installing it silently would cross channels.
       appUpdateNativeBusy = false;
       setNativeAppUpdateState({
         phase: 'error',
         progress: null,
-        error: `Update feed resolved ${version}, older than ${latest.version}`,
+        error: `Update feed resolved ${version}, expected ${latest?.version || 'none'}`,
         errorKind: 'channel-mismatch'
       });
       return deriveAppUpdateState();
