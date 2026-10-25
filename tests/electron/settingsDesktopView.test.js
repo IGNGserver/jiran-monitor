@@ -39,7 +39,14 @@ function loadView(state = {}) {
       const CURRENCY_OPTIONS = [['USD', 'USD'], ['CNY', 'CNY'], ['TWD', 'TWD'], ['HKD', 'HKD']];
     `);
   const factory = new Function(`${source.replace(/^export /gm, '')}
-    return { renderDesktopSettings, readDesktopSettingsPatch, surfaceValueFromSettings, settingsPatchForSurface };`);
+    return {
+      renderDesktopSettings,
+      readDesktopSettingsPatch,
+      surfaceValueFromSettings,
+      settingsPatchForSurface,
+      appUpdateToastText,
+      appUpdateInstallErrorText
+    };`);
   return factory();
 }
 
@@ -254,4 +261,20 @@ test('the update panel shows the channel and only offers an install that can wor
   assert.doesNotMatch(blocked, /data-desktop-action="download-install-update"/);
   assert.match(blocked, /data-desktop-action="open-release-page"/);
   assert.match(blocked, /desktop\.settings\.installBlockedWindowsPortable/);
+});
+
+test('the manual-check toast and install errors share the panel wording', () => {
+  const { appUpdateToastText, appUpdateInstallErrorText } = loadView();
+  assert.equal(appUpdateToastText({ lastError: 'boom', lastErrorKind: 'timeout' }), 'desktop.settings.updateErrorTimeout');
+  assert.equal(appUpdateToastText({
+    hasUpdate: true, latest: { version: '1.1.0', prerelease: false }
+  }), 'desktop.settings.updateAvailableWithVersion');
+  assert.equal(appUpdateToastText({
+    latest: { version: '1.0.0', prerelease: false }, hasUpdate: false
+  }), 'desktop.settings.upToDate');
+  assert.equal(appUpdateToastText({
+    noChannelRelease: true, channel: 'stable'
+  }), 'desktop.settings.noChannelRelease');
+  assert.equal(appUpdateInstallErrorText({ installErrorKind: 'channel-mismatch' }), 'desktop.settings.installErrorChannelMismatch');
+  assert.equal(appUpdateInstallErrorText({}), 'desktop.settings.installErrorUnknown');
 });
