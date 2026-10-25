@@ -146,6 +146,58 @@ internal fun limitRowIdentity(provider: LimitProviderDto, index: Int): String {
   return "row:$providerId|" + fields.joinToString("|")
 }
 
+/**
+ * Every metered window of one account, in the order the Hub sent it.
+ *
+ * Deliberately unbounded: an account can carry more than the three cadences the
+ * old row showed (Antigravity bills several models, each with a session and a
+ * weekly window). Truncating here hides quota the user is about to run out of,
+ * so the list length follows the payload rather than the layout.
+ *
+ * Pure and Compose-free so the JVM suite can pin the "no truncation" property.
+ */
+internal fun meteredLimitWindows(provider: LimitProviderDto): List<LimitWindowDto> =
+  provider.windows.filter { window -> window.showMeter && windowUsedPercent(window) != null }
+
+internal data class LimitWindowGroup(val title: String, val items: List<LimitWindowDto>)
+
+internal data class GroupedLimitWindows(
+  val groups: List<LimitWindowGroup>,
+  val ungrouped: List<LimitWindowDto>
+)
+
+private val antigravityCadenceSuffix = Regex("""\s+(?:5-hour|weekly)$""", RegexOption.IGNORE_CASE)
+
+/**
+ * Antigravity reports one session + one weekly window per model, so a flat list
+ * reads as six identical bars. The desktop renderer groups them by the label
+ * prefix ("Gemini 3 Pro", "Claude Sonnet", …); this is the same rule, so both
+ * surfaces describe the same account the same way. Returns `null` when nothing
+ * carries a cadence suffix, which keeps every other provider on the flat layout.
+ */
+internal fun groupAntigravityWindows(windows: List<LimitWindowDto>): GroupedLimitWindows? {
+  val groups = linkedMapOf<String, MutableList<LimitWindowDto>>()
+  val ungrouped = mutableListOf<LimitWindowDto>()
+  for (window in windows) {
+    val label = window.label?.trim().orEmpty()
+    val match = antigravityCadenceSuffix.find(label)
+    val kind = window.kind.lowercase(Locale.US)
+    if ((kind == "session" || kind == "weekly") && match != null) {
+      val title = label.removeRange(match.range).trim().ifBlank { "General" }
+      // The cadence moves into the group header, so the bar itself only needs to
+      // say which window it is — the same substitution the desktop renderer makes.
+      groups.getOrPut(title) { mutableListOf() } += window.copy(label = windowKindLabel(kind))
+    } else {
+      ungrouped += window
+    }
+  }
+  if (groups.isEmpty()) return null
+  return GroupedLimitWindows(
+    groups = groups.map { (title, items) -> LimitWindowGroup(title, items.toList()) },
+    ungrouped = ungrouped.toList()
+  )
+}
+
 fun findUrgentLimit(limits: LimitsDto?): Pair<LimitProviderDto, Double>? {
   val providers = limits?.providers.orEmpty()
   // First priority: check for abnormal account/credential statuses
@@ -165,7 +217,7 @@ fun findUrgentLimit(limits: LimitsDto?): Pair<LimitProviderDto, Double>? {
   // Second priority: check for low/exhausted quota
   var mostUrgent: Pair<LimitProviderDto, Double>? = null
   for (provider in providers) {
-    val meterWindows = provider.windows.filter { it.showMeter && windowUsedPercent(it) != null }
+    val meterWindows = meteredLimitWindows(provider)
     val headlineUsed = meterWindows.mapNotNull { windowUsedPercent(it) }.maxOrNull() ?: continue
     val remaining = (100.0 - headlineUsed).coerceIn(0.0, 100.0)
     if (remaining <= 25.0) {
@@ -361,7 +413,7 @@ private fun LimitAccountRow(
   // `showMeter == false` means the account deliberately hides the window;
   // `windowUsedPercent == null` means the provider never told us.  Those are
   // different facts and stay different here.
-  val meterWindows = provider.windows.filter { it.showMeter && windowUsedPercent(it) != null }
+  val meterWindows = meteredLimitWindows(provider)
   val unavailableWindows = provider.windows.filter { it.showMeter && windowUsedPercent(it) == null }
   val headlineUsed = meterWindows.mapNotNull { windowUsedPercent(it) }.maxOrNull()
   val headlineRemaining = headlineUsed?.let { (100.0 - it).coerceIn(0.0, 100.0) }
@@ -417,8 +469,24 @@ private fun LimitAccountRow(
           )
         }
 
-        meterWindows.take(3).forEach { window ->
-          LimitWindowBar(window)
+        // Every metered window is rendered, not just the first three: an account
+        // with more cadences than that used to hide the rest behind the fold.
+        val groupedWindows = if (provider.provider.trim().equals("antigravity", ignoreCase = true)) {
+          groupAntigravityWindows(meterWindows)
+        } else {
+          null
+        }
+        if (groupedWindows != null) {
+          groupedWindows.groups.forEach { group ->
+            LimitWindowGroupBlock(group.title, group.items)
+          }
+          groupedWindows.ungrouped.forEach { window ->
+            LimitWindowBar(window)
+          }
+        } else {
+          meterWindows.forEach { window ->
+            LimitWindowBar(window)
+          }
         }
 
         val unavailableLabels = unavailableWindows
@@ -445,6 +513,31 @@ private fun LimitAccountRow(
               overflow = TextOverflow.Ellipsis
             )
           }
+      }
+    }
+  }
+}
+
+/**
+ * One model's cadence pair (session + weekly) under its own caption. Antigravity
+ * accounts report these per model; without the caption the bars are anonymous.
+ */
+@Composable
+private fun LimitWindowGroupBlock(
+  title: String,
+  windows: List<LimitWindowDto>
+) {
+  val colors = LocalFluentColors.current
+  Column(verticalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.s)) {
+    Text(
+      title,
+      style = FluentTypeRamp.caption1,
+      fontWeight = FontWeight.SemiBold,
+      color = colors.neutralForeground2
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.m)) {
+      windows.forEach { window ->
+        LimitWindowBar(window)
       }
     }
   }
