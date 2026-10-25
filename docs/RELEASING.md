@@ -10,6 +10,18 @@
 
 发布类型和版本字符串是两个独立概念：GitHub Release 是否标记为 prerelease 由发布流程决定。普通的“发布 release”按 prerelease 处理；只有明确要求“发布正式版 release”时，才选择正式版。正式版还会更新 Docker 镜像的 `latest` 标签，版本化标签则始终发布。
 
+## 更新通道与 Latest 标记
+
+桌面客户端的更新通道是用户设置（默认 `stable`），不再根据已安装版本字符串推断：
+
+- `stable` 只接受 `prerelease: false` 且版本号不带 prerelease 后缀的发布；
+- `prerelease` 接受预发布构建，也接受更新的正式版；
+- 从预发布通道切回稳定版不会自动降级，客户端会在下一个正式版发布时更新。
+
+版本号与发布类型相互独立：`1.4.3` 可以是 semver 意义上的正式版本，同时在 GitHub 上标记为 prerelease。客户端以 GitHub 的 prerelease 标记为准。
+
+`softprops/action-gh-release` 必须显式设置 `make_latest`：正式版为 `true`，prerelease 为 `false`。否则 GitHub 的 `/releases/latest` 会停留在旧正式版（例如 `v1.2.1` 发布后仍指向 `v1.0.0`），electron-updater 的稳定通道路径就解析不到新版本。
+
 ## 首次配置 Android 签名
 
 Android 正式包必须使用长期保存的签名密钥。不要把 keystore 文件或密码提交到仓库。

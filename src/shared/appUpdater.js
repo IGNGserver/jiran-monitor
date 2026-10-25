@@ -14,6 +14,9 @@ const RELEASE_HTML_PREFIXES = [
   `https://github.com/${GITHUB_REPO}/releases/`,
   'https://github.com/IGNGserver/jiran-monitor/releases/'
 ];
+const RELEASES_HTML_URL = `https://github.com/${GITHUB_REPO}/releases`;
+const UPDATE_CHANNEL_STABLE = 'stable';
+const UPDATE_CHANNEL_PRERELEASE = 'prerelease';
 const REQUEST_TIMEOUT_MS = 10 * 1000;
 const APP_UPDATE_BACKGROUND_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const APP_UPDATE_OUTDATED_COOLDOWN_MS = 60 * 60 * 1000;
@@ -74,15 +77,51 @@ function isPrereleaseVersion(version) {
   return Boolean(parsed?.prerelease?.length);
 }
 
+function normalizeUpdateChannel(value, fallback = UPDATE_CHANNEL_STABLE) {
+  const fallbackChannel = fallback === UPDATE_CHANNEL_PRERELEASE
+    ? UPDATE_CHANNEL_PRERELEASE
+    : UPDATE_CHANNEL_STABLE;
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === UPDATE_CHANNEL_PRERELEASE) return UPDATE_CHANNEL_PRERELEASE;
+  if (raw === UPDATE_CHANNEL_STABLE) return UPDATE_CHANNEL_STABLE;
+  return fallbackChannel;
+}
+
 /**
- * Update channel, decided by what is installed rather than by a setting: a formal
- * release (`1.2.3`) only ever moves to another formal release, while a `-rev.N`
- * build follows the newest publish. The project publishes `-rev.N` tags as GitHub
- * prereleases, so the two views of "prerelease" agree.
+ * GitHub's prerelease flag is authoritative; the `-rev.N` suffix is the fallback
+ * for releases that were published before the flag was applied consistently.
  */
-function releaseMatchesInstalledChannel(candidate, installedVersion) {
-  if (isPrereleaseVersion(installedVersion)) return true;
-  return !(candidate?.prerelease === true || isPrereleaseVersion(candidate?.version));
+function releaseChannel(release) {
+  if (!release) return null;
+  return release.prerelease === true || isPrereleaseVersion(release.version)
+    ? UPDATE_CHANNEL_PRERELEASE
+    : UPDATE_CHANNEL_STABLE;
+}
+
+function releaseMatchesChannel(candidate, channel) {
+  if (normalizeUpdateChannel(channel) === UPDATE_CHANNEL_PRERELEASE) return true;
+  return releaseChannel(candidate) === UPDATE_CHANNEL_STABLE;
+}
+
+/**
+ * Pick the newest release the selected channel may install. A prerelease
+ * channel also accepts formal releases: a later `1.5.0` is a valid move for a
+ * user on `1.5.0-rc.1`. Stable only accepts non-prerelease releases.
+ */
+function selectLatestForChannel(releases, currentVersion, channel) {
+  const normalizedChannel = normalizeUpdateChannel(channel);
+  const current = parseTag(currentVersion) || '0.0.0';
+  const installedRelease = releases.find((release) => release.version === current) || null;
+  const latest = releases.find((release) => releaseMatchesChannel(release, normalizedChannel)) || null;
+  return {
+    latest,
+    newer: Boolean(latest && semver.gt(latest.version, current)),
+    currentAhead: Boolean(latest && semver.gt(current, latest.version)),
+    installedChannel: installedRelease
+      ? releaseChannel(installedRelease)
+      : (isPrereleaseVersion(current) ? UPDATE_CHANNEL_PRERELEASE : null),
+    noChannelRelease: !latest
+  };
 }
 
 function parseTag(tag) {
@@ -439,14 +478,14 @@ function latestFromUpdaterInfo(info) {
   };
 }
 
-function providerUpdateCheckAvailability(result, currentVersion) {
+function providerUpdateCheckAvailability(result, currentVersion, channel = UPDATE_CHANNEL_STABLE) {
   const latest = latestFromUpdaterInfo(result?.updateInfo);
   if (!latest) return { valid: false, newer: false, latest: null, clearLatest: false };
   const current = parseTag(currentVersion);
-  // electron-updater reads whatever `latest*.yml` the newest publish wrote, which
-  // is a prerelease file right after one ships. Without this gate a formal install
-  // would be offered a prerelease that the release-list check already rejected.
-  const onChannel = releaseMatchesInstalledChannel(latest, parseTag(currentVersion) || currentVersion);
+  // A native update result carries no GitHub prerelease flag. Treat it as
+  // eligible only when the selected channel also accepts the release-list
+  // entry; the release list remains the display source of truth.
+  const onChannel = releaseMatchesChannel(latest, channel);
   const newer = Boolean(onChannel && result?.isUpdateAvailable === true && current && semver.gt(latest.version, current));
   const isCurrent = Boolean(current && latest.version === current);
   return {
@@ -569,8 +608,9 @@ async function withTimeout(ms, task) {
   }
 }
 
-async function checkLatestRelease(currentVersion) {
+async function checkLatestRelease(currentVersion, channel = UPDATE_CHANNEL_STABLE) {
   const checkedAt = new Date().toISOString();
+  const normalizedChannel = normalizeUpdateChannel(channel);
   try {
     const payload = await withTimeout(REQUEST_TIMEOUT_MS, async (signal) => {
       const response = await fetch(RELEASES_URL, {
@@ -581,19 +621,37 @@ async function checkLatestRelease(currentVersion) {
           'x-github-api-version': '2022-11-28'
         }
       });
-      if (!response.ok) throw new Error(`GitHub responded ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`GitHub responded ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       return response.json();
     });
     const releases = parseReleaseListPayload(payload);
-    const latest = releases.find((release) => releaseMatchesInstalledChannel(release, currentVersion)) || null;
-    if (!latest) {
-      return { ok: false, newer: false, latest: null, error: 'Release list missing a valid project release', checkedAt };
-    }
-    const current = semver.valid(currentVersion) ? currentVersion : '0.0.0';
-    const newer = semver.gt(latest.version, current);
-    return { ok: true, newer, latest, error: null, checkedAt };
+    const selection = selectLatestForChannel(releases, currentVersion, normalizedChannel);
+    return {
+      ok: true,
+      channel: normalizedChannel,
+      ...selection,
+      error: null,
+      errorKind: null,
+      checkedAt
+    };
   } catch (error) {
-    return { ok: false, newer: false, latest: null, error: error.message || String(error), checkedAt };
+    const classified = classifyAppUpdateError(error);
+    return {
+      ok: false,
+      channel: normalizedChannel,
+      newer: false,
+      latest: null,
+      currentAhead: false,
+      installedChannel: null,
+      noChannelRelease: false,
+      error: classified.message,
+      errorKind: classified.kind,
+      checkedAt
+    };
   }
 }
 
@@ -605,7 +663,10 @@ module.exports = {
   resolveAppUpdateCheckError,
   parseTag,
   isPrereleaseVersion,
-  releaseMatchesInstalledChannel,
+  normalizeUpdateChannel,
+  releaseChannel,
+  releaseMatchesChannel,
+  selectLatestForChannel,
   parseLatestReleasePayload,
   shouldSkipAppUpdateCheck,
   downloadedAppUpdateMatchesLatest,
@@ -620,7 +681,10 @@ module.exports = {
   parseReleaseListPayload,
   RELEASES_URL,
   RELEASES_LATEST_URL,
+  RELEASES_HTML_URL,
   GITHUB_REPO,
+  UPDATE_CHANNEL_STABLE,
+  UPDATE_CHANNEL_PRERELEASE,
   APP_UPDATE_BACKGROUND_COOLDOWN_MS,
   APP_UPDATE_OUTDATED_COOLDOWN_MS,
   updateInstallQuitPolicy

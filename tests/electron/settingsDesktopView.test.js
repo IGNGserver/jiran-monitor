@@ -39,7 +39,14 @@ function loadView(state = {}) {
       const CURRENCY_OPTIONS = [['USD', 'USD'], ['CNY', 'CNY'], ['TWD', 'TWD'], ['HKD', 'HKD']];
     `);
   const factory = new Function(`${source.replace(/^export /gm, '')}
-    return { renderDesktopSettings, readDesktopSettingsPatch, surfaceValueFromSettings, settingsPatchForSurface };`);
+    return {
+      renderDesktopSettings,
+      readDesktopSettingsPatch,
+      surfaceValueFromSettings,
+      settingsPatchForSurface,
+      appUpdateToastText,
+      appUpdateInstallErrorText
+    };`);
   return factory();
 }
 
@@ -62,13 +69,14 @@ test('every retained settings key has a form control', () => {
 
   const required = [
     'language', 'theme', 'currency', 'windowSurface', 'reduceMotion',
-    'startAtLogin', 'startHidden', 'closeToTray',
+    'startAtLogin', 'startHidden', 'closeToTray', 'updateChannel',
     'hubMode', 'hubUrl', 'allowInsecureHubHttp', 'deviceId'
   ];
   const missing = required.filter((key) => !html.includes(`name="${key}"`));
   assert.deepEqual(missing, [], `settings with no control: ${missing.join(', ')}`);
   assert.ok(html.includes('data-desktop-action="check-updates"'), 'a check-for-updates button exists');
-  assert.ok(html.includes('data-desktop-action="download-install-update"'), 'an install button exists');
+  assert.ok(!html.includes('data-desktop-action="download-install-update"'),
+    'the install action stays hidden until the pushed state has an update');
 });
 
 test('device ID is blank by default and connection errors have a persistent recovery surface', () => {
@@ -168,6 +176,7 @@ test('reading the form back produces the right value types', () => {
 
   const fields = [
     ['startAtLogin', 'checkbox', true], ['closeToTray', 'checkbox', false],
+    ['updateChannel', 'text', 'prerelease'],
     ['deviceId', 'text', ' renamed '], ['hubUrl', 'text', ' http://hub:17321 ']
   ];
   const nodes = fields.map(([name, type, value]) => ({ name, type, value: String(value), checked: value === true }));
@@ -191,6 +200,7 @@ test('reading the form back produces the right value types', () => {
   assert.equal(patch.closeToTray, false);
   assert.equal(patch.deviceId, 'renamed', 'text fields are trimmed');
   assert.equal(patch.hubUrl, 'http://hub:17321');
+  assert.equal(patch.updateChannel, 'prerelease');
   assert.equal(patch.hubMode, 'client');
   assert.equal(patch.language, 'zh-CN');
   assert.equal(patch.reduceMotion, 'on');
@@ -211,23 +221,60 @@ test('the surface control round-trips through the dropdown', () => {
   assert.equal(readDesktopSettingsPatch(formFor('regular')).systemGlass, false);
 });
 
-test('the update controls are always reachable; the reason text explains a blocked install', () => {
+test('the update panel shows the channel and only offers an install that can work', () => {
   const { renderDesktopSettings } = loadView({
     desktopAppUpdate: {
-      currentVersion: '1.0.0', latest: { version: '1.1.0' }, hasUpdate: true,
-      downloaded: false, installSupported: true
+      currentVersion: '1.4.3', installedChannel: 'prerelease', channel: 'stable',
+      latest: { version: '1.2.1', prerelease: false }, hasUpdate: false, currentAhead: true,
+      downloaded: false, installSupported: true, lastCheckedAt: '2026-10-25T12:00:00Z'
     }
   });
-  const html = renderDesktopSettings({}, { platform: 'win32' });
+  const html = renderDesktopSettings({ updateChannel: 'stable' }, { platform: 'win32' });
   assert.match(html, /data-desktop-action="check-updates"/);
-  assert.match(html, /data-desktop-action="download-install-update"/);
+  assert.match(html, /name="updateChannel"/);
+  assert.match(html, /value="stable" selected/);
+  assert.match(html, /desktop\.settings\.currentVersion/);
+  assert.match(html, /desktop\.settings\.latestVersion/);
+  assert.match(html, /desktop\.settings\.prereleaseNotice/);
+  assert.match(html, /data-desktop-action="switch-to-prerelease-channel"/);
+  assert.doesNotMatch(html, /data-desktop-action="download-install-update"/,
+    'no install action while the channel has nothing newer to install');
 
-  const unsupported = loadView({
+  const available = loadView({
     desktopAppUpdate: {
-      currentVersion: '1.0.0', latest: { version: '1.1.0' }, hasUpdate: true,
-      downloaded: true, installSupported: false, installSupportReason: 'portable build'
+      currentVersion: '1.0.0', installedChannel: 'stable', channel: 'stable',
+      latest: { version: '1.2.1', prerelease: false }, hasUpdate: true, currentAhead: false,
+      downloaded: false, installSupported: true
     }
-  }).renderDesktopSettings({}, { platform: 'linux' });
-  assert.match(unsupported, /data-desktop-action="download-install-update"/, 'the install button stays reachable');
-  assert.match(unsupported, /portable build/, 'the reason is shown rather than the button hidden silently');
+  }).renderDesktopSettings({ updateChannel: 'stable' }, { platform: 'win32' });
+  assert.match(available, /data-desktop-action="download-install-update"/);
+  assert.match(available, /desktop\.settings\.downloadInstallUpdate/);
+  assert.match(available, /desktop\.settings\.latestVersion/);
+
+  const blocked = loadView({
+    desktopAppUpdate: {
+      currentVersion: '1.0.0', installedChannel: 'stable', channel: 'stable',
+      latest: { version: '1.2.1', prerelease: false }, hasUpdate: true,
+      downloaded: false, installSupported: false, installSupportReason: 'windows-portable'
+    }
+  }).renderDesktopSettings({ updateChannel: 'stable' }, { platform: 'win32' });
+  assert.doesNotMatch(blocked, /data-desktop-action="download-install-update"/);
+  assert.match(blocked, /data-desktop-action="open-release-page"/);
+  assert.match(blocked, /desktop\.settings\.installBlockedWindowsPortable/);
+});
+
+test('the manual-check toast and install errors share the panel wording', () => {
+  const { appUpdateToastText, appUpdateInstallErrorText } = loadView();
+  assert.equal(appUpdateToastText({ lastError: 'boom', lastErrorKind: 'timeout' }), 'desktop.settings.updateErrorTimeout');
+  assert.equal(appUpdateToastText({
+    hasUpdate: true, latest: { version: '1.1.0', prerelease: false }
+  }), 'desktop.settings.updateAvailableWithVersion');
+  assert.equal(appUpdateToastText({
+    latest: { version: '1.0.0', prerelease: false }, hasUpdate: false
+  }), 'desktop.settings.upToDate');
+  assert.equal(appUpdateToastText({
+    noChannelRelease: true, channel: 'stable'
+  }), 'desktop.settings.noChannelRelease');
+  assert.equal(appUpdateInstallErrorText({ installErrorKind: 'channel-mismatch' }), 'desktop.settings.installErrorChannelMismatch');
+  assert.equal(appUpdateInstallErrorText({}), 'desktop.settings.installErrorUnknown');
 });

@@ -54,10 +54,14 @@ const {
   checkLatestRelease,
   deriveAppUpdateAvailability,
   downloadedAppUpdateMatchesLatest,
-  GITHUB_REPO,
   installFailureErrorKind,
+  isPrereleaseVersion,
   mergeLatestReleaseMetadata,
+  normalizeUpdateChannel,
+  RELEASES_HTML_URL,
   shouldSkipAppUpdateCheck,
+  UPDATE_CHANNEL_PRERELEASE,
+  UPDATE_CHANNEL_STABLE,
   updateInstallQuitPolicy
 } = require('../shared/appUpdater');
 const semver = require('semver');
@@ -349,6 +353,7 @@ function defaultSettings() {
     closeToTray: parseBoolean(process.env.TOKEN_MONITOR_CLOSE_TO_TRAY, true),
     startHidden: parseBoolean(process.env.TOKEN_MONITOR_START_HIDDEN, true),
     collectionPaused: parseBoolean(process.env.TOKEN_MONITOR_COLLECTION_PAUSED, false),
+    updateChannel: UPDATE_CHANNEL_STABLE,
     // Main-process-owned runtime state, never offered to the renderer.
     windowBounds: null,
     lastViewState: { period: 'today', breakdown: 'tool' },
@@ -357,7 +362,10 @@ function defaultSettings() {
     appUpdate: {
       lastCheckedAt: null,
       lastKnownLatest: null,
-      dismissedVersion: null
+      dismissedVersion: null,
+      installedVersion: null,
+      installedChannel: null,
+      noChannelRelease: false
     }
   };
 }
@@ -707,6 +715,7 @@ function readSettings() {
     merged.collectionPaused = parseBoolean(merged.collectionPaused, false);
     merged.closeToTray = parseBoolean(merged.closeToTray, true);
     merged.startHidden = parseBoolean(merged.startHidden, true);
+    merged.updateChannel = normalizeUpdateChannel(merged.updateChannel);
     if (saved.lastViewState !== undefined) {
       merged.lastViewState = normalizeInitialRendererViewState(saved.lastViewState);
     }
@@ -2529,6 +2538,7 @@ function stopSyncNetworkMonitor() {
 let appUpdateCheckInFlight = false;
 let appUpdateCheckPromise = null;
 let appUpdateLastError = null;
+let appUpdateLastErrorKind = null;
 let appUpdateBackgroundTimer = null;
 let appUpdateNativeBusy = false;
 let appUpdateNativeConfigured = false;
@@ -2540,29 +2550,37 @@ let appUpdateNativeState = {
   errorKind: null
 };
 
-function latestFromUpdaterInfo(info) {
-  if (!info || typeof info !== 'object') return null;
-  const version = semver.valid(info.version);
-  if (!version) return null;
-  return {
-    version,
-    tag: `v${version}`,
-    name: (typeof info.releaseName === 'string' && info.releaseName.trim()) ? info.releaseName : `v${version}`,
-    htmlUrl: `https://github.com/${GITHUB_REPO}/releases/tag/v${version}`,
-    publishedAt: typeof info.releaseDate === 'string' ? info.releaseDate : ''
-  };
-}
-
-function rememberLatestAppUpdate(latest, checkedAt = new Date().toISOString()) {
-  if (!latest) return null;
-  const merged = mergeLatestReleaseMetadata(settings?.appUpdate?.lastKnownLatest, latest);
+function rememberLatestAppUpdate(latest, checkedAt = new Date().toISOString(), {
+  currentVersion = app.getVersion(),
+  installedChannel = null,
+  noChannelRelease = false
+} = {}) {
+  const merged = latest
+    ? mergeLatestReleaseMetadata(settings?.appUpdate?.lastKnownLatest, latest)
+    : null;
   settings.appUpdate = {
     ...(settings.appUpdate || {}),
     lastCheckedAt: checkedAt,
-    lastKnownLatest: merged
+    lastKnownLatest: merged,
+    installedVersion: currentVersion,
+    installedChannel: installedChannel || null,
+    noChannelRelease: Boolean(noChannelRelease && !merged)
   };
   saveSettings();
   return merged;
+}
+
+function resetAppUpdateChannelCache() {
+  settings.appUpdate = {
+    ...(settings.appUpdate || {}),
+    lastCheckedAt: null,
+    lastKnownLatest: null,
+    dismissedVersion: null,
+    noChannelRelease: false
+  };
+  appUpdateLastError = null;
+  appUpdateLastErrorKind = null;
+  appUpdateNativeState = { phase: 'idle', version: null, progress: null, error: null, errorKind: null };
 }
 
 function linuxPackageType() {
@@ -2588,6 +2606,23 @@ function setNativeAppUpdateState(patch = {}) {
   sendAppUpdatePush();
 }
 
+function applyAppUpdateChannel() {
+  if (!appUpdateNativeConfigured) return;
+  const channel = normalizeUpdateChannel(settings?.updateChannel);
+  autoUpdater.allowPrerelease = channel === UPDATE_CHANNEL_PRERELEASE;
+  // The channel setter also flips allowDowngrade on. Downgrades stay disabled:
+  // switching back to stable waits for the next formal release.
+  autoUpdater.channel = null;
+  autoUpdater.allowDowngrade = false;
+  if (channel === UPDATE_CHANNEL_PRERELEASE && isPrereleaseVersion(app.getVersion())) {
+    // Legacy -rev.N builds otherwise make the GitHub provider follow only the
+    // `rev` channel and stop at the last rev tag. `beta` is electron-updater's
+    // "newest non-custom release" path, which lets those installs reach 1.x.
+    autoUpdater.channel = 'beta';
+    autoUpdater.allowDowngrade = false;
+  }
+}
+
 function configureNativeAppUpdater() {
   if (appUpdateNativeConfigured) return;
   autoUpdater = require('electron-updater').autoUpdater;
@@ -2595,17 +2630,16 @@ function configureNativeAppUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.logger = console;
+  applyAppUpdateChannel();
   autoUpdater.on('checking-for-update', () => {
     setNativeAppUpdateState({ phase: 'checking', progress: null, error: null });
   });
   autoUpdater.on('update-available', (info) => {
-    const latest = rememberLatestAppUpdate(latestFromUpdaterInfo(info));
-    setNativeAppUpdateState({ phase: 'available', version: latest?.version || info?.version || null, progress: null, error: null });
+    setNativeAppUpdateState({ phase: 'available', version: semver.valid(info?.version) || null, progress: null, error: null });
   });
-  autoUpdater.on('update-not-available', (info) => {
+  autoUpdater.on('update-not-available', () => {
     appUpdateNativeBusy = false;
-    const latest = rememberLatestAppUpdate(latestFromUpdaterInfo(info));
-    setNativeAppUpdateState({ phase: 'idle', version: latest?.version || null, progress: null, error: null });
+    setNativeAppUpdateState({ phase: 'idle', version: null, progress: null, error: null });
   });
   autoUpdater.on('download-progress', (progress) => {
     setNativeAppUpdateState({
@@ -2616,8 +2650,12 @@ function configureNativeAppUpdater() {
   });
   autoUpdater.on('update-downloaded', (info) => {
     appUpdateNativeBusy = false;
-    const latest = latestFromUpdaterInfo(info);
-    setNativeAppUpdateState({ phase: 'downloaded', version: latest?.version || info?.version || appUpdateNativeState.version || null, progress: 100, error: null });
+    setNativeAppUpdateState({
+      phase: 'downloaded',
+      version: semver.valid(info?.version) || appUpdateNativeState.version || null,
+      progress: 100,
+      error: null
+    });
   });
   // The install hand-off is emitted by Electron's native autoUpdater emitter,
   // not necessarily by electron-updater's wrapper. Arm the watchdog only after
@@ -2653,6 +2691,7 @@ function configureNativeAppUpdater() {
 function deriveAppUpdateState() {
   const block = settings?.appUpdate || {};
   const currentVersion = app.getVersion();
+  const channel = normalizeUpdateChannel(settings?.updateChannel);
   const latest = block.lastKnownLatest || null;
   const dismissedVersion = block.dismissedVersion || null;
   const installSupport = nativeAppUpdateInstallSupport();
@@ -2663,15 +2702,29 @@ function deriveAppUpdateState() {
     phase: appUpdateNativeState.phase,
     downloadedVersion: appUpdateNativeState.version
   });
+  const storedInstalledChannel = block.installedVersion === currentVersion
+    && (block.installedChannel === UPDATE_CHANNEL_STABLE || block.installedChannel === UPDATE_CHANNEL_PRERELEASE)
+    ? block.installedChannel
+    : null;
+  const installedChannel = storedInstalledChannel
+    || (isPrereleaseVersion(currentVersion) ? UPDATE_CHANNEL_PRERELEASE : null);
+  const current = semver.valid(currentVersion);
+  const latestVersion = semver.valid(latest?.version);
   return {
     currentVersion,
+    channel,
+    installedChannel,
     latest,
     hasUpdate: availability.hasUpdate,
+    currentAhead: Boolean(current && latestVersion && semver.gt(current, latestVersion)),
+    noChannelRelease: Boolean(block.noChannelRelease === true && !latest),
     showUpdateNotice: availability.showUpdateNotice,
     dismissedVersion,
     lastCheckedAt: block.lastCheckedAt || null,
     checking: appUpdateCheckInFlight,
     lastError: appUpdateLastError,
+    lastErrorKind: appUpdateLastErrorKind,
+    releaseListUrl: RELEASES_HTML_URL,
     installSupported: installSupport.supported,
     installSupportReason: installSupport.reason,
     installPhase: appUpdateNativeState.phase,
@@ -2717,8 +2770,10 @@ async function runAppUpdateCheck({ force = false, bypassCooldown = false } = {})
       if (activeResult?.ok) {
         if (activeResult.newer) restoreDismissedAppUpdate(activeResult.latest?.version);
         appUpdateLastError = null;
+        appUpdateLastErrorKind = null;
       } else {
         appUpdateLastError = activeResult?.error || 'Update check failed';
+        appUpdateLastErrorKind = activeResult?.errorKind || 'unknown';
       }
       sendAppUpdatePush();
     }
@@ -2737,23 +2792,31 @@ async function runAppUpdateCheck({ force = false, bypassCooldown = false } = {})
   const checkTask = (async () => {
     appUpdateCheckInFlight = true;
     appUpdateLastError = null;
+    appUpdateLastErrorKind = null;
     if (force) sendAppUpdatePush();
     let result;
     try {
-      result = await checkLatestRelease(app.getVersion());
+      result = await checkLatestRelease(app.getVersion(), normalizeUpdateChannel(settings?.updateChannel));
       if (result.ok) {
-        rememberLatestAppUpdate(result.latest, result.checkedAt);
+        rememberLatestAppUpdate(result.latest, result.checkedAt, {
+          currentVersion: app.getVersion(),
+          installedChannel: result.installedChannel,
+          noChannelRelease: result.noChannelRelease
+        });
         if (force && result.newer) restoreDismissedAppUpdate(result.latest?.version);
         appUpdateLastError = null;
+        appUpdateLastErrorKind = null;
       } else {
         appUpdateLastError = force ? (result.error || 'Update check failed') : null;
+        appUpdateLastErrorKind = force ? (result.errorKind || 'unknown') : null;
         if (!force) console.warn('App update check failed:', result.error);
       }
     } catch (error) {
       const message = error.message || String(error);
       appUpdateLastError = force ? message : null;
+      appUpdateLastErrorKind = force ? 'unknown' : null;
       if (!force) console.warn('App update check threw:', error);
-      return { ok: false, newer: false, latest: null, error: message };
+      return { ok: false, newer: false, latest: null, error: message, errorKind: 'unknown' };
     } finally {
       appUpdateCheckInFlight = false;
       sendAppUpdatePush();
@@ -2777,6 +2840,19 @@ function startAppUpdateBackgroundChecks() {
   if (appUpdateBackgroundTimer) return;
   appUpdateBackgroundTimer = setInterval(maybeRunBackgroundUpdateCheck, 60 * 60 * 1000);
   appUpdateBackgroundTimer.unref?.();
+}
+
+// A channel switch during an in-flight check must not reuse that check's
+// result: wait for it to settle, then ask again with the new channel.
+function rerunAppUpdateCheck() {
+  setImmediate(() => {
+    void (async () => {
+      if (appUpdateCheckPromise) {
+        try { await appUpdateCheckPromise; } catch (_) {}
+      }
+      await runAppUpdateCheck({ force: true, bypassCooldown: true });
+    })().catch(() => {});
+  });
 }
 
 function dismissAppUpdateVersion(version) {
@@ -2807,6 +2883,7 @@ async function downloadAndPrepareAppUpdate() {
   })) return deriveAppUpdateState();
   restoreDismissedAppUpdate(latest?.version);
   configureNativeAppUpdater();
+  applyAppUpdateChannel();
   appUpdateNativeBusy = true;
   setNativeAppUpdateState({ phase: 'checking', progress: null, error: null });
   try {
@@ -2816,6 +2893,19 @@ async function downloadAndPrepareAppUpdate() {
     if (!version || !semver.gt(version, app.getVersion())) {
       appUpdateNativeBusy = false;
       setNativeAppUpdateState({ phase: 'idle', version, progress: null, error: null });
+      return deriveAppUpdateState();
+    }
+    if (!latest || version !== latest.version) {
+      // Install exactly the release the channel check showed the user. A
+      // different version can mean the stale/Latest marker or a provider
+      // channel mismatch, and installing it silently would cross channels.
+      appUpdateNativeBusy = false;
+      setNativeAppUpdateState({
+        phase: 'error',
+        progress: null,
+        error: `Update feed resolved ${version}, expected ${latest?.version || 'none'}`,
+        errorKind: 'channel-mismatch'
+      });
       return deriveAppUpdateState();
     }
     setNativeAppUpdateState({ phase: 'downloading', version, progress: 0, error: null });
@@ -3674,7 +3764,10 @@ function buildApplicationMenu() {
   createAppMenu({
     getWindow: () => mainWindow,
     openView: openSharedUiView,
-    checkForUpdates: () => runAppUpdateCheck({ force: true }),
+    checkForUpdates: () => {
+      openSharedUiView('settings');
+      void runAppUpdateCheck({ force: true });
+    },
     openUserData: () => { void shell.openPath(app.getPath('userData')); },
     translate: nativeShellText,
     appVersion: appVersion()
@@ -3745,6 +3838,8 @@ app.whenReady().then(() => {
     const previousNativeMaterial = nativeBlurEnabled();
     const previousWindowsSurface = windowsSurfaceFor({ systemGlass: previousNativeMaterial }).kind;
     const previousStartAtLogin = settings.startAtLogin;
+    const requestedUpdateChannel = normalizeUpdateChannel(patch.updateChannel ?? settings.updateChannel);
+    const updateChannelChanged = requestedUpdateChannel !== normalizeUpdateChannel(previousSettingsState?.updateChannel);
     const normalizedCurrency = patch.currency !== undefined ? normalizeCurrency(patch.currency, settings.currency) : normalizeCurrency(settings.currency);
     // A renderer (or an old preload) must not resurrect a key the app has
     // retired: the same list readSettings drops on load is dropped on write.
@@ -3796,9 +3891,11 @@ app.whenReady().then(() => {
       currency: normalizedCurrency,
       currencyRates: patch.currencyRates !== undefined ? normalizeCurrencyOverrides(patch.currencyRates) : normalizeCurrencyOverrides(settings.currencyRates),
       language: patch.language !== undefined ? normalizeLanguageSetting(patch.language, settings.language) : normalizeLanguageSetting(settings.language),
-      startAtLogin: loginItemEnabledHere() ? parseBoolean(patch.startAtLogin ?? settings.startAtLogin, false) : false
+      startAtLogin: loginItemEnabledHere() ? parseBoolean(patch.startAtLogin ?? settings.startAtLogin, false) : false,
+      updateChannel: requestedUpdateChannel
     };
     delete settings.edgeDrawerEnabled;
+    if (updateChannelChanged) resetAppUpdateChannelCache();
     try {
       saveSettings({ throwOnError: true });
     } catch (error) {
@@ -3853,6 +3950,11 @@ app.whenReady().then(() => {
     // The menu bar is native chrome, so only an explicit rebuild follows a
     // language change — the renderer re-localizes itself over the transport.
     if (previousSettingsState?.language !== settings?.language) buildApplicationMenu();
+    if (updateChannelChanged) {
+      applyAppUpdateChannel();
+      sendAppUpdatePush();
+      rerunAppUpdateCheck();
+    }
     pushSettingsToRenderer();
     return settingsForRenderer();
   });

@@ -214,6 +214,38 @@ body.is-mac .period-tabs {
   flex-wrap: wrap;
 }
 
+.desktop-update-panel {
+  padding: 2px 0 4px;
+}
+
+.desktop-update-channel {
+  flex: 0 0 180px;
+  min-width: 160px;
+}
+
+.desktop-update-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-soft));
+}
+
+@media (max-width: 620px) {
+  .desktop-update-channel {
+    flex: 1 1 100%;
+  }
+
+  .desktop-update-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .desktop-setting-switch-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
