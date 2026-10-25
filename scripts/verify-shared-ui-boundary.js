@@ -26,7 +26,8 @@ const ALLOWED_HOST_ACCESS = new Set([
   path.join('vendor', 'fluent.js'),
   path.join('transport', 'index.js'),
   path.join('transport', 'httpTransport.js'),
-  path.join('transport', 'ipcTransport.js')
+  path.join('transport', 'ipcTransport.js'),
+  path.join('transport', 'clipboard.js')
 ]);
 
 const FORBIDDEN = [
