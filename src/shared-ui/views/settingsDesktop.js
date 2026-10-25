@@ -274,7 +274,7 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   const installBlockedKey = INSTALL_SUPPORT_KEYS[update?.installSupportReason] || 'desktop.settings.installBlockedUnsupported';
   const statusText = (() => {
     if (!update) return tr('desktop.settings.notCheckedYet');
-    if (update.checking) return tr('desktop.settings.checkingUpdates');
+    if (update.checking || update.installPhase === 'checking') return tr('desktop.settings.checkingUpdates');
     if (update.lastError) return updateErrorText(update);
     if (update.installPhase === 'downloading') {
       return tr('desktop.settings.updateProgress', { pct: Math.round(Number(update.installProgress) || 0) });
