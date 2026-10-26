@@ -1278,6 +1278,7 @@ fun SettingsScreen(
       }
       UpdateCard(
         state = updateState,
+        onChannelChange = updateViewModel::setChannel,
         onCheck = {
           haptics.perform(HapticEvent.Refresh)
           updateViewModel.checkForUpdate()
@@ -1342,6 +1343,7 @@ fun SettingsScreen(
 private fun UpdateCard(
   state: UpdateUiState,
   onCheck: () -> Unit,
+  onChannelChange: (String) -> Unit,
   onDownload: () -> Unit,
   onCancelDownload: () -> Unit,
   onInstall: () -> Unit,
@@ -1353,7 +1355,7 @@ private fun UpdateCard(
   AppCard {
     SectionHeader(
       title = "版本与更新",
-      subtitle = "通过当前 Hub 检查并下载 Android 安装包；安装由系统确认。"
+      subtitle = "本机直接从仓库检查和下载；安装由系统确认。"
     )
     Spacer(Modifier.height(FluentSpacingDefaults.m))
     FluentListRow(
@@ -1376,6 +1378,19 @@ private fun UpdateCard(
         )
       },
       contentPadding = 0.dp
+    )
+    Spacer(Modifier.height(FluentSpacingDefaults.m))
+    FluentListRow(
+      primary = "更新通道",
+      secondary = if (state.channel == "preview") "预发布版与正式版；切回稳定版只升级。" else "仅正式版；切换通道不会降级。",
+      trailing = {
+        FluentButton(
+          label = if (state.channel == "preview") "预发布版" else "稳定版",
+          onClick = { onChannelChange(if (state.channel == "preview") "stable" else "preview") },
+          enabled = !state.checking && !state.downloading,
+          variant = FluentButtonVariant.Outline
+        )
+      }, contentPadding = 0.dp
     )
     if (info?.available == true) {
       Spacer(Modifier.height(FluentSpacingDefaults.l))
@@ -1465,7 +1480,7 @@ private fun UpdateCard(
         color = if (state.isError) colors.errorForeground else colors.neutralForeground2
       )
     }
-    // This stays available on an old Hub or a failed check, which would
+    // This stays available after a failed repository check, which would
     // otherwise leave the user with a message and no way to reach the APK.
     val releaseUrl = info?.notesUrl
       ?: info?.releaseUrl
@@ -1510,7 +1525,7 @@ private fun formatUpdateBytes(bytes: Long): String = when {
 }
 
 private fun channelLabel(channel: String?): String = when (channel) {
-  "test" -> "预发布渠道"
+  "preview", "test" -> "预发布渠道"
   "stable" -> "正式渠道"
   else -> "未知渠道"
 }

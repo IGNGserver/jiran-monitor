@@ -316,6 +316,7 @@ test('parseLatestReleasePayload returns normalized object for valid payload', ()
     name: 'Jiran 0.1.3',
     htmlUrl: 'https://github.com/IGNGserver/jiran/releases/tag/v0.1.3',
     publishedAt: '2026-05-26T12:00:00Z',
+    assets: [],
     releaseNotes: {
       en: [{ title: 'Added', items: ['Release summaries in the app.'] }]
     }

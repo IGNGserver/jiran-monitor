@@ -1,0 +1,52 @@
+name: Repository update feed
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published, edited, deleted]
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  pull_request:
+    paths: ['scripts/publish-update-feed.py', 'scripts/test_update_feed.py', '.github/workflows/update-feed.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-feed-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test feed publication contract
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts -p test_update_feed.py
+  publish:
+    needs: validate
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event_name == 'release' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Publish completed releases to the updates branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/publish-update-feed.py

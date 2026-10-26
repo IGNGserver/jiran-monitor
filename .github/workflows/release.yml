@@ -427,6 +427,7 @@ jobs:
           set -euo pipefail
           version="${RELEASE_VERSION#v}"
           node scripts/verify-release-version.js --version "$version"
+          node scripts/verify-android-version-code.js --version "$version"
       - name: Prepare Android signing key
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

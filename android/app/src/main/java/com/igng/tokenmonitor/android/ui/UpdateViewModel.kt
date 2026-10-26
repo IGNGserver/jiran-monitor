@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 
 data class UpdateUiState(
   val currentVersion: String = BuildConfig.VERSION_NAME,
+  val channel: String = "stable",
   val checking: Boolean = false,
   val info: AppUpdateDto? = null,
   val downloading: Boolean = false,
@@ -56,7 +57,7 @@ class UpdateViewModel @Inject constructor(
   @ApplicationContext private val context: Context,
   private val updateRepository: AppUpdateRepository
 ) : ViewModel() {
-  private val _state = MutableStateFlow(UpdateUiState())
+  private val _state = MutableStateFlow(UpdateUiState(channel = updateRepository.channel()))
   val state: StateFlow<UpdateUiState> = _state.asStateFlow()
   private var downloadJob: Job? = null
   // A cancelled coroutine may still be unwinding while a new download starts;
@@ -64,6 +65,7 @@ class UpdateViewModel @Inject constructor(
   private var downloadGeneration = 0L
 
   init {
+    checkForUpdate(manual = false)
     viewModelScope.launch(Dispatchers.IO) {
       // The download state lives only in this ViewModel, so an APK cached by a
       // previous process cannot be installed from the UI. Drop stale parts and
@@ -79,7 +81,14 @@ class UpdateViewModel @Inject constructor(
     }
   }
 
-  fun checkForUpdate() {
+  fun setChannel(channel: String) {
+    if (_state.value.downloading || _state.value.checking) return
+    updateRepository.setChannel(channel)
+    _state.update { it.copy(channel = updateRepository.channel(), info = null, downloadedUri = null, installUri = null) }
+    checkForUpdate(manual = false)
+  }
+
+  fun checkForUpdate(manual: Boolean = true) {
     val snapshot = _state.value
     if (snapshot.checking || snapshot.downloading) return
     _state.update {
@@ -96,7 +105,7 @@ class UpdateViewModel @Inject constructor(
       )
     }
     viewModelScope.launch {
-      when (val result = updateRepository.check(BuildConfig.VERSION_NAME)) {
+      when (val result = updateRepository.check(BuildConfig.VERSION_NAME, manual)) {
         is HubResult.Success -> applyCheckResult(result.value)
         is HubResult.Failure -> _state.update {
           it.copy(
@@ -118,7 +127,7 @@ class UpdateViewModel @Inject constructor(
         it.copy(
           checking = false,
           info = null,
-          message = "当前已是最新版本（v${BuildConfig.VERSION_NAME}）。",
+          message = if (info.message == "no_compatible_release") "当前通道暂无适用的更高版本。" else "当前已是最新版本（v${BuildConfig.VERSION_NAME}）。",
           isError = false
         )
       }
@@ -129,7 +138,7 @@ class UpdateViewModel @Inject constructor(
         it.copy(
           checking = false,
           info = null,
-          message = "Hub 返回的更新版本无效，已忽略。",
+          message = "仓库返回的更新版本无效，已忽略。",
           isError = true
         )
       }
@@ -181,7 +190,7 @@ class UpdateViewModel @Inject constructor(
             _state.update { it.copy(downloadedBytes = copied, totalBytes = total) }
           }
         }
-        val packageError = verifyDownloadedApk(file)
+        val packageError = verifyDownloadedApk(file, info)
         if (packageError != null) {
           file.delete()
           throw IOException(packageError)
@@ -342,8 +351,9 @@ class UpdateViewModel @Inject constructor(
   }
 
   @Suppress("DEPRECATION")
-  private fun verifyDownloadedApk(file: File): String? {
-    val archive = context.packageManager.getPackageArchiveInfo(file.absolutePath, PackageManager.GET_ACTIVITIES)
+  private fun verifyDownloadedApk(file: File, info: AppUpdateDto): String? {
+    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+    val archive = context.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
       ?: return "无法读取更新包信息，安装已取消。"
     if (archive.packageName != context.packageName) {
       return "更新包不是计然 Android 客户端，安装已取消。"
@@ -353,6 +363,21 @@ class UpdateViewModel @Inject constructor(
     } else {
       archive.versionCode.toLong()
     }
+    if (archive.versionName != info.latestVersion) return "更新包版本与所选版本不一致，安装已取消。"
+    val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) archive.signingInfo?.apkContentsSigners else archive.signatures
+    if (signatures.isNullOrEmpty()) return "更新包缺少签名，安装已取消。"
+    val trusted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      fun installedTrusts(signature: android.content.pm.Signature): Boolean {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+        return context.packageManager.hasSigningCertificate(context.packageName, digest, PackageManager.CERT_INPUT_SHA256)
+      }
+      if (archive.signingInfo?.hasMultipleSigners() == true) signatures.all(::installedTrusts)
+      else (archive.signingInfo?.signingCertificateHistory ?: signatures).any(::installedTrusts)
+    } else {
+      val installed = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures
+      signatures.toSet() == installed?.toSet()
+    }
+    if (!trusted) return "更新包签名与当前应用不一致，安装已取消。"
     if (versionCode <= BuildConfig.VERSION_CODE.toLong()) {
       return "更新包版本不高于当前已安装版本，安装已取消。"
     }

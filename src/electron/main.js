@@ -52,6 +52,7 @@ const { formatCompact: formatCompactTokens } = require('../shared-ui/core/format
 const {
   appUpdateInstallSupport,
   checkLatestRelease,
+  needsLegacyRevisionCompatibility,
   deriveAppUpdateAvailability,
   downloadedAppUpdateMatchesLatest,
   installFailureErrorKind,
@@ -65,6 +66,7 @@ const {
   updateInstallQuitPolicy
 } = require('../shared/appUpdater');
 const semver = require('semver');
+const { compareProjectVersions } = require('../shared/versioning');
 const { normalizeCurrency, resolveEffectiveRates, configureRates } = require('../shared/currency');
 const { fetchRates, isCacheStale } = require('../shared/exchangeRates');
 const { aggregateDevices, aggregateHistory } = require('../shared/usage');
@@ -130,6 +132,7 @@ const APP_NAME = 'Jiran';
 // Release pages for the current repo plus the pre-rename `token-monitor-suite`,
 // so cached updater metadata and in-app links keep working across the 计然 migration.
 const RELEASE_URL_PREFIXES = [
+  'https://github.com/IGNGserver/jiran-monitor/releases/',
   'https://github.com/IGNGserver/jiran/releases/',
   'https://github.com/IGNGserver/token-monitor-suite/releases/'
 ];
@@ -2535,6 +2538,13 @@ function stopSyncNetworkMonitor() {
 
 
 
+const repositoryFeedClient = require('../shared/repositoryUpdateFeed').createRepositoryFeedClient({
+  readState: () => settings?.appUpdate?.feedCache || {},
+  writeState: (feedCache) => {
+    settings.appUpdate = { ...(settings.appUpdate || {}), feedCache };
+    saveSettings();
+  }
+});
 let appUpdateCheckInFlight = false;
 let appUpdateCheckPromise = null;
 let appUpdateLastError = null;
@@ -2716,7 +2726,7 @@ function deriveAppUpdateState() {
     installedChannel,
     latest,
     hasUpdate: availability.hasUpdate,
-    currentAhead: Boolean(current && latestVersion && semver.gt(current, latestVersion)),
+    currentAhead: Boolean(current && latestVersion && compareProjectVersions(current, latestVersion) === 1),
     noChannelRelease: Boolean(block.noChannelRelease === true && !latest),
     showUpdateNotice: availability.showUpdateNotice,
     dismissedVersion,
@@ -2796,7 +2806,8 @@ async function runAppUpdateCheck({ force = false, bypassCooldown = false } = {})
     if (force) sendAppUpdatePush();
     let result;
     try {
-      result = await checkLatestRelease(app.getVersion(), normalizeUpdateChannel(settings?.updateChannel));
+      result = await checkLatestRelease(app.getVersion(), normalizeUpdateChannel(settings?.updateChannel), { feedClient: repositoryFeedClient, manual: force, platformOptions: { platform: process.platform, arch: process.arch, env: process.env, packageType: linuxPackageType() } });
+      if (result.channel !== normalizeUpdateChannel(settings?.updateChannel)) return result;
       if (result.ok) {
         rememberLatestAppUpdate(result.latest, result.checkedAt, {
           currentVersion: app.getVersion(),
@@ -2807,14 +2818,14 @@ async function runAppUpdateCheck({ force = false, bypassCooldown = false } = {})
         appUpdateLastError = null;
         appUpdateLastErrorKind = null;
       } else {
-        appUpdateLastError = force ? (result.error || 'Update check failed') : null;
-        appUpdateLastErrorKind = force ? (result.errorKind || 'unknown') : null;
+        appUpdateLastError = result.error || 'Update check failed';
+        appUpdateLastErrorKind = result.errorKind || 'unknown';
         if (!force) console.warn('App update check failed:', result.error);
       }
     } catch (error) {
       const message = error.message || String(error);
-      appUpdateLastError = force ? message : null;
-      appUpdateLastErrorKind = force ? 'unknown' : null;
+      appUpdateLastError = message;
+      appUpdateLastErrorKind = 'unknown';
       if (!force) console.warn('App update check threw:', error);
       return { ok: false, newer: false, latest: null, error: message, errorKind: 'unknown' };
     } finally {
@@ -2887,10 +2898,24 @@ async function downloadAndPrepareAppUpdate() {
   appUpdateNativeBusy = true;
   setNativeAppUpdateState({ phase: 'checking', progress: null, error: null });
   try {
+    if (!latest?.tag) throw new Error('Update release metadata missing');
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: `https://github.com/IGNGserver/jiran-monitor/releases/download/${encodeURIComponent(latest.tag)}/`,
+      channel: 'latest'
+    });
+    autoUpdater.channel = 'latest';
+    // Scoped compatibility for historical revisions. The fixed tag, selected
+    // version equality and product comparator below still prohibit downgrades.
+    autoUpdater.allowDowngrade = needsLegacyRevisionCompatibility(latest.version, app.getVersion());
     const result = await autoUpdater.checkForUpdates();
+    if (result?.isUpdateAvailable !== true) {
+      appUpdateNativeBusy = false;
+      return deriveAppUpdateState();
+    }
     const info = result?.updateInfo || null;
     const version = semver.valid(info?.version) || null;
-    if (!version || !semver.gt(version, app.getVersion())) {
+    if (!version || compareProjectVersions(version, app.getVersion()) !== 1) {
       appUpdateNativeBusy = false;
       setNativeAppUpdateState({ phase: 'idle', version, progress: null, error: null });
       return deriveAppUpdateState();
@@ -2913,6 +2938,8 @@ async function downloadAndPrepareAppUpdate() {
   } catch (error) {
     appUpdateNativeBusy = false;
     setNativeAppUpdateState({ phase: 'error', progress: null, error: error?.message || String(error) });
+  } finally {
+    autoUpdater.allowDowngrade = false;
   }
   return deriveAppUpdateState();
 }
@@ -2920,6 +2947,7 @@ async function downloadAndPrepareAppUpdate() {
 async function installDownloadedAppUpdate() {
   if (appUpdateCheckPromise) await appUpdateCheckPromise;
   const latest = settings?.appUpdate?.lastKnownLatest || null;
+  if (compareProjectVersions(latest?.version, app.getVersion()) !== 1) return deriveAppUpdateState();
   if (!downloadedAppUpdateMatchesLatest({
     phase: appUpdateNativeState.phase,
     downloadedVersion: appUpdateNativeState.version,

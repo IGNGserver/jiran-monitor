@@ -3,8 +3,9 @@
 const semver = require('semver');
 const { compareProjectVersions, parseProjectVersion } = require('./versioning');
 
-const GITHUB_REPO = 'IGNGserver/jiran';
-const RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`;
+const { createRepositoryFeedClient, FEED_URL } = require('./repositoryUpdateFeed');
+const GITHUB_REPO = 'IGNGserver/jiran-monitor';
+const RELEASES_URL = FEED_URL;
 const RELEASES_LATEST_URL = RELEASES_URL;
 // The repository is exposed under its old `jiran` slug and its canonical
 // `jiran-monitor` slug. GitHub rewrites release URLs to the canonical name even
@@ -12,13 +13,12 @@ const RELEASES_LATEST_URL = RELEASES_URL;
 // prefix discarded every release from the list.
 const RELEASE_HTML_PREFIXES = [
   `https://github.com/${GITHUB_REPO}/releases/`,
-  'https://github.com/IGNGserver/jiran-monitor/releases/'
+  'https://github.com/IGNGserver/jiran/releases/'
 ];
 const RELEASES_HTML_URL = `https://github.com/${GITHUB_REPO}/releases`;
 const UPDATE_CHANNEL_STABLE = 'stable';
-const UPDATE_CHANNEL_PRERELEASE = 'prerelease';
-const REQUEST_TIMEOUT_MS = 10 * 1000;
-const APP_UPDATE_BACKGROUND_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHANNEL_PRERELEASE = 'preview';
+const APP_UPDATE_BACKGROUND_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const APP_UPDATE_OUTDATED_COOLDOWN_MS = 60 * 60 * 1000;
 const MAX_RELEASE_BODY_CHARS = 128 * 1024;
 const MAX_RELEASE_NOTE_GROUPS = 4;
@@ -82,7 +82,7 @@ function normalizeUpdateChannel(value, fallback = UPDATE_CHANNEL_STABLE) {
     ? UPDATE_CHANNEL_PRERELEASE
     : UPDATE_CHANNEL_STABLE;
   const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (raw === UPDATE_CHANNEL_PRERELEASE) return UPDATE_CHANNEL_PRERELEASE;
+  if (raw === UPDATE_CHANNEL_PRERELEASE || raw === 'prerelease') return UPDATE_CHANNEL_PRERELEASE;
   if (raw === UPDATE_CHANNEL_STABLE) return UPDATE_CHANNEL_STABLE;
   return fallbackChannel;
 }
@@ -110,13 +110,13 @@ function releaseMatchesChannel(candidate, channel) {
  */
 function selectLatestForChannel(releases, currentVersion, channel) {
   const normalizedChannel = normalizeUpdateChannel(channel);
-  const current = parseTag(currentVersion) || '0.0.0';
+  const current = parseTag(currentVersion);
   const installedRelease = releases.find((release) => release.version === current) || null;
   const latest = releases.find((release) => releaseMatchesChannel(release, normalizedChannel)) || null;
   return {
     latest,
-    newer: Boolean(latest && semver.gt(latest.version, current)),
-    currentAhead: Boolean(latest && semver.gt(current, latest.version)),
+    newer: Boolean(latest && compareProjectVersions(latest.version, current) === 1),
+    currentAhead: Boolean(latest && compareProjectVersions(current, latest.version) === 1),
     installedChannel: installedRelease
       ? releaseChannel(installedRelease)
       : (isPrereleaseVersion(current) ? UPDATE_CHANNEL_PRERELEASE : null),
@@ -458,6 +458,7 @@ function parseLatestReleasePayload(payload) {
     name: (typeof payload.name === 'string' && payload.name.trim()) ? payload.name : tag,
     htmlUrl,
     publishedAt: typeof payload.published_at === 'string' ? payload.published_at : '',
+    assets: Array.isArray(payload.assets) ? payload.assets : [],
     ...(Object.keys(releaseNotes).length > 0 ? { releaseNotes } : {})
   };
 }
@@ -486,7 +487,7 @@ function providerUpdateCheckAvailability(result, currentVersion, channel = UPDAT
   // eligible only when the selected channel also accepts the release-list
   // entry; the release list remains the display source of truth.
   const onChannel = releaseMatchesChannel(latest, channel);
-  const newer = Boolean(onChannel && result?.isUpdateAvailable === true && current && semver.gt(latest.version, current));
+  const newer = Boolean(onChannel && result?.isUpdateAvailable === true && current && compareProjectVersions(latest.version, current) === 1);
   const isCurrent = Boolean(current && latest.version === current);
   return {
     valid: true,
@@ -518,7 +519,7 @@ function classifyAppUpdateError(error) {
   const message = details[0]?.message || 'Update check failed';
   const haystack = details.map((detail) => `${detail.name} ${detail.code} ${detail.message}`).join(' ').toLowerCase();
   const statuses = details.map((detail) => detail.status);
-  if (statuses.includes(429) || (statuses.includes(403) && /rate.?limit/.test(haystack)) || /rate.?limit/.test(haystack)) return { kind: 'rateLimited', message };
+  if (statuses.includes(429) || statuses.includes(403) || /rate.?limit/.test(haystack)) return { kind: 'rateLimited', message };
   if (/abort|timed?[_\s]?out|etimedout/.test(haystack)) return { kind: 'timeout', message };
   if (/enotfound|eai_again|econnrefused|econnreset|fetch failed|network|socket hang up|err_(?:address_unreachable|connection_closed|connection_refused|connection_reset|internet_disconnected|name_not_resolved|network_changed|proxy_connection_failed)/.test(haystack)) return { kind: 'network', message };
   if (statuses.some((status) => status >= 500) || /github responded 5\d\d/.test(haystack)) return { kind: 'githubUnavailable', message };
@@ -587,7 +588,7 @@ function deriveAppUpdateAvailability({
 } = {}) {
   const current = semver.valid(currentVersion);
   const latestVersion = semver.valid(latest?.version);
-  const hasUpdate = Boolean(current && latestVersion && semver.gt(latestVersion, current));
+  const hasUpdate = Boolean(current && latestVersion && compareProjectVersions(latestVersion, current) === 1);
   const dismissed = Boolean(hasUpdate && latestVersion === dismissedVersion);
   const downloaded = downloadedAppUpdateMatchesLatest({ phase, downloadedVersion, latest });
   return {
@@ -598,65 +599,53 @@ function deriveAppUpdateAvailability({
   };
 }
 
-async function withTimeout(ms, task) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await task(controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
+const defaultFeedClient = createRepositoryFeedClient();
+
+// Historical revisions sort after the bare version in released APKs and Debian
+// packages. Electron's SemVer engine sorts them before it. Permit that one
+// native-engine exception only after the product comparator proves an upgrade.
+function needsLegacyRevisionCompatibility(candidateVersion, currentVersion) {
+  const candidate = parseProjectVersion(candidateVersion);
+  const current = parseProjectVersion(currentVersion);
+  return Boolean(candidate && current && candidate.revision !== null
+    && candidate.major === current.major && candidate.minor === current.minor && candidate.patch === current.patch
+    && compareProjectVersions(candidate, current) === 1 && semver.lt(candidateVersion, currentVersion));
+}
+function releaseHasPlatformAssets(release, { platform = process.platform, arch = process.arch, env = process.env, packageType = '' } = {}) {
+  const assets = release.assets || [];
+  const uploaded = assets.filter((asset) => asset.state === 'uploaded' && Number(asset.size) > 0
+    && typeof asset.browser_download_url === 'string'
+    && asset.browser_download_url.startsWith(`https://github.com/${GITHUB_REPO}/releases/download/${encodeURIComponent(release.tag)}/`));
+  const has = (name, checksum = false) => uploaded.some((asset) => asset.name === name && (!checksum || /^sha256:[a-f0-9]{64}$/i.test(asset.digest || '')));
+  const version = release.version || parseTag(release.tag);
+  if (platform === 'win32') return arch === 'x64' && has('latest.yml') && has(`Jiran-Setup-${version}.exe`, true);
+  if (platform === 'darwin') return ['arm64', 'x64'].includes(arch) && has('latest-mac.yml') && has(`Jiran-${version}-${arch}.zip`, true);
+  if (platform === 'linux') return arch === 'x64' && has('latest-linux.yml') && has(`Jiran-${version}.${env.APPIMAGE || packageType !== 'deb' ? 'AppImage' : 'deb'}`, true);
+  return false;
 }
 
-async function checkLatestRelease(currentVersion, channel = UPDATE_CHANNEL_STABLE) {
+async function checkLatestRelease(currentVersion, channel = UPDATE_CHANNEL_STABLE, { feedClient = defaultFeedClient, manual = false, platformOptions } = {}) {
   const checkedAt = new Date().toISOString();
   const normalizedChannel = normalizeUpdateChannel(channel);
   try {
-    const payload = await withTimeout(REQUEST_TIMEOUT_MS, async (signal) => {
-      const response = await fetch(RELEASES_URL, {
-        signal,
-        headers: {
-          'accept': 'application/vnd.github+json',
-          'user-agent': `token-monitor/${currentVersion || '0.0.0'}`,
-          'x-github-api-version': '2022-11-28'
-        }
-      });
-      if (!response.ok) {
-        const error = new Error(`GitHub responded ${response.status}`);
-        error.status = response.status;
-        throw error;
-      }
-      return response.json();
-    });
-    const releases = parseReleaseListPayload(payload);
-    const selection = selectLatestForChannel(releases, currentVersion, normalizedChannel);
-    return {
-      ok: true,
-      channel: normalizedChannel,
-      ...selection,
-      error: null,
-      errorKind: null,
-      checkedAt
-    };
+    const { payload, checkedAt: validatedAt } = await feedClient.load({ manual });
+    const releases = parseReleaseListPayload(payload.releases);
+    const eligible = releases.filter((release) => releaseHasPlatformAssets(release, platformOptions));
+    const selection = selectLatestForChannel(eligible, currentVersion, normalizedChannel);
+    return { ok: true, channel: normalizedChannel, ...selection, error: null, errorKind: null, checkedAt: Number.isFinite(validatedAt) ? new Date(validatedAt).toISOString() : checkedAt };
   } catch (error) {
     const classified = classifyAppUpdateError(error);
     return {
-      ok: false,
-      channel: normalizedChannel,
-      newer: false,
-      latest: null,
-      currentAhead: false,
-      installedChannel: null,
-      noChannelRelease: false,
-      error: classified.message,
-      errorKind: classified.kind,
-      checkedAt
+      ok: false, channel: normalizedChannel, newer: false, latest: null, currentAhead: false,
+      installedChannel: null, noChannelRelease: false, error: classified.message,
+      errorKind: classified.kind, retryAt: error.retryAt || null, checkedAt
     };
   }
 }
-
 module.exports = {
   appUpdateInstallSupport,
+  releaseHasPlatformAssets,
+  needsLegacyRevisionCompatibility,
   latestFromUpdaterInfo,
   providerUpdateCheckAvailability,
   classifyAppUpdateError,
