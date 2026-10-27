@@ -370,3 +370,80 @@ test('Hub Antigravity OAuth add exchanges the bare code Google displays', async 
     await hub.stop();
   }
 });
+
+test('Hub account API supports deleting accounts, cascaded removal, 404 on missing, and safe audit logging', async () => {
+  const repository = new MemoryRepository();
+  const audits = [];
+  const hub = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    adminSecret: 'admin-token',
+    viewerSecret: 'viewer-token',
+    accountCredentialKey: 'account-encryption-key',
+    accountProbe: async (provider) => accountProbe(provider),
+    accountRefreshMs: 60_000,
+    repository,
+    logger: {
+      error() {},
+      warn() {},
+      info(msg) {
+        if (msg.includes('[hub-audit]')) audits.push(msg);
+      }
+    }
+  });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    const added = await requestJson(port, '/api/accounts', {
+      method: 'POST',
+      token: 'admin-token',
+      body: {
+        provider: 'deepseek',
+        name: 'test-delete',
+        credential: { apiKey: 'secret-to-delete' }
+      }
+    });
+    assert.equal(added.response.status, 201);
+    const accountId = added.body.account.id;
+
+    assert.ok(repository.hubAccounts.has(accountId));
+    assert.ok(repository.hubCredentials.has(accountId));
+
+    // Viewer token is not authorized to delete
+    const viewerDelete = await requestJson(port, `/api/accounts/${encodeURIComponent(accountId)}`, {
+      method: 'DELETE',
+      token: 'viewer-token'
+    });
+    assert.equal(viewerDelete.response.status, 401);
+    assert.ok(repository.hubAccounts.has(accountId));
+
+    // Admin token successfully deletes
+    const adminDelete = await requestJson(port, `/api/accounts/${encodeURIComponent(accountId)}`, {
+      method: 'DELETE',
+      token: 'admin-token'
+    });
+    assert.equal(adminDelete.response.status, 200);
+    assert.equal(adminDelete.body.ok, true);
+    assert.equal(adminDelete.body.accountId, accountId);
+    assert.equal(repository.hubAccounts.has(accountId), false);
+    assert.equal(repository.hubCredentials.has(accountId), false);
+
+    // Second delete returns 404
+    const repeatDelete = await requestJson(port, `/api/accounts/${encodeURIComponent(accountId)}`, {
+      method: 'DELETE',
+      token: 'admin-token'
+    });
+    assert.equal(repeatDelete.response.status, 404);
+    assert.equal(repeatDelete.body.error, 'account_not_found');
+
+    // Audit logs recorded the action and audit row was appended safely
+    assert.ok(audits.some((log) => log.includes('account.delete') && log.includes(accountId)));
+    const auditRows = repository.hubAudit || [];
+    const deleteAudit = auditRows.find((row) => row.action === 'account.delete');
+    assert.ok(deleteAudit);
+    assert.equal(deleteAudit.accountId, null);
+    assert.equal(deleteAudit.details?.accountId, accountId);
+  } finally {
+    await hub.stop();
+  }
+});
