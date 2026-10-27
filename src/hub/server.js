@@ -1494,7 +1494,11 @@ function createHub({
     logger.info?.(`[hub-audit] ${principal?.id || 'unknown'} ${action}${accountId ? ` ${accountId}` : ''}`);
     if (typeof store.appendHubAccountAudit !== 'function') return;
     try {
-      await store.appendHubAccountAudit(accountId, action, principal?.id || '', details);
+      const dbAccountId = action === 'account.delete' ? null : (accountId || null);
+      const auditDetails = action === 'account.delete' && accountId
+        ? { accountId, ...(details || {}) }
+        : details;
+      await store.appendHubAccountAudit(dbAccountId, action, principal?.id || '', auditDetails);
     } catch (error) {
       logger.warn?.(`[hub-account-audit] ${error.message}`);
     }

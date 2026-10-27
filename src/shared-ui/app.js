@@ -2666,6 +2666,9 @@ async function deleteAccount(accountId) {
       method: 'DELETE'
     });
     if (state.accountEditId === accountId) state.accountEditId = '';
+    if (Array.isArray(state.accounts)) {
+      state.accounts = state.accounts.filter((a) => a.id !== accountId);
+    }
     clearFormDraft(`account:${accountId}`);
     showToast(tr('accounts.deleted'));
     await loadAccounts({ force: true });

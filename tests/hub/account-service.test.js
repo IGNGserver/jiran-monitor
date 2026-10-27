@@ -390,3 +390,37 @@ test('a stalled refresh cycle releases its latch instead of wedging limits', asy
     'a later cycle should run fresh and succeed'
   );
 });
+
+test('Hub account service deletes an existing account, cleans credentials and limits, and reports 404 for missing', async () => {
+  const repository = new MemoryRepository();
+  const events = [];
+  const service = createHubAccountService({
+    store: repository,
+    credentialKey: 'hub-key',
+    probe: async (provider) => probeRow(provider, 'to-delete'),
+    onUpdate: (event) => events.push(event)
+  });
+
+  const account = await service.addAccount({
+    provider: 'deepseek',
+    name: 'delete-me',
+    credential: { apiKey: 'key-to-delete' }
+  });
+  assert.equal(account.status, 'ok');
+  assert.ok(repository.hubAccounts.has(account.id));
+  assert.ok(repository.hubCredentials.has(account.id));
+  assert.ok(repository.hubSnapshots.has(account.id));
+
+  const deleted = await service.deleteAccount(account.id);
+  assert.equal(deleted, true);
+  assert.equal(repository.hubAccounts.has(account.id), false);
+  assert.equal(repository.hubCredentials.has(account.id), false);
+  assert.equal(repository.hubSnapshots.has(account.id), false);
+
+  const deletedAgain = await service.deleteAccount(account.id);
+  assert.equal(deletedAgain, false);
+
+  const deletedEvent = events.find((e) => e.type === 'account-deleted');
+  assert.ok(deletedEvent);
+  assert.equal(deletedEvent.accountId, account.id);
+});
