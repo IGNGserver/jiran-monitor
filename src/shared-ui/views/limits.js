@@ -138,6 +138,12 @@ export function formatLimitBadge(card) {
   if (status === 'notconfigured') {
     return `<span class="badge">${escapeHtml(tr('limits.statusNotConfigured'))}</span>`;
   }
+  if (status === 'unavailable') {
+    return `<span class="badge warn">${escapeHtml(tr('limits.statusUnavailable'))}</span>`;
+  }
+  if (status === 'error') {
+    return `<span class="badge warn bad">${escapeHtml(tr('limits.statusError'))}</span>`;
+  }
   return `<span class="badge warn">${escapeHtml(card.status || tr('accounts.statusError'))}</span>`;
 }
 

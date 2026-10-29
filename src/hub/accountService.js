@@ -582,7 +582,12 @@ function createHubAccountService({
     if (status === 'notConfigured') return Math.max(intervalMs, 6 * 60 * 60 * 1000);
     if (status === 'unauthorized') return Math.max(intervalMs, Math.min(6 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** (failures - 1)));
     const base = ['rateLimited', 'sourceRateLimited'].includes(status) ? intervalMs * 2 : intervalMs;
-    return Math.max(intervalMs, Math.min(60 * 60 * 1000, base * 2 ** Math.min(6, failures - 1)));
+    // A transport failure says nothing about the account, and the proxy/network
+    // heals in minutes. Capping these at 15 minutes keeps a recovered link from
+    // staying invisible for up to an hour; rate limits and auth still back off
+    // to the full hour because retrying them faster only burns quota.
+    const cap = status === 'unavailable' || status === 'error' ? 15 * 60 * 1000 : 60 * 60 * 1000;
+    return Math.max(intervalMs, Math.min(cap, base * 2 ** Math.min(6, failures - 1)));
   }
 
   function scheduledLater(account, reason) {
@@ -726,7 +731,8 @@ function createHubAccountService({
       }
     }
     if (!usable || usable.status !== 'ok') {
-      const error = new Error(`Provider validation failed: ${usable?.status || 'unavailable'}`);
+      const detail = String(usable?.errorDetail || '').trim();
+      const error = new Error(`Provider validation failed: ${usable?.status || 'unavailable'}${detail ? ` (${detail})` : ''}`);
       error.code = usable?.status || 'unavailable';
       error.providerRow = usable || null;
       throw error;
@@ -848,8 +854,13 @@ function createHubAccountService({
         accountEmail: account.accountEmail || previous?.accountEmail || '',
         accountLabel: account.accountLabel || previous?.accountLabel || '',
         status,
-        updatedAt: attemptAt,
+        // The published reading is the last good one, not this attempt: keep
+        // its timestamp so "last fetched" names when the numbers were actually
+        // observed, and mark it stale so no surface presents an outage as a
+        // fresh measurement.
+        updatedAt: previous?.updatedAt || attemptAt,
         stale: Boolean(previous),
+        errorDetail: error?.providerRow?.errorDetail || '',
         windows: previous?.windows || []
       });
       const committed = await runTransaction(async (executor) => {
@@ -871,7 +882,7 @@ function createHubAccountService({
       });
       if (committed.stale) return null;
       if (state) state.failures = failures;
-      logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} refresh failed (${status})`);
+      logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} refresh failed (${status}): ${errorMessage(error)}`);
       await onUpdate?.({ type: 'account-refresh-failed', accountId: account.id, reason });
       return committed.row;
     }

@@ -391,6 +391,85 @@ test('a stalled refresh cycle releases its latch instead of wedging limits', asy
   );
 });
 
+test('a failed refresh keeps the last good quota, marks it stale, and names the cause', async () => {
+  const repository = new MemoryRepository();
+  let clock = Date.parse('2026-10-29T15:31:21.000Z');
+  let fail = false;
+  const service = createHubAccountService({
+    store: repository,
+    credentialKey: 'hub-key',
+    refreshMs: 5 * 60 * 1000,
+    probe: async (provider) => {
+      if (fail) {
+        const error = new Error('Provider validation failed: unavailable (ECONNRESET)');
+        error.status = 'unavailable';
+        error.providerRow = { provider, status: 'unavailable', errorDetail: 'ECONNRESET' };
+        throw error;
+      }
+      return {
+        provider,
+        status: 'ok',
+        accountKey: `${provider}-account`,
+        accountEmail: `${provider}@example.test`,
+        updatedAt: new Date(clock).toISOString(),
+        windows: [{ kind: 'session', label: '5-hour', usedPercent: 12, windowMinutes: 300 }]
+      };
+    },
+    now: () => clock
+  });
+
+  const account = await service.addAccount({ provider: 'codex', credential: { accessToken: 'token' } });
+  const goodAt = new Date(clock).toISOString();
+  clock += 5 * 60 * 1000;
+  fail = true;
+  await service.refreshAccount(account.id);
+
+  const provider = (await service.getLimitsSummary()).providers.find((row) => row.accountId === account.id);
+  assert.equal(provider.status, 'unavailable');
+  // The numbers are the previous observation, so they stay but are labelled.
+  assert.equal(provider.stale, true);
+  assert.equal(provider.windows.length, 1);
+  // "Last fetched" must name when the numbers were observed, not this attempt.
+  assert.equal(provider.updatedAt, goodAt);
+  assert.equal(provider.errorDetail, 'ECONNRESET');
+
+  const stored = await repository.getHubAccount(account.id);
+  assert.equal(stored.status, 'unavailable');
+  assert.match(stored.lastErrorMessage, /ECONNRESET/);
+  assert.equal(stored.lastSuccessAt, goodAt);
+});
+
+test('a transport failure retries within 15 minutes instead of backing off to an hour', async () => {
+  const repository = new MemoryRepository();
+  let clock = Date.parse('2026-10-29T15:31:21.000Z');
+  let fail = false;
+  const service = createHubAccountService({
+    store: repository,
+    credentialKey: 'hub-key',
+    refreshMs: 5 * 60 * 1000,
+    probe: async (provider) => {
+      if (fail) {
+        const error = new Error('Provider validation failed: unavailable (ECONNRESET)');
+        error.status = 'unavailable';
+        throw error;
+      }
+      return { ...probeRow(provider), updatedAt: new Date(clock).toISOString() };
+    },
+    now: () => clock
+  });
+
+  const account = await service.addAccount({ provider: 'codex', credential: { accessToken: 'token' } });
+  fail = true;
+  // Enough consecutive failures to reach the old one-hour ceiling.
+  for (let i = 0; i < 8; i += 1) {
+    clock += 60 * 1000;
+    await service.refreshAccount(account.id);
+  }
+  const stored = await repository.getHubAccount(account.id);
+  const delayMs = Date.parse(stored.nextRefreshAt) - clock;
+  assert.ok(delayMs <= 15 * 60 * 1000, `retry delay ${delayMs}ms should not exceed 15 minutes`);
+});
+
 test('Hub account service deletes an existing account, cleans credentials and limits, and reports 404 for missing', async () => {
   const repository = new MemoryRepository();
   const events = [];

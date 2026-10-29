@@ -47,6 +47,29 @@ test('a not-configured card is labelled rather than shown as an error', () => {
   assert.match(formatLimitBadge({ status: 'notConfigured' }), /Not configured/);
 });
 
+test('an unavailable card is labelled instead of printing the raw status code', () => {
+  const html = formatLimitBadge({ status: 'unavailable' });
+  assert.match(html, /Temporarily unavailable/);
+  assert.doesNotMatch(html, />\s*unavailable\s*</);
+});
+
+test('the unavailable badge is localized, not an English literal', () => {
+  configureViewContext({
+    tr: (key, params) => t('zh-CN', key, params),
+    escapeHtml: (value) => String(value ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  });
+  try {
+    assert.match(formatLimitBadge({ status: 'unavailable' }), /暂时无法获取/);
+  } finally {
+    configureViewContext({
+      tr: lookup,
+      escapeHtml: (value) => String(value ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    });
+  }
+});
+
 test('a stale card still wins over its status', () => {
   assert.match(formatLimitBadge({ status: 'ok', stale: true }), /stale|Stale/i);
 });
