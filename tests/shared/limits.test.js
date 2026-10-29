@@ -3,8 +3,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { aggregateLimits, mergeCodexTransientWindows, publicLimits, syncLimits } = require('../../src/shared/limits');
-const { collectLimitsOnce } = require('../../src/shared/limitCollector');
+const { aggregateLimits, mergeCodexTransientWindows, normalizeLimitProvider, publicLimits, syncLimits } = require('../../src/shared/limits');
+const { collectLimitsOnce, probeErrorDetail } = require('../../src/shared/limitCollector');
 const { codexAccountKey } = require('../../src/shared/codexAuth');
 
 function codexProvider(accountKey, accountEmail, remainingPercent, updatedAt) {
@@ -368,6 +368,47 @@ test('aggregateLimits still exposes stale configured Codex quota when no fresh o
   assert.equal(aggregate.providers[0].status, 'ok');
   assert.equal(aggregate.providers[0].stale, true);
   assert.equal(aggregate.providers[0].windows[0].remainingPercent, 41);
+});
+
+test('normalizeLimitProvider keeps the stale marker and the redacted probe cause', () => {
+  const stale = normalizeLimitProvider({
+    provider: 'codex',
+    status: 'unavailable',
+    stale: true,
+    errorDetail: 'ECONNRESET',
+    updatedAt: '2026-10-29T15:31:21.000Z',
+    windows: [{ kind: 'session', remainingPercent: 50 }]
+  });
+  assert.equal(stale.stale, true);
+  assert.equal(stale.errorDetail, 'ECONNRESET');
+  assert.equal(stale.windows.length, 1);
+  // The reading's own observation time survives, so a failure cannot relabel
+  // last-known values as freshly fetched.
+  assert.equal(stale.updatedAt, '2026-10-29T15:31:21.000Z');
+
+  const fresh = normalizeLimitProvider({ provider: 'codex', status: 'ok', windows: [] });
+  assert.equal('stale' in fresh, false);
+  assert.equal('errorDetail' in fresh, false);
+
+  assert.equal(normalizeLimitProvider({ provider: 'codex', errorDetail: 'x'.repeat(200) }).errorDetail.length, 64);
+  assert.equal(normalizeLimitProvider({ provider: 'codex', errorDetail: '   ' }).errorDetail, undefined);
+
+  // Diagnostics are internal: the public projection keeps `stale` (a truth
+  // about the numbers) but drops the cause (an operational detail).
+  const publicRow = publicLimits({ providers: [stale] }).providers[0];
+  assert.equal(publicRow.stale, true);
+  assert.equal('errorDetail' in publicRow, false);
+});
+
+test('probeErrorDetail names the transport or HTTP cause without echoing response bodies', () => {
+  assert.equal(probeErrorDetail({ httpStatus: 500 }), 'HTTP 500');
+  assert.equal(probeErrorDetail(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })), 'ECONNRESET');
+  assert.equal(probeErrorDetail(Object.assign(new Error('connect failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' })), 'UND_ERR_CONNECT_TIMEOUT');
+  assert.equal(probeErrorDetail(new Error('The operation timed out')), 'timeout');
+  // A provider message can carry a response body or a URL; neither belongs on
+  // a row that clients render.
+  assert.equal(probeErrorDetail(new Error('HTTP 500: {"token":"secret"}')), '');
+  assert.equal(probeErrorDetail(null), '');
 });
 
 test('mergeCodexTransientWindows keeps recent Codex windows when the same account reads empty', () => {

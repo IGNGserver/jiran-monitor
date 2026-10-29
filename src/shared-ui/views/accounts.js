@@ -27,6 +27,21 @@ function accountCredentialField(record, key, fallback = '') {
   return escapeHtml(value === undefined || value === null ? fallback : value);
 }
 
+// A Hub account's `status` is the normalized probe result, not a display
+// string. Printing it raw puts "unavailable" in the Chinese UI; map the states
+// this page can show to the same catalog the limits page uses.
+const ACCOUNT_STATUS_KEYS = Object.freeze({
+  unauthorized: 'limits.statusNeedsCredentials',
+  unavailable: 'limits.statusUnavailable',
+  error: 'limits.statusError',
+  notconfigured: 'limits.statusNotConfigured'
+});
+
+function accountStatusLabel(status) {
+  const key = ACCOUNT_STATUS_KEYS[String(status || '').toLowerCase()];
+  return key ? tr(key) : String(status || 'unknown');
+}
+
 // The only identity the Hub can safely surface for a stored credential is the
 // safe-metadata subset (never the secret). Show whichever of those is present so
 // the owner can tell two logins apart without seeing a token.
@@ -77,7 +92,7 @@ export function renderAccounts() {
       const isRefreshing = record.status === 'refreshing' || record.status === 'pending';
       const isDisabled = record.enabled === false;
       let badgeTone = 'warn';
-      let badgeText = escapeHtml(record.status || 'unknown');
+      let badgeText = escapeHtml(accountStatusLabel(record.status));
       if (isDisabled) {
         badgeTone = 'stale';
         badgeText = tr('accounts.statusDisabled');

@@ -3399,6 +3399,7 @@ async function fetchManagedCodexAccountLimits(account, _options = {}, deps = {})
       source: 'rpc',
       sourceDetail: 'managed',
       status: providerStatusFromError(error),
+      errorDetail: probeErrorDetail(error),
       updatedAt: nowIso(nowMs),
       windows: []
     });
@@ -3498,6 +3499,7 @@ async function fetchCodexLimits(options = {}, deps = {}) {
         source: 'api',
         sourceDetail: 'managed',
         status: providerStatusFromError(error),
+        errorDetail: probeErrorDetail(error),
         updatedAt: nowIso(nowMs),
         windows: []
       })];
@@ -3725,6 +3727,7 @@ async function fetchAntigravityCloudLimits(options = {}, deps = {}) {
     sourceDetail: 'managed',
     credentialOrigin: 'manual',
     status: providerStatusFromError(lastError),
+    errorDetail: probeErrorDetail(lastError),
     updatedAt,
     windows: []
   })];
@@ -3793,6 +3796,7 @@ async function fetchAntigravityLimits(options = {}, deps = {}) {
         source: 'rpc',
         sourceDetail: 'managed',
         status: providerStatusFromError(err),
+        errorDetail: probeErrorDetail(err),
         updatedAt,
         windows: []
       })];
@@ -3841,6 +3845,7 @@ async function fetchAntigravityLimits(options = {}, deps = {}) {
       accountLabel: '',
       source: 'rpc',
       status: providerStatusFromError(err),
+      errorDetail: probeErrorDetail(err),
       updatedAt,
       windows: []
     });
@@ -4313,14 +4318,32 @@ async function fetchOpenCodeProfile(name, cookie, fetchGoWeb, fetchZen, nowMs, u
   }
 }
 
+// A bounded, credential-free cause for a failed probe: the HTTP status when the
+// provider answered, otherwise the transport code (ECONNRESET, a timeout). The
+// normalized status alone collapses "the network is down" and "the vendor
+// returned 500" into `unavailable`, which leaves an operator unable to tell an
+// outage from a broken credential without shell access to the Hub.
+function probeErrorDetail(error) {
+  const httpStatus = Number(error?.httpStatus);
+  if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus < 600) return `HTTP ${httpStatus}`;
+  const code = String(error?.cause?.code || error?.code || '').trim();
+  // A normalized status is not a cause; only a transport/upstream code is.
+  if (/^[A-Za-z][A-Za-z0-9_]{1,47}$/.test(code)
+    && !['unavailable', 'error', 'unauthorized', 'rateLimited', 'sourceRateLimited', 'notConfigured', 'disabled'].includes(code)) {
+    return code;
+  }
+  if (/timed?\s*out|timeout/i.test(String(error?.message || ''))) return 'timeout';
+  return '';
+}
+
 function providerStatusFromError(error) {
   if (['disabled', 'notConfigured', 'unauthorized', 'rateLimited', 'sourceRateLimited', 'unavailable', 'error'].includes(error?.status)) return error.status;
   if (error?.code === 'ENOENT') return 'notConfigured';
   return 'unavailable';
 }
 
-function statusProvider(provider, status, updatedAt) {
-  return normalizeLimitProvider({ provider, status, updatedAt, windows: [] });
+function statusProvider(provider, status, updatedAt, errorDetail = '') {
+  return normalizeLimitProvider({ provider, status, updatedAt, windows: [], errorDetail });
 }
 
 function cleanSecret(value) {
@@ -4417,6 +4440,7 @@ async function fetchDeepSeekLimits(options = {}, deps = {}) {
       provider: 'deepseek',
       source: 'api',
       status: providerStatusFromError(error),
+      errorDetail: probeErrorDetail(error),
       updatedAt: nowIso(now),
       windows: []
     });
@@ -4546,7 +4570,7 @@ async function probeLimitProvider(provider, options = {}, context = {}, deps = {
   } catch (error) {
     return [annotateCredentialOrigin(
       provider,
-      statusProvider(provider, providerStatusFromError(error), nowIso(nowMs)),
+      statusProvider(provider, providerStatusFromError(error), nowIso(nowMs), probeErrorDetail(error)),
       providerOptions
     )];
   }
@@ -4798,6 +4822,7 @@ module.exports = {
   resolveProviderFetch,
   createLimitsCollector,
   probeLimitProvider,
+  probeErrorDetail,
   providerPhysicalBoundMs,
   fetchAntigravityLimits,
   ANTIGRAVITY_CLOUD_BASE_URLS,

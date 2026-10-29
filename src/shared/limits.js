@@ -381,10 +381,20 @@ function normalizeOpenCodeAccountKeyAliases(values, accountKey = '') {
     .slice(0, MAX_OPENCODE_ACCOUNT_KEY_ALIASES);
 }
 
+// A failed probe is stored beside the last good reading it could not replace.
+// `stale` is what tells every renderer that the numbers on screen are still the
+// previous observation, and `errorDetail` is the redacted cause (a fetch code or
+// an HTTP status) so an outage is not indistinguishable from a bad credential.
+function normalizeErrorDetail(value) {
+  const text = String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  return text ? text.slice(0, 64) : '';
+}
+
 function normalizeLimitProvider(input) {
   if (!input || typeof input !== 'object') return null;
   const provider = normalizeProviderId(input.provider);
   if (!provider) return null;
+  const errorDetail = normalizeErrorDetail(input.errorDetail);
   const accountKey = input.accountKey ? String(input.accountKey) : '';
   const accountKeyAliases = provider === 'opencode'
     ? normalizeOpenCodeAccountKeyAliases(input.accountKeyAliases, accountKey)
@@ -438,6 +448,8 @@ function normalizeLimitProvider(input) {
     accountEmail: normalizeAccountEmail(input.accountEmail ?? input.email),
     workspaceKind: normalizeWorkspaceKind(input.workspaceKind),
     status: normalizeStatus(input.status),
+    ...(input.stale === true ? { stale: true } : {}),
+    ...(errorDetail ? { errorDetail } : {}),
     source: normalizeSource(input.source),
     sourceDetail: normalizeSourceDetail(input.sourceDetail ?? input.source_detail),
     credentialOrigin: normalizeCredentialOrigin(input.credentialOrigin ?? input.credential_origin),
@@ -904,6 +916,7 @@ function publicLimits(limits) {
       accountLabel,
       planLabel,
       workspaceKind,
+      errorDetail,
       ...provider
     }) => {
       if (!provider.balance) return provider;
