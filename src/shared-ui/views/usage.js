@@ -4,7 +4,6 @@
 // the app's shared state; anything host-specific goes through transport/.
 
 import {
-  estimatedValue,
   formatCost,
   formatCredits,
   formatNumber,
@@ -47,10 +46,6 @@ export function renderTools() {
     const active = row.key === selected.key;
     const credits = formatCredits(row.credits);
     const ariaParts = [row.name];
-    // The estimate marker belongs in the accessible name too: a `~` prefix
-    // announces as a stray character, and screen-reader users get the same
-    // "this is a guess" warning sighted users read off the glyph.
-    if (row.estimated) ariaParts.push(tr('usage.estimatedAria'));
     ariaParts.push(`${formatNumber(row.value)} tokens`, formatCost(row.cost, appState().prefs.currency));
     if (credits) ariaParts.push(`${credits} ${tr('stats.credits')}`);
     return `
@@ -63,8 +58,8 @@ export function renderTools() {
           </div>
         </div>
         <div class="row-side">
-          <div class="row-value">${row.value > 0 ? escapeHtml(estimatedValue(formatNumber(row.value), row.estimated)) : escapeHtml(`${credits} ${tr('stats.credits')}`)}</div>
-          <div class="row-cost">${row.value > 0 ? escapeHtml(estimatedValue(formatCost(row.cost, appState().prefs.currency), row.estimated)) : ''}</div>
+          <div class="row-value">${row.value > 0 ? escapeHtml(formatNumber(row.value)) : escapeHtml(`${credits} ${tr('stats.credits')}`)}</div>
+          <div class="row-cost">${row.value > 0 ? escapeHtml(formatCost(row.cost, appState().prefs.currency)) : ''}</div>
         </div>
       </button>`;
   }).join('');

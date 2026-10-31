@@ -48,7 +48,7 @@ const zh = {
     ],
     counterLabel: '本画面已计入',
     counterUnit: 'tokens',
-    counterNote: '演示数据——所以带「~」',
+    counterNote: '演示数据',
     focusLabel: '来源',
     creditsLabel: 'credits · 单独计量，不并入 Token',
     scroll: '向下',
@@ -107,16 +107,16 @@ const zh = {
     intro: '一个把「实测」和「估算」混着显示的仪表板，比没有仪表板更糟。以下是每个界面都遵守的规则。',
     items: [
       {
-        glyph: '~',
-        title: '「~」就是估算',
-        body: '某个工具从来没存过真实 Token 数时，总量按它存下的文本估算，并在数字前加「~」。每一项估算的依据都写在支持矩阵的注释里。',
+        glyph: 'src',
+        title: '来源和精度分开说',
+        body: '某个工具从来没存过真实 Token 数时，总量按它存下的文本估算，wire 记录标 estimated；工具说明会解释来源。界面不会给数字加标记。',
         demoMeasured: '实测',
         demoEstimated: '估算',
       },
       {
         glyph: 'cr',
         title: 'credits 是独立单位',
-        body: '以 credits 计费的供应商（Qoder 就是这样）给出精确的 credits，旁边的 Token 与成本仍标「~」；credits 绝不折算进 Token 总量。',
+        body: '以 credits 计费的供应商（Qoder 就是这样）给出精确的 credits，旁边的 Token 是估算数字；credits 绝不折算进 Token 总量。',
       },
       {
         glyph: '‖',
@@ -271,7 +271,7 @@ const en: Content = {
     ],
     counterLabel: 'Counted in this view',
     counterUnit: 'tokens',
-    counterNote: 'demo figure — hence the “~”',
+    counterNote: 'demo figure',
     focusLabel: 'source',
     creditsLabel: 'credits · kept apart from tokens',
     scroll: 'Scroll',
@@ -330,16 +330,16 @@ const en: Content = {
     intro: 'A usage dashboard that quietly mixes measurements with guesses is worse than no dashboard. These rules hold on every surface.',
     items: [
       {
-        glyph: '~',
-        title: '“~” means estimated',
-        body: 'Where a tool never stored real token counts, the total is estimated from the text it did store and shown with a leading “~”. The basis of each estimate is documented in the matrix notes.',
+        glyph: 'src',
+        title: 'Provenance, not a glyph',
+        body: 'Where a tool never stored real token counts, the total is reconstructed from the text it did store and the wire record marks it estimated; the tool detail panel explains the source. No number carries a marker prefix.',
         demoMeasured: 'measured',
-        demoEstimated: 'estimated',
+        demoEstimated: 'reconstructed',
       },
       {
         glyph: 'cr',
         title: 'Credits are their own unit',
-        body: 'A provider that bills in credits (Qoder is the case in point) reports exact credits beside “~”-marked tokens; credits are never folded into a token total.',
+        body: 'A provider that bills in credits (Qoder is the case in point) reports exact credits beside its reconstructed token total; credits are never folded into a token total.',
       },
       {
         glyph: '‖',

@@ -86,13 +86,6 @@ fun formatUsd(value: Double, compact: Boolean = false): String {
 }
 
 /**
- * Prefix a measured figure with `~` when it is an estimate.  Same rule and same
- * character as the shared web UI's `estimatedValue()`, because the two render the
- * same number and a different convention would read as two different facts.
- */
-fun estimatedValue(text: String, estimated: Boolean): String = if (estimated) "~$text" else text
-
-/**
  * Credits in the provider's own unit — no currency symbol and no conversion.
  * Qoder has never published a credit-to-USD or credit-to-token rate, so folding
  * credits into a cost would invent one.
@@ -168,16 +161,15 @@ data class ShareEntry(
   val tokens: Long,
   val costUsd: Double = 0.0,
   /**
-   * Some or all of [tokens] were estimated from message content rather than an exact
-   * meter.  [valueLabel] prefixes `~`, matching the web's `estimatedValue()` — without
-   * it a guess and a measurement render identically, which is the one thing a usage
-   * tool must not do.
+   * Some or all of [tokens] were reconstructed from message content rather than
+   * read from an exact provider meter. The flag is retained for callers that
+   * rank or annotate rows; no surface prefixes the number with a marker anymore.
    */
   val estimated: Boolean = false,
   /**
-   * Credits in the provider's own unit.  Qoder bills in credits and leaves every token
-   * field at zero, so for Qoder this is the only real number and [tokens] is 0 by
-   * design rather than by absence of usage.
+   * Credits in the provider's own unit. Qoder bills in credits, and the adapter
+   * reconstructs its token total from content, so for Qoder this is the only
+   * provider-exact figure.
    */
   val credits: Double? = null
 ) {

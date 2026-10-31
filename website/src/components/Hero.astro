@@ -61,7 +61,7 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
       <span class="hero__counter-lead"></span>
       <span class="hero__counter-body">
         <span class="note">{t.counterLabel}</span>
-        <span class="hero__counter-n mono" data-counter-n>~0</span>
+        <span class="hero__counter-n mono" data-counter-n>0</span>
         <span class="note">{t.counterUnit} · {t.counterNote}</span>
       </span>
     </div>
@@ -499,7 +499,7 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
               credits.hidden = false;
             },
             onCount: (n) => {
-              const text = '~' + fmt.format(Math.floor(n));
+              const text = fmt.format(Math.floor(n));
               if (text !== lastText) counterN.textContent = lastText = text;
             },
             onReading: (p) => {

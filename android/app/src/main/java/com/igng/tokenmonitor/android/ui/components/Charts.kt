@@ -211,7 +211,6 @@ fun ShareBarList(
         name = if (brandClients) ClientBranding.label(entry.key) else entry.key,
         tokens = entry.tokens,
         costUsd = entry.costUsd,
-        estimated = entry.estimated,
         credits = entry.credits,
         fraction = entry.tokens.toFloat() / total.toFloat(),
         color = color,
@@ -234,7 +233,6 @@ fun ShareBarRow(
   costUsd: Double,
   fraction: Float,
   color: Color,
-  estimated: Boolean = false,
   credits: Double? = null,
   showCost: Boolean = true,
   leading: (@Composable () -> Unit)? = null,
@@ -291,7 +289,7 @@ fun ShareBarRow(
           if (credits != null && credits > 0.0 && tokens == 0L) {
             formatCredits(credits)
           } else {
-            estimatedValue(formatTokensShort(tokens), estimated)
+            formatTokensShort(tokens)
           },
           style = FluentTypeRamp.body2,
           fontWeight = FontWeight.SemiBold,
@@ -300,7 +298,7 @@ fun ShareBarRow(
         if (showCost && !(credits != null && credits > 0.0 && tokens == 0L)) {
           Spacer(Modifier.width(FluentSpacingDefaults.s))
           Text(
-            estimatedValue(cost.format(costUsd, compact = true), estimated),
+            cost.format(costUsd, compact = true),
             style = FluentTypeRamp.caption1,
             color = colors.neutralForeground3
           )

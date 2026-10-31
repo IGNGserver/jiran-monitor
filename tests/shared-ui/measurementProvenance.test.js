@@ -1,19 +1,18 @@
 'use strict';
 
-// Honest measurement labeling in the shared UI.
+// Measurement provenance in the shared UI.
 //
-// Qoder's token totals are content estimates while its credit meter is exact, and
-// `period.estimated` alone cannot express that: on a machine also tracking
-// Claude it would brand Claude's exact totals with the same `~`. These tests pin
-// the three layers that keep the two apart on screen — the formatters, the row
-// model in core/data.js, and the Tools view markup.
+// Qoder's token totals are reconstructed from content while its credit meter is
+// exact. The `~` prefix was removed from every surface, so these tests pin the
+// remaining contract: the row model still carries `estimated`, credits stay a
+// separate unit, and no rendered number grows a marker back.
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { configureViewContext } = require('../../src/shared-ui/core/viewContext.js');
 const { t } = require('../../src/shared-ui/core/i18n.js');
-const { estimatedValue, formatCredits } = require('../../src/shared-ui/core/format.js');
+const { formatCredits } = require('../../src/shared-ui/core/format.js');
 
 function lookup(key, params) {
   return t('en', key, params);
@@ -70,10 +69,12 @@ test('formatCredits renders a provider figure without inventing a currency', () 
   assert.equal(formatCredits(-1), '', 'a negative consumption figure is not displayable');
 });
 
-test('estimatedValue is the only marker and needs no translation', () => {
-  assert.equal(estimatedValue('1.2K', true), '~1.2K');
-  assert.equal(estimatedValue('1.2K', false), '1.2K');
-  assert.equal(estimatedValue('1.2K', undefined), '1.2K');
+test('values are rendered with no estimate prefix', () => {
+  // The glyph was removed from every surface; provenance still exists in the
+  // data model, but it must not leak back into a rendered number.
+  installContext(qoderPeriod());
+  const html = renderTools();
+  assert.doesNotMatch(html, /~/);
 });
 
 test('clientMeasurementFields reads both per-client maps', () => {
@@ -102,28 +103,25 @@ test('deviceBreakdownRows carry the same provenance into the devices view', () =
   assert.equal(qoder.credits, 812.4);
 });
 
-test('the Tools view marks the estimated client and leaves the exact one alone', () => {
+test('the Tools view renders estimated and exact clients identically', () => {
   installContext(qoderPeriod());
 
   const html = renderTools();
 
-  // The `~` lands on Qoder's tokens and cost, and nowhere near Claude's.
-  assert.match(html, /<div class="row-value">~1,200<\/div>/);
-  assert.doesNotMatch(html, /<div class="row-value">~1,000<\/div>/);
-  assert.match(html, /<div class="row-cost">~\$0\.0300<\/div>/);
+  // No glyph on Qoder's tokens or cost, and none on Claude's either.
+  assert.match(html, /<div class="row-value">1,200<\/div>/);
+  assert.match(html, /<div class="row-value">1,000<\/div>/);
+  assert.match(html, /<div class="row-cost">\$0\.0300<\/div>/);
   assert.match(html, /<div class="row-cost">\$0\.0100<\/div>/);
-  // Credits read as an exact figure: no tilde, and the value sits beside the
-  // percentage rather than in the cost slot, because it is not money.
+  assert.doesNotMatch(html, /~/);
+  // Credits still read as a separate unit beside the percentage, never as money.
   assert.match(html, /55% · 812 Credits/);
-  assert.doesNotMatch(html, /~812/);
-  // The selected tool's panel explains what the tilde means; an exact client
-  // would not earn the note at all.
+  // The detail panel keeps the explanation even though the values no longer
+  // carry a marker, so provenance is not silently erased.
   assert.match(html, /class="usage-measurement-note tiny"/);
   assert.match(html, /estimated from stored message content/);
-  assert.match(html, /aria-label="Qoder, estimated, 1,200 tokens, \$0\.0300, 812 Credits"/,
-    'the accessible name carries the same caveat the glyph does');
-  assert.match(html, /aria-label="Claude Code, 1,000 tokens, \$0\.0100"/,
-    'the exact client keeps a plain accessible name');
+  assert.match(html, /aria-label="Qoder, 1,200 tokens, \$0\.0300, 812 Credits"/);
+  assert.match(html, /aria-label="Claude Code, 1,000 tokens, \$0\.0100"/);
 });
 
 test('the Tools view omits every provenance affordance when nothing was estimated', () => {
@@ -144,7 +142,7 @@ test('every locale labels credits and the estimate caveat', () => {
   // resolves to is actually non-empty and distinct from the key itself.
   const { SUPPORTED_LOCALES } = require('../../src/shared-ui/core/i18n.js');
   for (const locale of SUPPORTED_LOCALES) {
-    for (const key of ['stats.credits', 'usage.estimatedAria', 'usage.estimatedHint']) {
+    for (const key of ['stats.credits', 'usage.estimatedHint']) {
       const value = t(locale, key);
       assert.ok(value && value !== key, `${locale}/${key} must resolve to real copy`);
     }

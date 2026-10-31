@@ -41,7 +41,7 @@ for (const p of PAGES) {
     test('首屏实时场景启动（软件 WebGL）', async ({ page }) => {
       await page.goto(p.path);
       await expect(page.locator('[data-hero]')).toHaveClass(/is-live/, { timeout: 15_000 });
-      await expect(page.locator('[data-counter-n]')).not.toHaveText('~0', { timeout: 10_000 });
+      await expect(page.locator('[data-counter-n]')).not.toHaveText('0', { timeout: 10_000 });
     });
 
     for (const width of [360, 768, 1440]) {

@@ -24,7 +24,7 @@ const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
         <div class="rule__text"><h3>{r1.title}</h3><p>{r1.body}</p></div>
         <div class="rule__demo demo-tilde" aria-hidden="true">
           <div><span class="mono demo-big">12,431</span><span class="note">{r1.demoMeasured}</span></div>
-          <div><span class="mono demo-big demo-est">~12.4K</span><span class="note">{r1.demoEstimated}</span></div>
+          <div><span class="mono demo-big demo-est">12.4K</span><span class="note">{r1.demoEstimated}</span></div>
         </div>
       </li>
 
@@ -32,7 +32,7 @@ const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
         <span class="rule__glyph rule__glyph--mono" aria-hidden="true">{r2.glyph}</span>
         <div class="rule__text"><h3>{r2.title}</h3><p>{r2.body}</p></div>
         <div class="rule__demo demo-credits" aria-hidden="true">
-          <span class="mono demo-big demo-est">~1.24M <small>tok</small></span>
+          <span class="mono demo-big demo-est">1.24M <small>tok</small></span>
           <span class="demo-sep">≠ +</span>
           <span class="mono demo-big demo-cr">312.5 <small>cr</small></span>
         </div>
@@ -42,7 +42,7 @@ const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
         <span class="rule__glyph" aria-hidden="true">{r3.glyph}</span>
         <div class="rule__text"><h3>{r3.title}</h3><p>{r3.body}</p></div>
         <div class="rule__demo demo-hold" data-hold>
-          <button class="demo-hold__value mono" type="button" data-hold-value aria-describedby="hold-hint">~3,204,118</button>
+          <button class="demo-hold__value mono" type="button" data-hold-value aria-describedby="hold-hint">3,204,118</button>
           <span class="demo-hold__state note"><i data-hold-dot></i><span data-hold-state data-live={r3.demoLive} data-held={r3.demoHeld}>{r3.demoLive}</span><span data-hold-queue></span></span>
           <span class="note" id="hold-hint">{r3.demoHint}</span>
         </div>
@@ -310,7 +310,7 @@ const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
       hold.classList.toggle('is-held', h);
       state.textContent = h ? state.dataset.held! : state.dataset.live!;
       if (!h) {
-        value.textContent = '~' + fmt.format(n);
+        value.textContent = fmt.format(n);
         pending = 0;
         queue.textContent = '';
       }
@@ -325,7 +325,7 @@ const tabValues = ['1.82M', '2.40M', '9.61M', '38.1M', '412M'];
         if (held) {
           pending++;
           queue.textContent = ` · +${pending}`;
-        } else value.textContent = '~' + fmt.format(n);
+        } else value.textContent = fmt.format(n);
       }, 1400);
     }
   }

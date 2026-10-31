@@ -1592,6 +1592,75 @@ test('a transcript row carries the credit meter verbatim beside its estimated to
   assert.equal(rows[0].estimated, true, 'the token totals alongside it remain content estimates');
 });
 
+test('a transcript that reports real token counts is exact and keeps its cache buckets', () => {
+  // Current Qoder builds zero every token field, but the parser must not bake
+  // that in: a future build that starts reporting usage has to become exact
+  // automatically instead of inheriting the content-estimate flag forever.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qoder-exact-tokens-'));
+  writeCreditsTranscript(tmpDir, [JSON.stringify({
+    type: 'assistant',
+    uuid: 'request-exact',
+    timestamp: '2026-08-15T10:00:00Z',
+    message: {
+      role: 'assistant',
+      content: 'answer',
+      model: 'dfmodel',
+      usage: {
+        request_id: 'request-exact',
+        input_tokens: 1200,
+        output_tokens: 80,
+        cache_read_input_tokens: 900,
+        cache_creation_input_tokens: 100,
+        credits: 0.5
+      }
+    }
+  })]);
+
+  const rows = collectQoderCnTranscriptRows({ homeDir: tmpDir, env: FIXTURE_ENV });
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].estimated, false, 'provider-reported tokens must not stay marked as an estimate');
+  assert.equal(rows[0].tokenProvenance, 'exact');
+  assert.equal(rows[0].input, 1200);
+  assert.equal(rows[0].output, 80);
+  assert.equal(rows[0].cacheRead, 900, 'cache reads were accumulated but used to be dropped on the row');
+  assert.equal(rows[0].cacheWrite, 100);
+});
+
+test('a bucket that mixes exact and reconstructed requests stays estimated', () => {
+  // One identity can appear twice (a usage-bearing record and an older one
+  // without counts). Splitting it would double-count the request; keeping it in
+  // one bucket and downgrading the row is the conservative choice.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qoder-mixed-tokens-'));
+  writeCreditsTranscript(tmpDir, [
+    JSON.stringify({
+      type: 'assistant',
+      uuid: 'request-mixed',
+      timestamp: '2026-08-15T10:00:00Z',
+      message: {
+        role: 'assistant',
+        content: 'answer',
+        model: 'dfmodel',
+        usage: { request_id: 'request-mixed', input_tokens: 100, output_tokens: 10, credits: 0.2 }
+      }
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      uuid: 'request-mixed',
+      timestamp: '2026-08-15T10:01:00Z',
+      message: { role: 'assistant', content: 'answer', model: 'dfmodel', usage: { credits: 0.3 } }
+    })
+  ]);
+
+  const rows = collectQoderCnTranscriptRows({ homeDir: tmpDir, env: FIXTURE_ENV });
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.equal(rows.length, 1, 'the same identity must not become two rows');
+  assert.equal(rows[0].estimated, true);
+  assert.equal(rows[0].tokenProvenance, 'estimated');
+});
+
 test('requests folded into one bucket sum their credits', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qoder-credits-bucket-'));
   // No uuid and no request_id: both records fall in the conservative same-day
