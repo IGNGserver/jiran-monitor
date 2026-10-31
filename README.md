@@ -75,11 +75,13 @@ and pricing ledger, and the browser preferences.
 A usage dashboard that quietly mixes measurements with guesses is worse than no dashboard.
 These rules are what the product commits to, and they hold on every surface:
 
-- **`~` means estimated.** Where a tool never stored real token counts, the total is estimated
-  from the text it did store and is shown with a leading `~`; the basis of each estimate is
-  documented in the matrix notes.
+- **Reconstructed values carry provenance, not a glyph.** Where a tool never stored real token
+  counts, the total is reconstructed from the text it did store and the wire record marks it
+  `estimated`; the tool's detail panel explains the source, and the basis is documented in the
+  matrix notes.
 - **Credits are their own unit.** A provider that bills in credits (Qoder is the case in point)
-  reports exact credits beside `~`-marked tokens; credits are never folded into a token total.
+  reports exact credits beside its reconstructed token total; credits are never folded into a
+  token total.
 - **A refresh never interrupts you.** Frames arrive every few seconds; the renderer defers a
   rebuild while a dropdown or a half-typed value is open, keeps expanded rows and scroll
   positions, and skips the DOM write entirely when nothing changed.

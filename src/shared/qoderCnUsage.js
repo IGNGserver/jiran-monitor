@@ -957,11 +957,14 @@ function buildTokscaleJson(startMs, rows, pricingByModel, includeUndated = false
     const key = `${row.sessionId}\0${row.model}`;
     if (!grouped.has(key)) grouped.set(key, {
       ...row, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0, credits: 0,
-      startedAt: 0, lastUsedAt: 0, cost: 0,
+      startedAt: 0, lastUsedAt: 0, cost: 0, estimated: false,
       tokenProvenance: 'exact', costProvenance: 'exact'
     });
     const group = grouped.get(key);
-    if (row.tokenProvenance === 'estimated' || row.estimated === true) group.tokenProvenance = 'estimated';
+    if (row.tokenProvenance === 'estimated' || row.estimated === true) {
+      group.tokenProvenance = 'estimated';
+      group.estimated = true;
+    }
     if (row.costProvenance === 'estimated') group.costProvenance = 'estimated';
     group.input += row.input;
     group.output += row.output;
@@ -1033,7 +1036,7 @@ function localDateKey(value) {
  * carry `createdAt`, so the window is exact; undated rows stay out, because a row
  * that cannot be placed in time cannot be credited to a range (the fixed all-time
  * window still counts them). `buildTokscaleJson` keeps propagating the row-level
- * `estimated` flag, so the range answer carries the same provenance mark as 今日.
+ * `estimated` flag, so the range answer carries the same provenance as 今日.
  */
 function buildQoderCnRangeJson(range, options = {}) {
   const clientId = normalizeQoderClientId(options.clientId, 'qodercn');
@@ -1098,7 +1101,8 @@ const QODER_CN_TRANSCRIPT_BUDGET_CODES = Object.freeze({
 // totalTokens: 0), and the credits unit has no official token conversion
 // (docs.qoder.cn: credits are Qoder's own metered unit per request). To keep
 // this client's rows in token units like every other client, tokens are
-// ESTIMATED from the transcript's actual conversation content:
+// RECONSTRUCTED from the transcript's actual conversation content (a future
+// build that reports real counts takes the exact branch above instead):
 //   - every message's content (text/thinking/tool_use/tool_result) is counted
 //     with a blended heuristic: CJK chars / 1.5 + other chars / 4 per token;
 //   - each billed request's input = cumulative content tokens of the session
@@ -1364,7 +1368,15 @@ function processTranscriptLine(line, state) {
   const rawOutputTokens = Number(usage?.output_tokens ?? usage?.outputTokens);
   const rawCacheReadTokens = Number(usage?.cache_read_input_tokens ?? usage?.cacheReadInputTokens);
   const rawCacheWriteTokens = Number(usage?.cache_creation_input_tokens ?? usage?.cacheCreationInputTokens);
-  const hasExactTokens = Number.isFinite(rawInputTokens) && rawInputTokens > 0;
+  // Current Qoder transcripts carry the token fields but zero every one of them;
+  // a future build that starts reporting real counts is accepted here. A usage
+  // block is exact only when both prompt and completion are numeric and at least
+  // one token bucket is positive — an all-zero block is the signal that this row
+  // still has to be reconstructed from content.
+  const hasExactTokens = Number.isFinite(rawInputTokens)
+    && Number.isFinite(rawOutputTokens)
+    && [rawInputTokens, rawOutputTokens, rawCacheReadTokens, rawCacheWriteTokens]
+      .some((value) => Number.isFinite(value) && value > 0);
   const credits = Number(usage?.credits);
   const timestamp = transcriptEventTimestamp(event, message);
   const identity = transcriptEventIdentity(event, message);
@@ -1381,6 +1393,11 @@ function processTranscriptLine(line, state) {
       const date = new Date(timestamp);
       const dayKey = dayKeyOf(date, state.timeZone);
       const modelKey = transcriptEventModel(event, message, state.modelKey);
+      // The bucket key stays the existing identity tuple. Adding provenance to
+      // it would split a request that appears twice (once with usage, once
+      // without) into two rows and double-count it; instead a bucket is exact
+      // only while every request in it reported real counts, and any fallback
+      // request downgrades the whole row to `estimated`.
       const key = JSON.stringify([dayKey, modelKey, projectLabel, sessionId, identity || '']);
       const bucket = buckets.get(key) || {
         dayKey,
@@ -1388,8 +1405,11 @@ function processTranscriptLine(line, state) {
         projectLabel,
         sessionId,
         sourceSession: state.rawSession || state.sessionKey || '',
+        exact: hasExactTokens,
         input: 0,
         output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
         requests: 0,
         credits: 0,
         sourceIdentities: new Set()
@@ -1397,19 +1417,22 @@ function processTranscriptLine(line, state) {
       if (sinceMs === undefined || timestamp >= sinceMs) {
         if (hasExactTokens) {
           bucket.input += rawInputTokens;
-          bucket.output += (Number.isFinite(rawOutputTokens) && rawOutputTokens > 0) ? rawOutputTokens : (state.turnOutputTokens || messageTokens);
-          if (Number.isFinite(rawCacheReadTokens) && rawCacheReadTokens > 0) bucket.cacheRead = (bucket.cacheRead || 0) + rawCacheReadTokens;
-          if (Number.isFinite(rawCacheWriteTokens) && rawCacheWriteTokens > 0) bucket.cacheWrite = (bucket.cacheWrite || 0) + rawCacheWriteTokens;
+          bucket.output += rawOutputTokens;
+          if (Number.isFinite(rawCacheReadTokens) && rawCacheReadTokens > 0) bucket.cacheRead += rawCacheReadTokens;
+          if (Number.isFinite(rawCacheWriteTokens) && rawCacheWriteTokens > 0) bucket.cacheWrite += rawCacheWriteTokens;
         } else {
           // Standard LLM API request model: each request sends the cumulative session context.
           bucket.input += Math.max(0, state.cumulativeTokens);
           bucket.output += (state.turnOutputTokens || messageTokens);
+          // One fallback request is enough to downgrade the whole row: the
+          // bucket's totals now mix two measurement semantics.
+          bucket.exact = false;
+          diagnostics.estimated = true;
         }
         bucket.requests += 1;
         if (Number.isFinite(credits)) bucket.credits += credits;
         if (identity) bucket.sourceIdentities.add(identity);
         diagnostics.recognizedEvents += 1;
-        diagnostics.estimated = true;
         if (!diagnostics.lastDataAt || timestamp > Date.parse(diagnostics.lastDataAt)) {
           diagnostics.lastDataAt = new Date(timestamp).toISOString();
         }
@@ -1581,6 +1604,9 @@ function mergeTranscriptBucket(target, key, bucket) {
   }
   existing.input += bucket.input;
   existing.output += bucket.output;
+  // Keep the stricter value: a cached bucket from before the `exact` flag, or a
+  // file whose same identity was reconstructed, must not turn exact by merging.
+  if (bucket.exact !== true) existing.exact = false;
   existing.requests += bucket.requests;
   existing.credits += bucket.credits;
   if (bucket.cacheRead) existing.cacheRead = (existing.cacheRead || 0) + bucket.cacheRead;
@@ -1752,17 +1778,21 @@ function collectQoderCnTranscriptRows(options = {}) {
       projectLabel: bucket.projectLabel,
       input: bucket.input,
       output: bucket.output,
-      cacheRead: 0,
-      cacheWrite: 0,
+      cacheRead: bucket.cacheRead || 0,
+      cacheWrite: bucket.cacheWrite || 0,
       createdAt,
       messages: bucket.requests,
       // A genuine 0: an identity-less or non-billable request really did spend
       // no credit, which is different from a source that never reports credits
       // (the SQLite adapters, which omit the key entirely).
       credits: bucket.credits,
-      estimated: true
+      // A bucket is exact only while every request in it reported real counts;
+      // any fallback request downgrades it. Older in-memory cache entries predate
+      // `exact`, and a missing flag is treated as reconstructed rather than
+      // silently promoted.
+      estimated: bucket.exact !== true
     };
-    defineMeasurementProvenance(row, 'estimated', 'estimated');
+    defineMeasurementProvenance(row, row.estimated ? 'estimated' : 'exact', 'estimated');
     defineTranscriptIdentity(row, [...bucket.sourceIdentities]);
     defineSourceSession(row, bucket.sourceSession);
     rows.push(row);

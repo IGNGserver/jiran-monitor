@@ -963,8 +963,9 @@ internal fun UsageRangeDto.toPeriodDto(): PeriodDto = PeriodDto(
   clientModelCosts = clientModelCosts,
   projects = projects,
   sessions = sessions,
-  // Provenance has to survive the fold or a range answer renders an estimate as an
-  // exact figure while the same client on a snapshot period renders it with `~`.
+  // Provenance has to survive the fold so a range answer keeps the same
+  // measurement metadata a snapshot period reports. No surface prefixes the
+  // value with a marker anymore, but consumers still distinguish the two.
   clientEstimated = clientEstimated,
   clientCredits = clientCredits,
   clientModelCredits = clientModelCredits,

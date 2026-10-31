@@ -149,12 +149,12 @@ object WidgetCopy {
       snapshot.rate
     )
     return TodayCopy(
-      tokensText = estimatedValue(formatTokensShort(today.tokens), today.estimated),
-      exactTokensText = estimatedValue(formatThousands(today.tokens), today.estimated),
+      tokensText = formatTokensShort(today.tokens),
+      exactTokensText = formatThousands(today.tokens),
       costText = cost,
       deltaText = deltaText(today, snapshot.yesterday),
-      monthText = estimatedValue(formatTokensShort(snapshot.month.tokens), snapshot.month.estimated),
-      allTimeText = estimatedValue(formatTokensShort(snapshot.allTime.tokens), snapshot.allTime.estimated),
+      monthText = formatTokensShort(snapshot.month.tokens),
+      allTimeText = formatTokensShort(snapshot.allTime.tokens),
       freshness = age(nowMs, snapshot.capturedAtMs),
       stateLine = stateLine(snapshot, nowMs, refreshMinutes, connected, zone),
       state = state,
@@ -476,6 +476,4 @@ object WidgetCopy {
     }
   }
 
-  private fun estimatedValue(text: String, estimated: Boolean): String =
-    if (estimated) "~$text" else text
 }

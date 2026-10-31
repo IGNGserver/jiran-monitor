@@ -132,7 +132,7 @@ Android 侧 4 个一级 + 9 个子路由、10 个 REST 端点、0 套 locale。
 | 问题 | 证据 |
 | --- | --- |
 | **Qoder 在 Android 上恒显示 0 token / 0 成本**。Qoder 以 credits 计量、token 字段全为 0，`clientCredits` 是唯一精确值；web 有独立 credits 格式化（`core/format.js:66-85`），Android `HubDtos.kt` 里**没有 `clientCredits`/`clientModelCredits`/`sessions.*.credits` 任何字段**，份额图直读 `clients` map | `docs/API.md:268`（"this is the one Qoder figure that is exact"）、`grep clientCredits android/` = 0 |
-| **估算值与精确值不可区分**。web 用 `estimatedValue()` 打 `~` 前缀（`core/format.js:83-85`、`core/data.js:527`），Android `Formatters.kt` 无对应函数、DTO 无 `clientEstimated` | Qoder/Claude Desktop 等来源本身就是 `estimated: true` |
+| **估算值与精确值不可区分**。web 用 `estimatedValue()` 打 `~` 前缀（`core/format.js:83-85`、`core/data.js:527`），Android `Formatters.kt` 无对应函数、DTO 无 `clientEstimated` | Qoder/Claude Desktop 等来源本身就是 `estimated: true`。后续版本已移除 `~` 前缀，只保留 `estimated` 数据与详情说明 |
 | 设备数据源**同屏两轨**：总览与设备页读 `state.devices`（来自 `/api/devices`，SSE 帧不刷新，`HubViewModel.kt:348` 只换 `stats`），服务状态页读 `stats.devices`（实时）。两份同名列表可以互相矛盾 | `OverviewScreen.kt:98`、`DevicesScreen.kt:76`、`MoreScreens.kt:1116,1121` |
 | "在线"两套定义：总览用 `!it.stale`（`OverviewScreen.kt:328`），设备页用 `deviceCountsAsOnline(stale, clientStatus)`（`DevicesScreen.kt:88`）→ 同一次改动内两屏统计口径不同 | `Formatters.kt:249-263` |
 | 死 UI：`DevicesScreen.kt:363` 渲染 `LimitsSection(device.limits, "本设备限额")`，但 Hub 明确 `delete device.limits`（`src/hub/server.js:507`），`LimitsSection` providers 空即 `return`（`LimitsUi.kt:123`）→ **该区块永不出现** | 实测两端代码 |
@@ -235,7 +235,7 @@ DTO 解析了但全站零判断/零展示：`HubCapabilitiesDto` 的 `stats/hist
 
 顺序按"修错误 > 补预设 > 补管理面"：
 
-1. **数据正确性（C1，最先）**：`HubDtos.kt` 补 `clientCredits`/`clientModelCredits`/`session.credits`/`clientEstimated`/`periodWindows`；`Formatters.kt` 补 `estimatedValue()`（`~` 前缀）与 credits 格式化；把 `!stale` 与 `deviceCountsAsOnline` 统一成一个函数；设备列表单一数据源（统一用 `stats.devices`，SSE 帧即刷新，`/api/devices` 退化为兜底）；删掉 `DevicesScreen.kt:363` 的死区块。
+1. **数据正确性（C1，最先）**：`HubDtos.kt` 补 `clientCredits`/`clientModelCredits`/`session.credits`/`clientEstimated`/`periodWindows`；`Formatters.kt` 补 `estimatedValue()`（`~` 前缀，后续版本已移除）与 credits 格式化；把 `!stale` 与 `deviceCountsAsOnline` 统一成一个函数；设备列表单一数据源（统一用 `stats.devices`，SSE 帧即刷新，`/api/devices` 退化为兜底）；删掉 `DevicesScreen.kt:363` 的死区块。
    → 这一步只增字段不改语义，按 AGENTS.md 属兼容面**新增**，需同步 `docs/API.md` 与 `tests/shared/clientTracking.test.js` 类的期望清单。
 2. **作用域模型（C3 的 Yesterday/Week + B5）**：把 web 的 `dateRanges.js` 语义移植成 `ui/core/DateRanges.kt`（含 `firstDayOfWeekIndex(locale)`，别再用 `Locale.CHINA`），总览/分析/设备共用一个 `state.period`；`usageRange` 能力位缺失时按 web 一样隐藏预设并归一回 `today`。同时把 `FluentTabStrip` 的 `options: List<String>` + `selectedIndex: Int`（标签当身份、无左右方向键）改成 id/label 分离 + tablist 键盘漫游，与 web 的 `tm-tablist` 对齐。
 3. **账号管理（C3）**：接 `/api/accounts` 全套 + OAuth 两步向导 + 免责声明；这是 Android 最大的一块缺失，也是唯一需要新数据流的部分（可复用 `DateTimeRangePicker` 的浮层配方做抽屉表单）。**后续进展**：已接入，且 codex/antigravity 统一为浏览器登录向导（编辑页可查看凭据状态、清除凭据、原地重授权；不再有会建重复账号的 exchange）。

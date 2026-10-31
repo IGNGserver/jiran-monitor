@@ -103,8 +103,9 @@ object WidgetSnapshotMapper {
     tokens = day.tokens.toLong(),
     costUsd = day.cost,
     // HistoryDayDto has no period-level estimate flag. Per-client provenance is
-    // still available on the app's full history document, but a widget number
-    // that says "estimated" without a day-level flag would be a guess of a guess.
+    // still available on the app's full history document, but a day-level flag
+    // derived from it would be a guess of a guess. The field is retained for the
+    // snapshot schema, not rendered as a marker.
     estimated = false
   )
 

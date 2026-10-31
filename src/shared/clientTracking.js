@@ -10,8 +10,9 @@
 // harness is tracked, and with no selection surface left there is no other way
 // to reach MiMo data. The duplicated `claude` rows are a known upstream
 // limitation. The two Qoder sites are local adapters whose token totals are
-// estimates — the wire record marks them with `clientEstimated`; their credits
-// are exact provider billing.
+// reconstructed from content — the wire record marks them with
+// `clientEstimated` while their credits are exact provider billing. No surface
+// prefixes the reconstructed value with a marker.
 //
 // Adding a client means touching several spots that must agree on the id; the
 // checklist lives in AGENTS.md ("Adding a tracked client").

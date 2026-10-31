@@ -14,9 +14,11 @@ Three capabilities are tracked separately, so a tool can support any subset of t
 | **Session Details** | Individual sessions can be opened to see tokens per prompt. Always read on demand from the local machine, never uploaded. |
 
 **Reading the numbers honestly.** Where a tool does not persist real token counts, the
-total is estimated from the stored text and is rendered with a leading `~` in every surface;
-credits a provider bills in are a separate unit, never folded into a token total. A tool
-that is present but idle shows as an inactive client rather than as zero usage.
+total is reconstructed from the stored text and the wire record still marks it with
+`estimated` provenance; the UI does not prefix the value with a marker, and the tool's
+detail panel explains the source. Credits a provider bills in are a separate unit, never
+folded into a token total. A tool that is present but idle shows as an inactive client
+rather than as zero usage.
 
 The matrix — 59 rows, in the order the UI lists them:
 
@@ -106,9 +108,9 @@ Qoder token usage is read from the app's own local files, not an API. The intern
 
 Rows from every present source are merged additively and de-duplicated by request identity. Where a transcript row cannot be proven distinct from a database row, the database row wins — two sources that overlap must not double-count.
 
-This is an advanced local integration. Either SQLite source needs a `sqlite3` CLI on PATH or a Node runtime with unflagged `node:sqlite` (Node ≥ 23.4; the Electron app may need the CLI); the transcript tree needs neither. Read failures are logged, and an existing complete snapshot is retained instead of being replaced with zero usage. Main-database and transcript rows use a blended estimate of CJK characters / 1.5 and other characters / 4; a request's input is the conversation appended **since the previous request** and its output is that request's stored content, so each message of a session is counted once rather than re-summed by every later request. Provider billing fields, system prompts, and tool schemas are not available in these local records, so those totals and costs are marked `estimated` and are not exact provider token billing. Costs are estimated from the models.dev catalog for each mapped model; the adapter may break if Qoder changes its on-disk format.
+This is an advanced local integration. Either SQLite source needs a `sqlite3` CLI on PATH or a Node runtime with unflagged `node:sqlite` (Node ≥ 23.4; the Electron app may need the CLI); the transcript tree needs neither. Read failures are logged, and an existing complete snapshot is retained instead of being replaced with zero usage. Main-database and transcript rows use a blended estimate of CJK characters / 1.5 and other characters / 4; each billed request's input is the cumulative conversation context sent upstream and its output is that request's stored content. Provider billing fields, system prompts, and tool schemas are not available in these local records, so those totals and costs carry `estimated` provenance and are not exact provider token billing. The UI renders the number without a `~` prefix; the tool detail panel explains that it was reconstructed. Costs are estimated from the models.dev catalog for each mapped model; the adapter may break if Qoder changes its on-disk format.
 
-One figure in that record is not an estimate. Qoder bills in credits rather than tokens — it leaves every token field of its usage block at `0` and publishes an exact per-request `credits` amount beside them — so a Qoder tool row shows real credit consumption next to its `~`-marked tokens and cost. Credits cover exactly what Qoder usage covers, which is the Day / Month / Total tabs: the Yesterday and Week custom ranges do not include Qoder at all today (that scan covers Tokscale-backed tools plus Proma and Claude Desktop), and a Hub range answered from stored history reports no credits either.
+One figure in that record is not an estimate. Qoder bills in credits rather than tokens — current builds leave every token field of the usage block at `0` and publish an exact per-request `credits` amount beside them — so a Qoder tool row shows real credit consumption next to its reconstructed token total. If a future Qoder build starts writing real token counts, the parser marks those rows exact instead. Credits cover exactly what Qoder usage covers, which is the Day / Month / Total tabs: the Yesterday and Week custom ranges do not include Qoder at all today (that scan covers Tokscale-backed tools plus Proma and Claude Desktop), and a Hub range answered from stored history reports no credits either.
 
 #### Qoder account limits
 

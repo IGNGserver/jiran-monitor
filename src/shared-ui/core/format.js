@@ -76,14 +76,6 @@ export function formatCredits(value) {
   return amount.toFixed(2);
 }
 
-// The estimate marker. `~` reads the same in all five locales, needs no
-// translation, and travels with the number it qualifies — which is what lets one
-// client's guessed tokens sit beside another client's exact ones in the same
-// list. The explanation belongs to the row's accessible name, not the glyph.
-export function estimatedValue(text, estimated) {
-  return estimated ? `~${text}` : text;
-}
-
 // ICU formatter construction is expensive in per-row renders. Bound the cache
 // even when a caller supplies locales outside the UI's finite language list.
 const relativeFormatters = new Map();

@@ -57,6 +57,8 @@ data class WidgetSnapshot(
 data class WidgetPeriodTotals(
   val tokens: Long = 0L,
   val costUsd: Double = 0.0,
+  // Retained so an existing `widget-snapshot.json` keeps its shape. Widgets no
+  // longer render a marker from it; provenance stays available to callers.
   val estimated: Boolean = false
 )
 
