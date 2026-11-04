@@ -135,13 +135,17 @@ function verifyProductScope() {
   expect(exists('docs/hub-compose.md'), 'the canonical Docker Compose Hub guide must remain');
   expect(exists('docs/headless-agent.md'), 'the canonical headless agent guide must remain');
   expect(exists('scripts/package-headless.js'), 'the headless package script must remain');
-  expect(exists('docker-compose.yml'), 'the root Docker Compose file must remain the only Hub distribution entry point');
+  expect(exists('docker-compose.yml'), 'the root Docker Compose file must remain the default Hub deployment');
+  // The external-database variant is the same Compose stack without the bundled
+  // MySQL service; it is not a second Hub runtime. Keep both in the release zip.
+  expect(exists('docker-compose.external-db.yml'), 'the external-database Compose variant must remain');
   expect(exists('Dockerfile'), 'the Hub Dockerfile must remain');
   expect(exists('docker-entrypoint.sh'), 'the Hub Docker entrypoint must remain');
   expect(exists('migrations/run.js'), 'the Hub migration runner must remain');
 
   const composePackager = read('scripts/package-hub-compose.js');
   expect(composePackager.includes("['docker-compose.yml', 'docker-compose.yml']"), 'Hub packaging must use the root docker-compose.yml');
+  expect(composePackager.includes("['docker-compose.external-db.yml', 'docker-compose.external-db.yml']"), 'Hub packaging must ship the external-database Compose variant');
   expect(composePackager.includes("['docs/hub-compose.md', 'README.md']"), 'Hub packaging must use the canonical Compose documentation');
   expect(!composePackager.includes('deploy/'), 'Hub packaging must not read the removed deploy directory');
 

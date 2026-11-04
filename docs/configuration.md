@@ -123,6 +123,39 @@ rejected by default; prefer HTTPS whenever possible. In the single-user mode,
 all devices intentionally use the same Hub owner key. Separate legacy
 credentials are not part of the supported configuration.
 
+### Hub database
+
+The Docker Compose Hub is the only component that talks to MySQL; the desktop
+app and the headless agent never open a database connection. Two equivalent
+configuration forms exist, and `JIRAN_DATABASE_URL` wins when both are set:
+
+```env
+# single URL (recommended for a shared or remote server)
+JIRAN_DATABASE_URL=mysql://user:password@db.example.lan:3306/jiran?ssl=required
+
+# historical discrete form (unchanged, still supported)
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=token_monitor
+MYSQL_USER=token_monitor
+MYSQL_PASSWORD=...
+```
+
+Pool sizing (`MYSQL_CONNECTION_LIMIT`, `MYSQL_QUEUE_LIMIT`,
+`MYSQL_CONNECT_TIMEOUT_MS`) and the idle controls (`MYSQL_MAX_IDLE`,
+`MYSQL_IDLE_TIMEOUT_MS`) apply to both forms. `JIRAN_DATABASE_SSL`,
+`JIRAN_DATABASE_SSL_CA`, `JIRAN_DATABASE_SSL_REJECT_UNAUTHORIZED` and
+`JIRAN_DATABASE_SOCKET` cover TLS and a local socket. Supported servers are
+**MySQL 8.0+**; a preflight check rejects MariaDB and older versions before any
+DDL runs. Only one Hub process may use a schema — see
+[hub-compose.md](hub-compose.md#external-mysql-shared-or-remote-server) for the
+shared-server deployment, grant and connection-budget details.
+
+The Hub never logs the URL (it contains the password); it logs the redacted
+target at startup, reports `storage.latencyMs` on `/api/health`, and prints SQL
+slower than `MYSQL_SLOW_QUERY_MS` (default 1000 ms, `0` disables the log) without
+bound values.
+
 The collection and upload controls above are shared by the desktop app's Hub
 client mode and the headless agent. The desktop app reads them from
 `settings.json` (seeded from `.env` on first run); the headless agent uses CLI

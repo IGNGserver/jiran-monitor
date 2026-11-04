@@ -36,6 +36,7 @@ const { loadDotEnv, parseArgs } = require('../shared/config');
 const { tryServeStatic } = require('./static');
 const { lookupModelPricing, normalizePromaPricing } = require('../shared/collector');
 const { createMySqlPool, createRepository } = require('./repository');
+const { poolMetrics, retryTransient } = require('./databaseConfig');
 const { createCatalogPricingLookup, pricingNotFound } = require('./pricing-upstream');
 const { calculateUsageEventDeltas, summarizeSessions, usageCandidates } = require('./usage-events');
 const { createHubAccountService } = require('./accountService');
@@ -541,6 +542,46 @@ function createHub({
   const statsInFlight = new Map();
   const statsGenerations = new WeakMap();
 
+  // Pricing is read on every ingest but changes only through this process (or an
+  // operator at a SQL prompt). A bounded short-lived map removes one remote
+  // round trip per tick; writes clear it, and the TTL covers out-of-band edits.
+  const PRICING_CACHE_LIMIT = 2000;
+  const PRICING_CACHE_TTL_MS = 10 * 60 * 1000;
+  const pricingCache = new Map();
+  function clearPricingCache() { pricingCache.clear(); }
+  async function pricingForEvents(models, executor) {
+    const wanted = [...new Set(models.map((model) => String(model || '').trim()).filter(Boolean))];
+    if (wanted.length === 0) return new Map();
+    const now = Date.now();
+    const missing = wanted.filter((model) => {
+      const entry = pricingCache.get(model);
+      return !entry || now - entry.at > PRICING_CACHE_TTL_MS;
+    });
+    if (missing.length > 0) {
+      const rows = await store.getPricing(missing, executor);
+      for (const model of missing) {
+        // Insertion order doubles as LRU once the cap is reached.
+        pricingCache.delete(model);
+        pricingCache.set(model, { value: rows.get(model) || null, at: now });
+        if (pricingCache.size > PRICING_CACHE_LIMIT) {
+          const oldest = pricingCache.keys().next().value;
+          if (oldest !== undefined) pricingCache.delete(oldest);
+        }
+      }
+    }
+    const result = new Map();
+    for (const model of wanted) {
+      const value = pricingCache.get(model)?.value;
+      if (value) result.set(model, value);
+    }
+    return result;
+  }
+
+  // A range cache was evaluated and rejected: the ledger is append-only, but a
+  // repository can be written outside this process (a test, a migration script,
+  // a manual correction), and a cached answer would then claim to be the range
+  // total while the source of truth disagrees. The window is a user action, not
+  // a hot path; correctness wins over one saved query.
   function invalidateStatsCache({ fleet: resetFleet = true, record = null, limits = false } = {}) {
     statsCacheGeneration += 1;
     statsCache = null;
@@ -1184,11 +1225,28 @@ function createHub({
     const record = await withDeviceIngestLock(deviceId, async () => store.transaction(async (connection) => {
       // The database row lock covers multiple Hub processes; the small process
       // lock above also serializes first-ingest races before a device row exists.
-      if (typeof store.lockDevice === 'function') await store.lockDevice(deviceId, connection);
-      const existing = await store.getDeviceRecord(deviceId, connection);
-      const baselineState = typeof store.getIngestBaseline === 'function'
-        ? await store.getIngestBaseline(deviceId, connection)
-        : { snapshot: existing, transferred: false };
+      // A Hub that knows how to combine them does lock + display + baseline in
+      // one round trip; the legacy calls stay for custom repositories.
+      const state = typeof store.lockAndLoadIngestState === 'function'
+        ? await store.lockAndLoadIngestState(deviceId, connection)
+        : null;
+      let existing;
+      let baselineState;
+      // A custom repository without the combined read keeps the legacy calls and
+      // does not get the session fast path: without `active` the Hub cannot know
+      // whether DELETE cleared the session rows.
+      let deviceActive = false;
+      if (state) {
+        existing = state.display;
+        baselineState = { snapshot: state.baseline, transferred: state.transferred };
+        deviceActive = state.active;
+      } else {
+        if (typeof store.lockDevice === 'function') await store.lockDevice(deviceId, connection);
+        existing = await store.getDeviceRecord(deviceId, connection);
+        baselineState = typeof store.getIngestBaseline === 'function'
+          ? await store.getIngestBaseline(deviceId, connection)
+          : { snapshot: existing, transferred: false };
+      }
       const merged = mergeDeviceRecord(baselineState.transferred && !limitsOnly ? baselineState.snapshot : existing, {
         ...usagePayload,
         receivedAt: new Date().toISOString(),
@@ -1215,12 +1273,22 @@ function createHub({
         merged.periods = reanchorTransferredPeriods(merged, baseline, existing);
         if (hasOwn(merged, 'history')) merged.history = reanchorTransferredHistory(merged.history, baseline.history, existing?.history);
       }
-      const pricingByModel = events.length ? await store.getPricing(events.map((event) => event.model), connection) : new Map();
+      const pricingByModel = events.length
+        ? await pricingForEvents(events.map((event) => event.model), connection)
+        : new Map();
       const pricedEvents = events.map((event) => priceSnapshot(event, pricingByModel.get(event.model)));
       await store.saveDevice(merged, connection, { baseline: rawCumulative, previousRecord: existing, previousBaseline: baselineState.snapshot });
       await store.insertUsageEvents(merged.deviceId, pricedEvents, connection);
       const displayCandidates = baselineState.transferred ? usageCandidates(merged, { normalized: true }) : candidates;
-      await store.replaceSessions(merged.deviceId, summarizeSessions(displayCandidates), connection);
+      // The sessions table is the materialized mirror of the display snapshot's
+      // all-time sessions, written in the same transaction. Rebuilding the
+      // previous rows from `existing` saves one full session-table read per
+      // tick. A soft-deleted device has no session rows left, and a transferred
+      // device's table was merged in SQL, so neither may take this path.
+      const previousSummaries = !baselineState.transferred && deviceActive && existing?.periods
+        ? summarizeSessions(usageCandidates(existing, { normalized: true }))
+        : undefined;
+      await store.replaceSessions(merged.deviceId, summarizeSessions(displayCandidates), connection, { previousSummaries });
       return merged;
     }));
     invalidateStatsCache({ record });
@@ -1540,6 +1608,9 @@ function createHub({
 
   async function setPricing(model, prices, source = 'manual') {
     const item = await store.upsertPricing(model, prices, source);
+    // Ingest reads this table per tick; a price edit must be visible on the next
+    // tick, not after the cache TTL.
+    clearPricingCache();
     return item;
   }
 
@@ -1607,6 +1678,34 @@ function createHub({
     }
 
     if (url.pathname === '/api/health') {
+      // The Docker healthcheck is this route. It has to reflect the database,
+      // because a Hub that cannot read MySQL still answers HTTP; reporting 200
+      // there is what makes a wedged deployment look healthy. The response is
+      // unauthenticated, so it carries latency and a status only — never the
+      // host, user, database name or driver error text.
+      const storageStartedAt = process.hrtime.bigint();
+      let deviceCount = null;
+      let storageError = null;
+      try {
+        deviceCount = await store.countDevices();
+      } catch (error) {
+        storageError = error;
+      }
+      const storageLatencyMs = Math.round(Number(process.hrtime.bigint() - storageStartedAt) / 1e6);
+      const storage = { ok: !storageError, driver: 'mysql', latencyMs: storageLatencyMs };
+      if (storageError) {
+        logger.error?.(`[hub-health] storage unavailable: ${storageError?.code || storageError?.message}`);
+        return sendJson(res, 503, {
+          ok: false,
+          role: 'hub',
+          runtime: 'node-hub',
+          version: 1,
+          apiVersion: HUB_API_VERSION,
+          storage,
+          error: 'hub_storage_unavailable',
+          now: new Date().toISOString()
+        });
+      }
       return sendJson(res, 200, {
         ok: true,
         role: 'hub',
@@ -1615,7 +1714,8 @@ function createHub({
         apiVersion: HUB_API_VERSION,
         capabilities,
          hubBuild: currentHubBuild('node-hub'),
-         deviceCount: await store.countDevices(),
+         deviceCount,
+         storage,
          secretRequired: auth.secretRequired,
          sessionAuth: Boolean(sessionService && auth.configured),
          sessionIdleDays: resolvedSessionIdleDays,
@@ -2346,10 +2446,23 @@ function createHub({
 
   async function start() {
     // Fail before opening the listening socket when migrations have not run or
-    // MySQL credentials are unusable. The Docker entrypoint runs migrations first.
-    await store.countDevices();
-    await sessionService?.load();
-    if (accountService) await store.listHubAccounts();
+    // MySQL credentials are unusable. The Docker entrypoint runs migrations
+    // first; a remote server (or the container beside the Hub) may still be
+    // starting, so transient connection errors get a bounded backoff instead of
+    // a crash loop. Only startup is retried; a transaction that may have
+    // committed is never replayed.
+    await retryTransient(async () => {
+      await store.countDevices();
+      await sessionService?.load();
+      if (accountService) await store.listHubAccounts();
+    }, {
+      attempts: 6,
+      baseMs: 1000,
+      maxMs: 15_000,
+      onRetry: (error, attempt, delay) => {
+        logger.warn?.(`[hub-start] database not ready (${error?.code || error?.message}); retry ${attempt} in ${delay}ms`);
+      }
+    });
     return new Promise((resolve, reject) => {
       const onError = (err) => { server.off('listening', onListening); reject(err); };
       const onListening = () => {
@@ -2424,7 +2537,12 @@ function createHub({
     // Observability for the SSE registry: a monotonic leak here is what made a
     // busy Hub degrade until restart. Exposed for tests and health diagnostics.
     getSseClientCount: () => sseClients.size,
-    getResourceMetrics: () => ({ ...fleet.metrics(), publisher: publisher.metrics(), responses: jsonResponses.metrics() }),
+    getResourceMetrics: () => ({
+      ...fleet.metrics(),
+      publisher: publisher.metrics(),
+      responses: jsonResponses.metrics(),
+      ...(activePool ? { pool: { ...poolMetrics(activePool), ...(activePool.jiranQueryMetrics || {}) } } : {})
+    }),
     updateService: resolvedUpdateService
   };
 }

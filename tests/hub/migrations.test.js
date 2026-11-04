@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { runMigrations, migrationFiles } = require('../../migrations/run');
+const { runMigrations, migrationFiles, migrationLockName } = require('../../migrations/run');
 
-function fakePool({ applied = [], releaseError = null } = {}) {
+function fakePool({ applied = [], releaseError = null, version = '8.4.8', database = 'token_monitor' } = {}) {
   const calls = [];
   const connection = {
     async execute(sql, params) {
@@ -20,6 +20,8 @@ function fakePool({ applied = [], releaseError = null } = {}) {
     },
     async query(sql) {
       calls.push({ kind: 'query', sql });
+      if (sql.includes('SELECT VERSION()')) return [[{ version }], []];
+      if (sql.includes('SELECT DATABASE()')) return [[{ database_name: database }], []];
       if (sql.includes('SELECT name FROM schema_migrations')) return [applied.map((name) => ({ name })), []];
       return [[], []];
     },
@@ -34,14 +36,39 @@ test('migration runner releases the connection even if advisory-lock cleanup fai
   assert.equal(pool.calls.at(-1).kind, 'release');
 });
 
+test('migration runner refuses a server the schema cannot run on', async () => {
+  await assert.rejects(
+    () => runMigrations(fakePool({ version: '10.11.6-MariaDB' })),
+    /MariaDB is not supported/
+  );
+  await assert.rejects(
+    () => runMigrations(fakePool({ version: '5.7.44' })),
+    /MySQL 8\.0 or newer is required/
+  );
+  const pool = fakePool({ version: '5.7.44' });
+  await assert.rejects(() => runMigrations(pool));
+  assert.equal(pool.calls.some((call) => call.sql?.includes('GET_LOCK')), false);
+  assert.equal(pool.calls.at(-1).kind, 'release');
+});
+
+test('migration lock is scoped by database so apps can share one server', () => {
+  assert.equal(migrationLockName('jiran'), 'token-monitor-schema-migrations:jiran');
+  assert.equal(migrationLockName(''), 'token-monitor-schema-migrations:default');
+  assert.equal(migrationLockName('  other_db  '), 'token-monitor-schema-migrations:other_db');
+  const long = migrationLockName('x'.repeat(80));
+  assert.ok(long.length <= 64, 'MySQL caps GET_LOCK names at 64 characters');
+  assert.match(long, /^token-monitor-schema-migrations:[0-9a-f]{16}$/);
+  assert.notEqual(long, migrationLockName('y'.repeat(80)));
+});
+
 test('migration runner serializes DDL with a MySQL advisory lock and no false transaction boundary', async () => {
   const pool = fakePool();
   await runMigrations(pool);
 
   const lock = pool.calls.find((call) => call.sql.includes('GET_LOCK'));
   const release = pool.calls.find((call) => call.sql.includes('RELEASE_LOCK'));
-  assert.deepEqual(lock.params, ['token-monitor-schema-migrations', 30]);
-  assert.deepEqual(release.params, ['token-monitor-schema-migrations']);
+  assert.deepEqual(lock.params, ['token-monitor-schema-migrations:token_monitor', 30]);
+  assert.deepEqual(release.params, ['token-monitor-schema-migrations:token_monitor']);
   assert.equal(pool.calls.some((call) => call.kind === 'beginTransaction' || call.kind === 'rollback' || call.kind === 'commit'), false);
   const ddlStatement = (sql) => {
     const withoutComments = sql.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n').trim();

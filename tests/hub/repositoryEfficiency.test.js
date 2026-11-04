@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createRepository, emptyUsageRange } = require('../../src/hub/repository');
+const { createRepository, emptyUsageRange, instrumentPoolQueries } = require('../../src/hub/repository');
 const { calculateUsageEventDeltas, usageCandidates } = require('../../src/hub/usage-events');
 const { normalizeDeviceRecord } = require('../../src/shared/usage');
 const { MemoryRepository } = require('./memory-repository');
@@ -174,8 +174,17 @@ test('first inserts, mismatched previous ids and changed/cleared history still b
     assert.match(sql.calls[0].sql, /^UPDATE devices SET/);
     assert.match(sql.calls[0].sql, /history = \?/);
     assert.equal(sql.calls[0].values.at(-2), history === undefined ? null : JSON.stringify(history));
-    assert.match(sql.calls[1].sql, /^INSERT INTO device_ingest_state/);
-    assert.deepEqual(JSON.parse(sql.calls[1].values[1]), JSON.parse(JSON.stringify(next)));
+    // A changed top-level key is patched, not re-sent as the whole document.
+    assert.match(sql.calls[1].sql, /^UPDATE device_ingest_state SET snapshot_json = (JSON_SET|JSON_REMOVE)/);
+    if (history === undefined) {
+      assert.match(sql.calls[1].sql, /JSON_REMOVE\(snapshot_json, '\$\.history'\)/);
+      assert.deepEqual(sql.calls[1].values, ['device-1']);
+    } else {
+      assert.match(sql.calls[1].sql, /'\$\.history', CAST\(\? AS JSON\)/);
+      assert.deepEqual(sql.calls[1].values, [history === null ? 'null' : JSON.stringify(history), 'device-1']);
+    }
+    assert.match(sql.calls[2].sql, /^INSERT INTO device_ingest_baseline/);
+    assert.deepEqual(JSON.parse(sql.calls[2].values[1]), JSON.parse(JSON.stringify(next)));
   }
 });
 
@@ -198,27 +207,33 @@ test('unchanged display-only saves write metadata once and timestamp-only saves 
   assert.equal(serializations, 0);
 });
 
-test('every changed usage/provenance field forces a full display snapshot rather than a timestamp-only update', async () => {
+test('every changed usage/provenance field is patched instead of rewriting the whole snapshot', async () => {
   const previous = {
     deviceId: 'device-1', updatedAt: at, receivedAt: at,
     periods: { allTime: { totalTokens: 123, costUsd: 0.1, clientCredits: { qoder: 0.25 } } },
     history: { days: {} }
   };
-  const changed = [
-    { ...previous, periods: { allTime: { ...previous.periods.allTime, totalTokens: 124 } } },
-    { ...previous, periods: { allTime: { ...previous.periods.allTime, costUsd: 0.1000000001 } } },
-    { ...previous, periods: { allTime: { ...previous.periods.allTime, clientCredits: { qoder: 0.2500000001 } } } },
-    { ...previous, clientStatus: { qoder: { active: true } } },
-    { ...previous, periodWindows: { allTime: { from: at } } },
-    { ...previous, updatedAt: undefined, receivedAt: undefined }
+  const cases = [
+    { record: { ...previous, periods: { allTime: { ...previous.periods.allTime, totalTokens: 124 } } }, key: 'periods' },
+    { record: { ...previous, periods: { allTime: { ...previous.periods.allTime, costUsd: 0.1000000001 } } }, key: 'periods' },
+    { record: { ...previous, periods: { allTime: { ...previous.periods.allTime, clientCredits: { qoder: 0.2500000001 } } } }, key: 'periods' },
+    { record: { ...previous, clientStatus: { qoder: { active: true } } }, key: 'clientStatus' },
+    { record: { ...previous, periodWindows: { allTime: { from: at } } }, key: 'periodWindows' }
   ];
-  for (const record of changed) {
+  for (const { record, key } of cases) {
     const sql = recorder();
     await createRepository(sql).saveDevice(record, sql, { previousRecord: previous });
-    assert.match(sql.calls[1].sql, /^INSERT INTO device_ingest_state/);
-    assert.deepEqual(JSON.parse(sql.calls[1].values[1]), JSON.parse(JSON.stringify(record)));
+    assert.match(sql.calls[1].sql, /^UPDATE device_ingest_state SET snapshot_json = JSON_SET/);
+    assert.match(sql.calls[1].sql, new RegExp(`'\\$\\.${key}', CAST\\(\\? AS JSON\\)`));
+    assert.deepEqual(JSON.parse(sql.calls[1].values[0]), JSON.parse(JSON.stringify(record[key])));
     assert.deepEqual(JSON.parse(sql.calls[2].values[1]), JSON.parse(JSON.stringify(record)));
   }
+  const sql = recorder();
+  const removed = { ...previous, updatedAt: undefined, receivedAt: undefined };
+  await createRepository(sql).saveDevice(removed, sql, { previousRecord: previous });
+  assert.match(sql.calls[1].sql, /^UPDATE device_ingest_state SET snapshot_json = JSON_REMOVE/);
+  assert.match(sql.calls[1].sql, /'\$\.updatedAt', '\$\.receivedAt'/);
+  assert.deepEqual(sql.calls[1].values, ['device-1']);
 });
 
 test('explicit unchanged persisted raw baseline skips its write independently of a changed display', async () => {
@@ -228,8 +243,8 @@ test('explicit unchanged persisted raw baseline skips its write independently of
   const display = { ...previousRecord, periods: { allTime: { totalTokens: 140 } } };
   await createRepository(sql).saveDevice(display, sql, { previousRecord, baseline: raw, previousBaseline: structuredClone(raw) });
   assert.equal(sql.calls.length, 2);
-  assert.match(sql.calls[1].sql, /^INSERT INTO device_ingest_state/);
-  assert.equal(JSON.parse(sql.calls[1].values[1]).periods.allTime.totalTokens, 140);
+  assert.match(sql.calls[1].sql, /^UPDATE device_ingest_state SET snapshot_json = JSON_SET/);
+  assert.deepEqual(JSON.parse(sql.calls[1].values[0]).allTime.totalTokens, 140);
   assert.ok(sql.calls.every((call) => !call.sql.includes('device_ingest_baseline')));
 });
 
@@ -299,28 +314,35 @@ test('unknown/wrong-device previous raw baseline always performs the first full 
   }
 });
 
-test('raw delta, credit, attribution, history and timestamp-shape changes force a full baseline write', async () => {
+test('raw delta, credit, attribution, history and timestamp-shape changes patch the baseline', async () => {
   const raw = {
     deviceId: 'device-1', updatedAt: at, receivedAt: at, history: { days: {} },
     periods: { allTime: { totalTokens: 60, costUsd: 0.0000000001, clientCredits: { qoder: 0.25 } } }
   };
   const record = { ...raw, periods: { allTime: { totalTokens: 160 } } };
   const changes = [
-    { ...raw, periods: { allTime: { ...raw.periods.allTime, totalTokens: 61 } } },
-    { ...raw, periods: { allTime: { ...raw.periods.allTime, costUsd: 0.0000000002 } } },
-    { ...raw, periods: { allTime: { ...raw.periods.allTime, clientCredits: { qoder: 0.2500000001 } } } },
-    { ...raw, periodWindows: { allTime: { from: at } } },
-    { ...raw, history: { days: { '2026-10-24': { totalTokens: 60 } } } },
-    { ...raw, updatedAt: undefined, receivedAt: undefined }
+    { baseline: { ...raw, periods: { allTime: { ...raw.periods.allTime, totalTokens: 61 } } }, key: 'periods' },
+    { baseline: { ...raw, periods: { allTime: { ...raw.periods.allTime, costUsd: 0.0000000002 } } }, key: 'periods' },
+    { baseline: { ...raw, periods: { allTime: { ...raw.periods.allTime, clientCredits: { qoder: 0.2500000001 } } } }, key: 'periods' },
+    { baseline: { ...raw, periodWindows: { allTime: { from: at } } }, key: 'periodWindows' },
+    { baseline: { ...raw, history: { days: { '2026-10-24': { totalTokens: 60 } } } }, key: 'history' }
   ];
-  for (const baseline of changes) {
+  for (const { baseline, key } of changes) {
     const sql = recorder();
     await createRepository(sql).saveDevice(record, sql, { previousRecord: record, baseline, previousBaseline: raw });
     assert.equal(sql.calls.length, 2);
-    assert.match(sql.calls[1].sql, /^INSERT INTO device_ingest_baseline/);
-    assert.deepEqual(JSON.parse(sql.calls[1].values[1]), JSON.parse(JSON.stringify(baseline)));
-    assert.doesNotMatch(sql.calls[1].sql.split('ON DUPLICATE KEY UPDATE')[1], /transferred/);
+    assert.match(sql.calls[1].sql, /^UPDATE device_ingest_baseline SET snapshot_json = JSON_SET/);
+    assert.match(sql.calls[1].sql, new RegExp(`'\\$\\.${key}', CAST\\(\\? AS JSON\\)`));
+    assert.deepEqual(JSON.parse(sql.calls[1].values[0]), JSON.parse(JSON.stringify(baseline[key])));
+    assert.doesNotMatch(sql.calls[1].sql, /transferred/);
   }
+  const sql = recorder();
+  const removed = { ...raw, updatedAt: undefined, receivedAt: undefined };
+  await createRepository(sql).saveDevice(record, sql, { previousRecord: record, baseline: removed, previousBaseline: raw });
+  assert.equal(sql.calls.length, 2);
+  assert.match(sql.calls[1].sql, /^UPDATE device_ingest_baseline SET snapshot_json = JSON_REMOVE/);
+  assert.match(sql.calls[1].sql, /'\$\.updatedAt', '\$\.receivedAt'/);
+  assert.deepEqual(sql.calls[1].values, ['device-1']);
 });
 
 test('memory baseline updates mirror previousBaseline hints while retaining transferred and zero replay deltas', async () => {
@@ -579,4 +601,84 @@ test('normalized delta fast path matches the validating default including credit
   assert.deepEqual(usageCandidates(normalizedAfter, { normalized: true }), usageCandidates(after));
   assert.equal(calculateUsageEventDeltas(before, after).events[0].credits, 0.5);
   assert.equal(calculateUsageEventDeltas(after, before).events[0].counterReset, true);
+});
+
+test('ingest state is read under the device lock in one statement', async () => {
+  const display = { deviceId: 'device-1', updatedAt: at, periods: { allTime: { totalTokens: 5 } } };
+  const baseline = { deviceId: 'device-1', updatedAt: at, periods: { allTime: { totalTokens: 7 } } };
+  const sql = recorder(() => [{
+    device_id: 'device-1',
+    deleted_at: null,
+    display_json: JSON.stringify(display),
+    baseline_json: JSON.stringify(baseline),
+    transferred: 0
+  }]);
+  const state = await createRepository(sql).lockAndLoadIngestState('device-1');
+  assert.equal(sql.calls.length, 1);
+  assert.match(sql.calls[0].sql, /LEFT JOIN device_ingest_state/);
+  assert.match(sql.calls[0].sql, /LEFT JOIN device_ingest_baseline/);
+  assert.match(sql.calls[0].sql, /FOR UPDATE/);
+  assert.deepEqual(state, { found: true, display, baseline, transferred: false, active: true });
+});
+
+test('ingest state treats a missing baseline row as the display and reports a soft-deleted device', async () => {
+  const display = { deviceId: 'device-1', updatedAt: at, periods: { allTime: { totalTokens: 5 } } };
+  const repository = () => createRepository(recorder(() => [{
+    device_id: 'device-1',
+    deleted_at: '2026-10-24T00:00:00.000Z',
+    display_json: JSON.stringify(display),
+    baseline_json: null,
+    transferred: null
+  }]));
+  const state = await repository().lockAndLoadIngestState('device-1');
+  assert.deepEqual(state.baseline, display);
+  assert.equal(state.transferred, false);
+  assert.equal(state.active, false);
+
+  const missing = await createRepository(recorder(() => [])).lockAndLoadIngestState('missing');
+  assert.deepEqual(missing, { found: false, display: null, baseline: null, transferred: false, active: false });
+});
+
+test('a commit failure is surfaced without replaying the ledger write', async () => {
+  let connections = 0;
+  let destroys = 0;
+  let releases = 0;
+  let inserts = 0;
+  const connection = {
+    async beginTransaction() {},
+    async execute() { inserts += 1; return [[], []]; },
+    async commit() {
+      const error = new Error('connection lost during commit');
+      error.code = 'PROTOCOL_CONNECTION_LOST';
+      throw error;
+    },
+    destroy() { destroys += 1; },
+    release() { releases += 1; }
+  };
+  const repository = createRepository({ async getConnection() { connections += 1; return connection; } });
+  await assert.rejects(
+    () => repository.transaction((executor) => executor.execute('INSERT INTO usage_events (device_id) VALUES (?)', ['device-1'])),
+    /connection lost during commit/
+  );
+  assert.equal(connections, 1, 'the work phase must not be replayed after COMMIT was sent');
+  assert.equal(inserts, 1);
+  assert.equal(destroys, 1, 'an unknown-commit connection must not go back to the pool');
+  assert.equal(releases, 0);
+});
+
+test('query instrumentation counts statements and logs SQL text without bound values', async () => {
+  const logs = [];
+  const pool = {
+    async query() { await new Promise((resolve) => setTimeout(resolve, 5)); return [[], []]; },
+    async execute() { return [[], []]; }
+  };
+  const metrics = instrumentPoolQueries(pool, { slowQueryMs: 1, logger: { warn: (line) => logs.push(line) } });
+  await pool.query('SELECT * FROM devices WHERE device_id = ?', ['dev-secret']);
+  await pool.execute('SELECT 1');
+  assert.equal(metrics.queries, 2);
+  assert.equal(metrics.slowQueries, 1);
+  assert.ok(metrics.maxMs > 0);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /SELECT \* FROM devices/);
+  assert.doesNotMatch(logs[0], /dev-secret/);
 });

@@ -105,6 +105,34 @@ test('health keeps the documented API version', async () => {
     assert.equal(health.version, 1);
     assert.equal(health.apiVersion, 3);
     assert.equal(health.capabilities.usageRange, true);
+    assert.equal(health.storage.ok, true);
+    assert.equal(health.storage.driver, 'mysql');
+    assert.equal(typeof health.storage.latencyMs, 'number');
+    // The route is unauthenticated: no target, user, host or driver text.
+    assert.deepEqual(Object.keys(health.storage).sort(), ['driver', 'latencyMs', 'ok']);
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('health answers 503 when the database is unreadable', async () => {
+  const repository = new MemoryRepository();
+  const { hub } = createMemoryHub({ repository });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    repository.countDevices = async () => {
+      const error = new Error('connect ECONNREFUSED 10.0.0.5:3306');
+      error.code = 'ECONNREFUSED';
+      throw error;
+    };
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.error, 'hub_storage_unavailable');
+    assert.equal(body.storage.ok, false);
+    assert.doesNotMatch(JSON.stringify(body), /10\.0\.0\.5|ECONNREFUSED/);
   } finally {
     await hub.stop();
   }
@@ -280,9 +308,9 @@ test('concurrent cumulative ingests serialize one device baseline', async () => 
   let release;
   const entered = new Promise((resolve) => { enteredResolve = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
-  const originalLock = repository.lockDevice.bind(repository);
+  const originalLock = repository.lockAndLoadIngestState.bind(repository);
   let first = true;
-  repository.lockDevice = async (...args) => {
+  repository.lockAndLoadIngestState = async (...args) => {
     const result = await originalLock(...args);
     if (first) {
       first = false;
@@ -628,4 +656,49 @@ test('device sessions: changing the owner secret revokes old sessions', async ()
   } finally {
     await second.stop();
   }
+});
+
+test('ingest reuses pricing rows across ticks and clears them on a price write', async () => {
+  const repository = new MemoryRepository();
+  let reads = 0;
+  const original = repository.getPricing.bind(repository);
+  repository.getPricing = async (...args) => {
+    reads += 1;
+    return original(...args);
+  };
+  const { hub } = createMemoryHub({ repository });
+  await hub.setPricing('gpt-5', {
+    inputPricePerMillion: 1, outputPricePerMillion: 0, cacheReadPricePerMillion: 0, cacheWritePricePerMillion: 0
+  });
+  await hub.ingest(payload(100, { updatedAt: '2026-07-18T00:00:00.000Z' }));
+  await hub.ingest(payload(150, { updatedAt: '2026-07-18T00:00:01.000Z' }));
+  assert.equal(reads, 1, 'the second tick must not query the pricing table again');
+  await hub.setPricing('gpt-5', {
+    inputPricePerMillion: 2, outputPricePerMillion: 0, cacheReadPricePerMillion: 0, cacheWritePricePerMillion: 0
+  });
+  await hub.ingest(payload(200, { updatedAt: '2026-07-18T00:00:02.000Z' }));
+  assert.equal(reads, 2, 'a price edit invalidates the cached rows');
+});
+
+test('a normal ingest hands the persisted sessions to the session diff', async () => {
+  const repository = new MemoryRepository();
+  const seenPrevious = [];
+  const original = repository.replaceSessions.bind(repository);
+  repository.replaceSessions = async (deviceId, summaries, executor, options) => {
+    seenPrevious.push(options?.previousSummaries);
+    return original(deviceId, summaries, executor, options);
+  };
+  const { hub } = createMemoryHub({ repository });
+  await hub.ingest(payload(100, { updatedAt: '2026-07-18T00:00:00.000Z' }));
+  await hub.ingest(payload(150, { updatedAt: '2026-07-18T00:00:01.000Z' }));
+  assert.equal(seenPrevious[0], undefined, 'the first ingest has no persisted sessions to reuse');
+  assert.equal(seenPrevious[1].length, 1);
+  assert.equal(seenPrevious[1][0].client, 'codex');
+  assert.equal(seenPrevious[1][0].sessionId, 'session-1');
+
+  // A soft-deleted device has its session rows cleared, so the fast path must
+  // stop being offered until the next ingest has repopulated them.
+  await hub.deleteDevice('dev-a');
+  await hub.ingest(payload(200, { updatedAt: '2026-07-18T00:00:02.000Z' }));
+  assert.equal(seenPrevious.at(-1), undefined);
 });

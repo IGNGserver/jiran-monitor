@@ -67,6 +67,20 @@ class MemoryRepository {
   // server tests exercise the same lock-before-baseline call sequence.
   async lockDevice(deviceId) { return this.devices.has(deviceId); }
 
+  // Mirrors repository.lockAndLoadIngestState: one call that returns the lock,
+  // the display snapshot, the raw baseline and whether the device is active.
+  async lockAndLoadIngestState(deviceId) {
+    const display = this.devices.get(deviceId) || null;
+    const baseline = this.baselines.get(deviceId) || display;
+    return {
+      found: Boolean(display),
+      display: clone(display),
+      baseline: clone(baseline),
+      transferred: this.transferredDevices.has(deviceId),
+      active: Boolean(display) && !this.hiddenDevices.has(deviceId)
+    };
+  }
+
   async saveDevice(record, _executor, options = {}) {
     const stored = { ...record };
     delete stored.limits;

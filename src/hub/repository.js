@@ -3,6 +3,11 @@
 const mysql = require('mysql2/promise');
 const { isDeepStrictEqual } = require('node:util');
 const { emptySubscriptionDocument } = require('../shared/subscriptionDisplay');
+const {
+  describeDatabaseTarget,
+  poolOptionsFromConfig,
+  resolveDatabaseConfig
+} = require('./databaseConfig');
 
 const RESERVED_DYNAMIC_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -26,26 +31,85 @@ function ensureNestedMap(map, key) {
   return map[key];
 }
 
+// A remote database makes per-statement timing the only way to tell a slow
+// query apart from a slow link. The wrapper is passive (no extra round trips),
+// counts every statement, and logs only the ones over the threshold with the
+// SQL text truncated — values are never logged.
+function instrumentPoolQueries(pool, { slowQueryMs = 1000, logger = console } = {}) {
+  const metrics = { queries: 0, slowQueries: 0, totalMs: 0, maxMs: 0 };
+  const wrapped = new WeakSet();
+
+  function record(startedAt, sql) {
+    const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    metrics.queries += 1;
+    metrics.totalMs += ms;
+    if (ms > metrics.maxMs) metrics.maxMs = ms;
+    if (slowQueryMs > 0 && ms >= slowQueryMs) {
+      metrics.slowQueries += 1;
+      const text = typeof sql === 'string' ? sql : String(sql?.sql || '');
+      logger.warn?.(`[mysql-slow] ${Math.round(ms)}ms ${text.replace(/\s+/g, ' ').trim().slice(0, 180)}`);
+    }
+  }
+
+  function wrap(target, method) {
+    const original = target?.[method];
+    if (typeof original !== 'function') return;
+    target[method] = async function timedStatement(sql, ...rest) {
+      const startedAt = process.hrtime.bigint();
+      try {
+        return await original.call(this, sql, ...rest);
+      } finally {
+        record(startedAt, sql);
+      }
+    };
+  }
+
+  wrap(pool, 'query');
+  wrap(pool, 'execute');
+  const originalGetConnection = typeof pool.getConnection === 'function' ? pool.getConnection.bind(pool) : null;
+  if (originalGetConnection) {
+    pool.getConnection = async function timedGetConnection(...args) {
+      const connection = await originalGetConnection(...args);
+      if (connection && !wrapped.has(connection)) {
+        wrapped.add(connection);
+        wrap(connection, 'query');
+        wrap(connection, 'execute');
+      }
+      return connection;
+    };
+  }
+  pool.jiranQueryMetrics = metrics;
+  return metrics;
+}
+
 function createMySqlPool(options = {}) {
-  const pool = mysql.createPool({
-    host: options.host || process.env.MYSQL_HOST || '127.0.0.1',
-    port: Number(options.port || process.env.MYSQL_PORT || 3306),
-    user: options.user || process.env.MYSQL_USER || 'token_monitor',
-    password: options.password ?? process.env.MYSQL_PASSWORD ?? '',
-    database: options.database || process.env.MYSQL_DATABASE || 'token_monitor',
-    waitForConnections: true,
-    connectionLimit: Number(options.connectionLimit || process.env.MYSQL_CONNECTION_LIMIT || 10),
-    // mysql2 has no acquire timeout and defaults queueLimit to 0 (unbounded), so
-    // without a limit a saturated pool leaves every DB-backed route hanging with
-    // no error. A bounded queue turns that into a fast 503, which clients already
-    // treat as a transport failure.
-    queueLimit: Math.max(0, Number(options.queueLimit ?? process.env.MYSQL_QUEUE_LIMIT ?? 200) || 0),
-    connectTimeout: Math.max(1000, Number(options.connectTimeout ?? process.env.MYSQL_CONNECT_TIMEOUT_MS ?? 10_000) || 10_000),
-    timezone: 'Z',
-    decimalNumbers: true,
-    dateStrings: false,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 10000
+  // One resolver for the URL form and the historical MYSQL_* variables. The
+  // queueLimit rationale still applies: mysql2 has no acquire timeout and
+  // defaults queueLimit to 0 (unbounded), so without a limit a saturated pool
+  // leaves every DB-backed route hanging with no error. A bounded queue turns
+  // that into a fast 503, which clients already treat as a transport failure.
+  const config = resolveDatabaseConfig({ options });
+  const pool = mysql.createPool(poolOptionsFromConfig(config));
+
+  if (options.log !== false) {
+    for (const warning of config.warnings) console.warn?.(`[mysql-config] ${warning}`);
+    console.log?.(
+      `[mysql-config] ${describeDatabaseTarget(config)} `
+      + `source=${config.source} pool=${config.pool.connectionLimit} maxIdle=${config.pool.maxIdle} `
+      + `connectTimeout=${config.pool.connectTimeout}ms queue=${config.pool.queueLimit}`
+    );
+  }
+  // Redacted snapshot for /api/health-adjacent diagnostics; never the password.
+  pool.jiranDatabase = Object.freeze({
+    source: config.source,
+    target: describeDatabaseTarget(config),
+    pool: config.pool,
+    tls: Boolean(config.ssl)
+  });
+  const slowQueryMs = Number(process.env.MYSQL_SLOW_QUERY_MS);
+  instrumentPoolQueries(pool, {
+    slowQueryMs: Number.isFinite(slowQueryMs) && slowQueryMs >= 0 ? slowQueryMs : 1000,
+    logger: options.logger || console
   });
 
   if (typeof pool.on === 'function') {
@@ -240,17 +304,76 @@ function sameStoredValue(left, right) {
     && keys.every((key) => hasOwn(right, key) && sameStoredValue(left[key], right[key]));
 }
 
-function sameSnapshotExceptTimes(previous, current) {
-  // JSON_SET below writes strings, matching normalized wire timestamps. Other
-  // types or absent fields take the full snapshot path without coercion.
-  if (typeof current.updatedAt !== 'string' || typeof current.receivedAt !== 'string') return false;
-  const withoutTimes = (record) => {
-    const content = { ...record };
-    delete content.updatedAt;
-    delete content.receivedAt;
-    return content;
-  };
-  return sameStoredValue(withoutTimes(previous), withoutTimes(current));
+// A snapshot is one JSON document, but only a few of its top-level keys move on
+// a normal tick. JSON_SET/JSON_REMOVE let the Hub send the changed fragments
+// instead of re-sending (and re-parsing) history and attribution that did not
+// change. The caller still owns one serialization for the full-write fallback.
+const SNAPSHOT_KEY_ORDER = new Map([['updatedAt', 0], ['receivedAt', 1]]);
+
+function snapshotJsonPath(key) {
+  // Only plain top-level identifiers are addressed; anything else falls back to
+  // a full document write rather than interpolating an unchecked SQL string.
+  return /^[A-Za-z0-9_]+$/.test(key) ? `'$.${key}'` : null;
+}
+
+function snapshotPatch(previous, current) {
+  const keys = [...new Set([...Object.keys(previous || {}), ...Object.keys(current || {})])]
+    .filter((key) => key !== 'deviceId')
+    .sort((left, right) => (SNAPSHOT_KEY_ORDER.get(left) ?? 2) - (SNAPSHOT_KEY_ORDER.get(right) ?? 2)
+      || left.localeCompare(right));
+  const sets = [];
+  const removes = [];
+  for (const key of keys) {
+    const path = snapshotJsonPath(key);
+    if (!path) return null;
+    const hasPrevious = hasOwn(previous, key) && previous[key] !== undefined;
+    const hasCurrent = hasOwn(current, key) && current[key] !== undefined;
+    if (!hasCurrent) {
+      if (hasPrevious) removes.push(path);
+      continue;
+    }
+    if (hasPrevious && sameStoredValue(previous[key], current[key])) continue;
+    const value = current[key];
+    if (value === null) {
+      // JSON_SET() returns SQL NULL when its value argument is SQL NULL, which
+      // would erase the column. CAST('null' AS JSON) is the JSON null literal.
+      sets.push({ path, sql: 'CAST(? AS JSON)', value: 'null' });
+    } else if (typeof value === 'object') {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) return null;
+      sets.push({ path, sql: 'CAST(? AS JSON)', value: serialized });
+    } else if (['string', 'number', 'boolean'].includes(typeof value)) {
+      sets.push({ path, sql: '?', value });
+    } else {
+      return null;
+    }
+  }
+  return { sets, removes };
+}
+
+async function writeSnapshotDocument(executor, table, deviceId, previous, current, serialize) {
+  if (!previous) {
+    await executor.execute(`INSERT INTO ${table} (device_id, snapshot_json)
+      VALUES (?, ?) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [deviceId, serialize()]);
+    return;
+  }
+  const patch = snapshotPatch(previous, current);
+  if (!patch) {
+    await executor.execute(`INSERT INTO ${table} (device_id, snapshot_json)
+      VALUES (?, ?) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [deviceId, serialize()]);
+    return;
+  }
+  if (patch.sets.length === 0 && patch.removes.length === 0) return;
+  let expression = 'snapshot_json';
+  const values = [];
+  for (const set of patch.sets) {
+    expression = `JSON_SET(${expression}, ${set.path}, ${set.sql})`;
+    values.push(set.value);
+  }
+  if (patch.removes.length > 0) {
+    expression = `JSON_REMOVE(${expression}, ${patch.removes.join(', ')})`;
+  }
+  await executor.execute(`UPDATE ${table} SET snapshot_json = ${expression} WHERE device_id = ?`, [...values, deviceId]);
 }
 
 const SESSION_COUNTERS = [
@@ -308,6 +431,40 @@ function createRepository(pool) {
     return rows.length > 0;
   }
 
+  // One round trip instead of lockDevice + getDeviceRecord + getIngestBaseline.
+  // `FOR UPDATE` still serializes cumulative deltas for one device; the joins
+  // only add rows of the same device. `active` is false for a soft-deleted
+  // device whose sessions table was cleared by DELETE, which is why the caller
+  // must not trust the stored session document as a mirror of the table then.
+  async function lockAndLoadIngestState(deviceId, executor = pool) {
+    const [rows] = await executor.execute(`SELECT device.device_id AS device_id,
+        device.deleted_at AS deleted_at,
+        state.snapshot_json AS display_json,
+        baseline.snapshot_json AS baseline_json,
+        baseline.transferred AS transferred
+      FROM devices device
+      LEFT JOIN device_ingest_state state ON state.device_id = device.device_id
+      LEFT JOIN device_ingest_baseline baseline ON baseline.device_id = device.device_id
+      WHERE device.device_id = ? FOR UPDATE`, [String(deviceId || '')]);
+    if (rows.length === 0) {
+      return { found: false, display: null, baseline: null, transferred: false, active: false };
+    }
+    const row = rows[0];
+    const display = row.display_json === null || row.display_json === undefined
+      ? null : parseJson(row.display_json, null);
+    const storedBaseline = row.baseline_json === null || row.baseline_json === undefined
+      ? null : parseJson(row.baseline_json, null);
+    return {
+      found: true,
+      display,
+      // Pre-007 databases (or a device that predates the baseline table) treated
+      // the display snapshot as the baseline; keep that fallback.
+      baseline: storedBaseline || display,
+      transferred: Number(row.transferred) === 1,
+      active: row.deleted_at === null || row.deleted_at === undefined
+    };
+  }
+
   async function saveDevice(record, executor = pool, options = {}) {
     const stored = storedSnapshot(record);
     // This option is the persisted display snapshot read under the caller's
@@ -343,13 +500,7 @@ function createRepository(pool) {
         deleted_at = NULL`, [record.deviceId, ...values]);
     }
     if (!previous || !sameStoredValue(previous, stored)) {
-      if (previous && sameSnapshotExceptTimes(previous, stored)) {
-        await executor.execute(`UPDATE device_ingest_state SET snapshot_json = JSON_SET(snapshot_json,
-          '$.updatedAt', ?, '$.receivedAt', ?) WHERE device_id = ?`, [record.updatedAt, record.receivedAt, record.deviceId]);
-      } else {
-        await executor.execute(`INSERT INTO device_ingest_state (device_id, snapshot_json)
-          VALUES (?, ?) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, serialize()]);
-      }
+      await writeSnapshotDocument(executor, 'device_ingest_state', record.deviceId, previous, stored, serialize);
     }
     // Legacy callers still mirror display -> baseline. Ingest may explicitly
     // supply the raw cumulative record when the display is transfer-adjusted;
@@ -362,19 +513,11 @@ function createRepository(pool) {
     // make display and raw differ. Unknown/first persistence keeps the upsert.
     const previousBaseline = options.previousBaseline?.deviceId === record.deviceId
       ? storedSnapshot(options.previousBaseline) : null;
-    if (previousBaseline) {
-      if (sameStoredValue(previousBaseline, baseline)) return;
-      if (sameSnapshotExceptTimes(previousBaseline, baseline)) {
-        await executor.execute(`UPDATE device_ingest_baseline SET snapshot_json = JSON_SET(snapshot_json,
-          '$.updatedAt', ?, '$.receivedAt', ?) WHERE device_id = ?`, [baseline.updatedAt, baseline.receivedAt, record.deviceId]);
-        return;
-      }
-    }
     // The usual rawCumulative is a shallow clone of the unadjusted display.
-    // Reuse its serialization even when those root objects are not identical.
-    const baselineJson = sameStoredValue(stored, baseline) ? serialize() : JSON.stringify(baseline);
-    await executor.execute(`INSERT INTO device_ingest_baseline (device_id, snapshot_json, transferred)
-      VALUES (?, ?, 0) ON DUPLICATE KEY UPDATE snapshot_json = VALUES(snapshot_json)`, [record.deviceId, baselineJson]);
+    // Reuse its serialization even when those root objects are not identical,
+    // and only compute it when a full write is actually chosen.
+    const baselineJson = () => (sameStoredValue(stored, baseline) ? serialize() : JSON.stringify(baseline));
+    await writeSnapshotDocument(executor, 'device_ingest_baseline', record.deviceId, previousBaseline, baseline, baselineJson);
   }
 
   async function countDevices(executor = pool) {
@@ -960,21 +1103,37 @@ function createRepository(pool) {
         }
         throw connErr;
       }
+      // Once COMMIT has been sent, its outcome is unknown to this process. A
+      // retry there can duplicate append-only ledger rows (the ingest inserts
+      // `usage_events` deltas), so only the work phase is retried. A failed
+      // commit is reported to the caller, which retries the whole upload; that
+      // is safe because the next delta is recomputed from the persisted
+      // baseline (zero when the first commit did land).
+      let commitStarted = false;
+      let connectionDestroyed = false;
       try {
         await connection.beginTransaction();
         const result = await work(connection);
+        commitStarted = true;
         await connection.commit();
         return result;
       } catch (error) {
-        try { await connection.rollback(); } catch (_) {}
-        if (attempt < maxAttempts && RETRYABLE_SQL_ERRORS.has(error?.code)) {
+        if (commitStarted) {
+          // Leave the socket in an unknown protocol state out of the pool.
+          try { connection.destroy(); connectionDestroyed = true; } catch (_) {}
+        } else {
+          try { await connection.rollback(); } catch (_) {}
+        }
+        if (!commitStarted && attempt < maxAttempts && RETRYABLE_SQL_ERRORS.has(error?.code)) {
           lastError = error;
           await new Promise((r) => setTimeout(r, 200));
           continue;
         }
         throw error;
       } finally {
-        try { connection.release(); } catch (_) {}
+        if (!connectionDestroyed) {
+          try { connection.release(); } catch (_) {}
+        }
       }
     }
     throw lastError;
@@ -1006,6 +1165,7 @@ function createRepository(pool) {
     loadActiveHubSessions,
     listKnownModels,
     listPricing,
+    lockAndLoadIngestState,
     lockDevice,
     mergeDeviceSessions,
     moveDeviceUsageEvents,
@@ -1025,4 +1185,4 @@ function createRepository(pool) {
   };
 }
 
-module.exports = { createMySqlPool, createRepository, parseJson, emptyUsageRange };
+module.exports = { createMySqlPool, createRepository, instrumentPoolQueries, parseJson, emptyUsageRange };

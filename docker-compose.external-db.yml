@@ -1,0 +1,70 @@
+# Jiran Hub against an existing MySQL server.
+#
+# Use this file instead of docker-compose.yml when several apps on one machine
+# already run — or share — a database server. It starts only the Hub: no mysql
+# container, no database volume, no depends_on. The target is the single
+# JIRAN_DATABASE_URL variable (mysql://user:password@host:3306/database).
+#
+#   cp .env.example .env        # set JIRAN_SECRET and JIRAN_DATABASE_URL
+#   docker compose -f docker-compose.external-db.yml up -d
+#
+# Keep every instance on its own database: the Hub caches the fleet in process,
+# so two Hub processes must never point at the same schema. The migration lock
+# is scoped by database name, so different databases on one server do not block
+# each other.
+#
+# The bundled-database file remains the default for a standalone deployment.
+services:
+  hub:
+    image: ghcr.io/igngserver/jiran-hub:${TOKEN_MONITOR_VERSION:-${JIRAN_VERSION:-latest}}
+    restart: unless-stopped
+    environment:
+      TOKEN_MONITOR_PORT: 17321
+      TOKEN_MONITOR_HOST: 0.0.0.0
+      TOKEN_MONITOR_SECRET: ${TOKEN_MONITOR_SECRET:-${JIRAN_SECRET:-}}
+      TOKEN_MONITOR_ALLOW_INSECURE_HTTP: ${TOKEN_MONITOR_ALLOW_INSECURE_HTTP:-${JIRAN_ALLOW_INSECURE_HTTP:-0}}
+      TOKEN_MONITOR_STALE_AFTER_MS: ${TOKEN_MONITOR_STALE_AFTER_MS:-${JIRAN_STALE_AFTER_MS:-600000}}
+      TOKEN_MONITOR_FLEET_TIMEZONE: ${TOKEN_MONITOR_FLEET_TIMEZONE:-${JIRAN_FLEET_TIMEZONE:-}}
+      TOKEN_MONITOR_TRUST_PROXY: ${TOKEN_MONITOR_TRUST_PROXY:-${JIRAN_TRUST_PROXY:-0}}
+      TOKEN_MONITOR_HUB_REFRESH_MS: ${TOKEN_MONITOR_HUB_REFRESH_MS:-${JIRAN_HUB_REFRESH_MS:-300000}}
+      TOKEN_MONITOR_HUB_ACCOUNT_CONCURRENCY: ${TOKEN_MONITOR_HUB_ACCOUNT_CONCURRENCY:-${JIRAN_HUB_ACCOUNT_CONCURRENCY:-4}}
+      TOKEN_MONITOR_HUB_PROBE_DEADLINE_MS: ${TOKEN_MONITOR_HUB_PROBE_DEADLINE_MS:-${JIRAN_HUB_PROBE_DEADLINE_MS:-60000}}
+      TOKEN_MONITOR_HUB_STATS_TTL_MS: ${TOKEN_MONITOR_HUB_STATS_TTL_MS:-${JIRAN_HUB_STATS_TTL_MS:-1000}}
+      TOKEN_MONITOR_UPDATE_GITHUB_TOKEN: ${TOKEN_MONITOR_UPDATE_GITHUB_TOKEN:-${JIRAN_UPDATE_GITHUB_TOKEN:-}}
+      TOKEN_MONITOR_UPDATE_CACHE_MS: ${TOKEN_MONITOR_UPDATE_CACHE_MS:-${JIRAN_UPDATE_CACHE_MS:-600000}}
+      TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-}
+      TOKEN_MONITOR_SESSION_IDLE_DAYS: ${TOKEN_MONITOR_SESSION_IDLE_DAYS:-${JIRAN_SESSION_IDLE_DAYS:-0}}
+      AGY_OAUTH_CLIENT_SECRET: ${AGY_OAUTH_CLIENT_SECRET:-}
+      # Required: mysql://user:password@host:3306/database
+      JIRAN_DATABASE_URL: ${JIRAN_DATABASE_URL:?Set JIRAN_DATABASE_URL to your MySQL server}
+      JIRAN_DATABASE_SSL: ${JIRAN_DATABASE_SSL:-}
+      # Mount the CA into the container first, e.g. -v ./certs:/certs:ro
+      JIRAN_DATABASE_SSL_CA: ${JIRAN_DATABASE_SSL_CA:-}
+      JIRAN_DATABASE_SSL_REJECT_UNAUTHORIZED: ${JIRAN_DATABASE_SSL_REJECT_UNAUTHORIZED:-}
+      # Pool sizing: several Hubs on one server multiply connectionLimit.
+      MYSQL_CONNECTION_LIMIT: ${MYSQL_CONNECTION_LIMIT:-5}
+      MYSQL_QUEUE_LIMIT: ${MYSQL_QUEUE_LIMIT:-200}
+      MYSQL_CONNECT_TIMEOUT_MS: ${MYSQL_CONNECT_TIMEOUT_MS:-10000}
+      MYSQL_MAX_IDLE: ${MYSQL_MAX_IDLE:-2}
+      MYSQL_IDLE_TIMEOUT_MS: ${MYSQL_IDLE_TIMEOUT_MS:-30000}
+      MYSQL_SLOW_QUERY_MS: ${MYSQL_SLOW_QUERY_MS:-1000}
+      TOKSCALE_PRICING_CATALOG_URL: ${TOKSCALE_PRICING_CATALOG_URL:-https://models.dev/api.json}
+      TOKEN_MONITOR_TLS_CERT: ${TOKEN_MONITOR_TLS_CERT:-}
+      TOKEN_MONITOR_TLS_KEY: ${TOKEN_MONITOR_TLS_KEY:-}
+      TOKEN_MONITOR_TLS_CA: ${TOKEN_MONITOR_TLS_CA:-}
+    # Mount certs when TLS env paths are set, e.g.:
+    # volumes:
+    #   - ./certs:/certs:ro
+    ports:
+      - "${TOKEN_MONITOR_PORT:-${JIRAN_PORT:-17321}}:17321"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "const s=process.env.TOKEN_MONITOR_TLS_CERT?'https':'http';
+          require(s).get({host:'127.0.0.1',port:17321,path:'/api/health',rejectUnauthorized:false,timeout:4000},
+          r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1);});"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

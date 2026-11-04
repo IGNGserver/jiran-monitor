@@ -72,6 +72,17 @@ services:
       MYSQL_CONNECTION_LIMIT: ${MYSQL_CONNECTION_LIMIT:-10}
       MYSQL_QUEUE_LIMIT: ${MYSQL_QUEUE_LIMIT:-200}
       MYSQL_CONNECT_TIMEOUT_MS: ${MYSQL_CONNECT_TIMEOUT_MS:-10000}
+      MYSQL_MAX_IDLE: ${MYSQL_MAX_IDLE:-2}
+      MYSQL_IDLE_TIMEOUT_MS: ${MYSQL_IDLE_TIMEOUT_MS:-30000}
+      MYSQL_SLOW_QUERY_MS: ${MYSQL_SLOW_QUERY_MS:-1000}
+      # Optional single-URL database target. When set it wins over the MYSQL_*
+      # target variables above (the bundled mysql service keeps running unless
+      # you deploy with docker-compose.external-db.yml instead).
+      JIRAN_DATABASE_URL: ${JIRAN_DATABASE_URL:-}
+      JIRAN_DATABASE_SSL: ${JIRAN_DATABASE_SSL:-}
+      JIRAN_DATABASE_SSL_CA: ${JIRAN_DATABASE_SSL_CA:-}
+      JIRAN_DATABASE_SSL_REJECT_UNAUTHORIZED: ${JIRAN_DATABASE_SSL_REJECT_UNAUTHORIZED:-}
+      JIRAN_DATABASE_SOCKET: ${JIRAN_DATABASE_SOCKET:-}
       TOKSCALE_PRICING_CATALOG_URL: ${TOKSCALE_PRICING_CATALOG_URL:-https://models.dev/api.json}
       # Optional HTTPS (enable true PWA install on mobile LAN clients):
       TOKEN_MONITOR_TLS_CERT: ${TOKEN_MONITOR_TLS_CERT:-}

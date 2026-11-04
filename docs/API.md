@@ -75,6 +75,7 @@ Example response:
     "sessionAuth": true
   },
   "deviceCount": 2,
+  "storage": { "ok": true, "driver": "mysql", "latencyMs": 3 },
   "secretRequired": true,
   "sessionAuth": true,
   "sessionIdleDays": 0,
@@ -84,6 +85,8 @@ Example response:
 ```
 
 `version` remains `1` for compatibility. `apiVersion` versions the capability/authentication contract. The Docker Compose Hub exposes the full capability set shown above.
+
+`storage` is the database probe the Docker healthcheck depends on: `ok` is false and the route answers **503** with `{"ok": false, "error": "hub_storage_unavailable", "storage": {...}}` when MySQL cannot be read, so a container with a dead database is reported unhealthy instead of "running". `latencyMs` is that probe's duration. The response is unauthenticated, so it deliberately carries no host, user, database name or driver error text. Older clients that only read `ok`, `deviceCount` and `capabilities` are unaffected.
 
 `fleetTimeZone` is present only when the operator configured the Hub's fleet calendar (`TOKEN_MONITOR_FLEET_TIMEZONE` / `JIRAN_FLEET_TIMEZONE`, an IANA name). It is the one calendar every syncing device buckets its `today` / `month` windows into: the Hub advertises it here, on every ingest response, and on `/api/stats`, and a device that learns it aligns its own day boundaries (including tokscale's bucketing zone) to it. An absent field means each device keeps its own OS calendar, which is the pre-fleet behaviour.
 

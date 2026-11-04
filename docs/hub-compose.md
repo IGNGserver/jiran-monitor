@@ -35,6 +35,76 @@ Image: `ghcr.io/igngserver/jiran-hub`
 > 项目已从 Token Monitor 改名为 计然 / Jiran。过渡期内 `ghcr.io/igngserver/token-monitor-hub`
 > 仍会被推送完全相同的标签，现有部署不改镜像名也能继续升级；建议尽快改成 `jiran-hub`。
 
+## External MySQL (shared or remote server)
+
+The quick start above runs MySQL inside this Compose project. If the machine
+already runs a database server — or several Docker apps should share one — start
+only the Hub instead:
+
+```bash
+# .env
+JIRAN_DATABASE_URL=mysql://jiran:your-password@db.example.lan:3306/jiran
+# optional TLS:
+# JIRAN_DATABASE_SSL=required
+# JIRAN_DATABASE_SSL_CA=/certs/ca.pem
+
+docker compose -f docker-compose.external-db.yml up -d
+```
+
+`JIRAN_DATABASE_URL` wins over `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` /
+`MYSQL_PASSWORD` / `MYSQL_DATABASE`; pool sizing still comes from the
+`MYSQL_*` knobs. Percent-encode special characters in the password
+(`@` → `%40`, `$` → `%24`). A local socket is `?socket=/run/mysqld/mysqld.sock`.
+The URL is never logged; startup prints the redacted target
+(`mysql://user@host:3306/database`).
+
+**One database per Hub.** The fleet read model lives in the Hub process, so two
+Hub processes must never share a schema — the second one would serve a stale
+fleet. Sharing a *server* is supported: each Hub gets its own database, its own
+user, and (because `GET_LOCK` is server-wide) a migration lock scoped by database
+name.
+
+```sql
+CREATE DATABASE jiran CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE USER 'jiran'@'%' IDENTIFIED BY '...';
+GRANT ALL PRIVILEGES ON jiran.* TO 'jiran'@'%';
+```
+
+Supported server: **MySQL 8.0 or newer**. MariaDB and MySQL 5.7 are rejected at
+startup — the schema uses `utf8mb4_0900_ai_ci`, `JSON_SET` and `DATETIME(3)`.
+Managed MySQL services must allow `GET_LOCK` for migrations.
+
+### Connection budget
+
+Every app on the server multiplies its own pool. For N Hubs and other clients:
+
+```
+N × MYSQL_CONNECTION_LIMIT + other clients < MySQL max_connections
+```
+
+`MYSQL_MAX_IDLE` (default 2) and `MYSQL_IDLE_TIMEOUT_MS` (default 30 s) keep an
+idle Hub from holding a full pool open. The external-db Compose file defaults
+`MYSQL_CONNECTION_LIMIT` to 5.
+
+### Latency
+
+Reads are served from the in-process fleet model after the first load; the
+remaining remote-database cost is the per-ingest write (about eight round trips,
+down from 11–14) and the initial fleet load. The round-trip budget, the rejected
+cache options and the reproduction procedure are in
+[performance/remote-database.md](performance/remote-database.md). Measure before
+tuning:
+
+- `GET /api/health` reports `storage.latencyMs` and answers **503** when MySQL is
+  unreachable, so `docker compose ps` shows unhealthy instead of "running".
+- `MYSQL_SLOW_QUERY_MS` (default 1000, `0` disables the log) prints the SQL text
+  (never bound values) of slow statements.
+- The Hub retries transient connection failures during startup/migrations with a
+  bounded backoff, so a remote server that starts later does not crash-loop it.
+
+For a slow link, prefer a database near the Hub, keep `MYSQL_CONNECTION_LIMIT`
+small, and avoid pointing several Hubs at one schema (see above).
+
 ## Upgrade
 
 ```bash

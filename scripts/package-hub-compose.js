@@ -21,6 +21,7 @@ fs.mkdirSync(stageDir, { recursive: true });
 
 const files = [
   ['docker-compose.yml', 'docker-compose.yml'],
+  ['docker-compose.external-db.yml', 'docker-compose.external-db.yml'],
   ['docs/hub-compose.md', 'README.md'],
   ['.env.example', '.env.example']
 ];
