@@ -59,9 +59,13 @@ function generatePkce() {
   return { verifier, challenge };
 }
 
-function oauthError(code, message) {
+function oauthError(code, message, status = null) {
   const error = new Error(message);
   error.code = code;
+  const parsed = Number(status);
+  if (status !== null && status !== undefined && Number.isFinite(parsed) && parsed > 0) {
+    error.status = parsed;
+  }
   return error;
 }
 
@@ -134,7 +138,7 @@ async function refreshOAuthToken(provider, refreshToken, deps = {}) {
       const json = await res.json();
       message = json.error_description || json.error || message;
     } catch (_) {}
-    throw oauthError('refresh_failed', `${config.label} token refresh failed: ${message}`);
+    throw oauthError('refresh_failed', `${config.label} token refresh failed: ${message}`, res.status);
   }
   return validateTokenResponse(await res.json(), config.label, deps.now ? deps.now() : Date.now());
 }

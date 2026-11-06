@@ -400,6 +400,23 @@ test('normalizeLimitProvider keeps the stale marker and the redacted probe cause
   assert.equal('errorDetail' in publicRow, false);
 });
 
+test('normalizeLimitProvider carries Hub scheduler timestamps when present', () => {
+  const provider = normalizeLimitProvider({
+    provider: 'codex',
+    status: 'unavailable',
+    lastAttemptAt: '2026-10-29T15:31:21.000Z',
+    lastSuccessAt: '2026-10-29T15:21:21.000Z',
+    nextRefreshAt: '2026-10-29T15:36:21.000Z'
+  });
+  assert.equal(provider.lastAttemptAt, '2026-10-29T15:31:21.000Z');
+  assert.equal(provider.lastSuccessAt, '2026-10-29T15:21:21.000Z');
+  assert.equal(provider.nextRefreshAt, '2026-10-29T15:36:21.000Z');
+
+  const absent = normalizeLimitProvider({ provider: 'codex', status: 'ok' });
+  assert.equal('lastAttemptAt' in absent, false);
+  assert.equal('nextRefreshAt' in absent, false);
+});
+
 test('probeErrorDetail names the transport or HTTP cause without echoing response bodies', () => {
   assert.equal(probeErrorDetail({ httpStatus: 500 }), 'HTTP 500');
   assert.equal(probeErrorDetail(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })), 'ECONNRESET');

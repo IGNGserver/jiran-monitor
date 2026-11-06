@@ -22,7 +22,7 @@ configureViewContext({
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 });
 
-const { formatLimitBadge, formatLimitHint } = require('../../src/shared-ui/views/limits.js');
+const { formatLimitBadge, formatLimitHint, formatLimitNextRetry } = require('../../src/shared-ui/views/limits.js');
 
 test('an unauthorized card is labelled as expired credentials', () => {
   const html = formatLimitBadge({ status: 'unauthorized' });
@@ -70,12 +70,33 @@ test('the unavailable badge is localized, not an English literal', () => {
   }
 });
 
-test('a stale card still wins over its status', () => {
-  assert.match(formatLimitBadge({ status: 'ok', stale: true }), /stale|Stale/i);
+test('a stale card keeps its failure reason and adds the stale marker', () => {
+  const html = formatLimitBadge({ status: 'unauthorized', stale: true });
+  assert.match(html, /Credentials expired/);
+  assert.match(html, /stale|Stale/i);
 });
 
 test('the hint tells the user to update an expired credential', () => {
   assert.match(formatLimitHint({ status: 'unauthorized' }), /Update it in Accounts/);
+});
+
+test('a stale failure hint keeps both the cause and the last-known-values note', () => {
+  const hint = formatLimitHint({ status: 'unauthorized', stale: true });
+  assert.match(hint, /Update it in Accounts/);
+  assert.match(hint, /last known/);
+});
+
+test('a stale card can show when the scheduler will retry', () => {
+  const next = new Date(Date.now() + 5 * 60_000).toISOString();
+  const text = formatLimitNextRetry({ status: 'unavailable', stale: true, nextRefreshAt: next }, 'en');
+  assert.match(text, /Next retry/);
+  assert.match(text, /minute/);
+});
+
+test('a fresh healthy card does not print a retry line', () => {
+  const next = new Date(Date.now() + 5 * 60_000).toISOString();
+  assert.equal(formatLimitNextRetry({ status: 'ok', nextRefreshAt: next }, 'en'), '');
+  assert.equal(formatLimitNextRetry({ status: 'unavailable' }, 'en'), '');
 });
 
 test('the hint points a retired plan at the current offering', () => {

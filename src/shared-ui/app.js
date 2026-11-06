@@ -400,6 +400,7 @@ const state = {
   accountsLoading: false,
   accountsError: null,
   accountsSaving: false,
+  limitsRefreshing: false,
   accountFormError: '',
   accountEditId: '',
   accountDrawerOpen: false,
@@ -2608,6 +2609,26 @@ async function refreshAccount(accountId) {
   }
 }
 
+async function refreshAllLimits() {
+  if (state.limitsRefreshing) return;
+  state.limitsRefreshing = true;
+  render();
+  try {
+    await fetchJson('/api/accounts/refresh', {
+      secret: state.secret,
+      method: 'POST'
+    });
+    showToast(tr('toast.refreshed'));
+    await loadAccounts({ force: true });
+    await refreshStats();
+  } catch (error) {
+    showToast(error.message || tr('error.generic'));
+  } finally {
+    state.limitsRefreshing = false;
+    render();
+  }
+}
+
 async function clearAccountCredential(accountId) {
   const account = state.accounts?.find((a) => a.id === accountId);
   if (!account) return;
@@ -3521,6 +3542,11 @@ function bindEvents() {
       if (managementRetry.dataset.managementRetry === 'subscriptions-retry') void loadSubscriptions({ force: true });
       if (managementRetry.dataset.managementRetry === 'pricing-retry') void loadPricing({ force: true });
       if (managementRetry.dataset.managementRetry === 'accounts-retry') void loadAccounts({ force: true });
+      return;
+    }
+    const limitsRefreshAll = event.target.closest('[data-limits-refresh-all]');
+    if (limitsRefreshAll) {
+      void refreshAllLimits();
       return;
     }
     const accountRefresh = event.target.closest('[data-account-refresh]');

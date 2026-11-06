@@ -63,6 +63,14 @@ refreshes the provider on its own schedule, and publishes only normalized quota
 snapshots to connected devices. Account listing and quota responses never
 return the stored credential.
 
+The Hub refreshes accounts on its own schedule (`JIRAN_HUB_REFRESH_MS`, default
+`300000`; `JIRAN_HUB_ACCOUNT_CONCURRENCY`, default `4`;
+`JIRAN_HUB_PROBE_DEADLINE_MS`, default `60000`). A failed transport probe retries
+within minutes and is published as `unavailable`; only a rejected OAuth refresh
+becomes `unauthorized`. A Hub restart re-probes accounts whose last success is
+older than the interval, and the owner can trigger an immediate sweep with the
+**Refresh all** action on the Limits page.
+
 The device and headless agent collect local usage only. They do not inspect
 developer-tool login files, browser profiles, environment credentials, or local
 CLI accounts, and they do not upload account credentials. In other words, the

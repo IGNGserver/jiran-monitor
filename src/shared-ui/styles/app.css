@@ -1640,6 +1640,7 @@ input[type="checkbox"] { accent-color: var(--colorCompoundBrandBackground); widt
 .drawer-panel, .popover-card, .auth-card { border-radius: 8px; box-shadow: var(--shadow64); border: 1px solid var(--line); }
 .toast { border-radius: 4px; box-shadow: var(--shadow16); font-weight: 400; }
 fluent-badge.badge { border-radius: var(--borderRadiusMedium); font-size: var(--fontSizeBase200); line-height: var(--lineHeightBase200); }
+.badge-stack { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 /* Motion is scoped to changes initiated by people; snapshots don't replay entry. */
 .nav-btn, .settings-section-link, .field input, .field textarea {
   transition: background-color var(--durationFaster) var(--curveEasyEase), color var(--durationFaster) var(--curveEasyEase), border-color var(--durationFaster) var(--curveEasyEase);

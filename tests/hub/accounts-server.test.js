@@ -447,3 +447,64 @@ test('Hub account API supports deleting accounts, cascaded removal, 404 on missi
     await hub.stop();
   }
 });
+
+test('the owner can refresh every account in one Hub call', async () => {
+  let probes = 0;
+  const repository = new MemoryRepository();
+  const hub = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    adminSecret: 'admin-token',
+    accountCredentialKey: 'account-encryption-key',
+    accountProbe: async (provider) => {
+      probes += 1;
+      // Each add needs its own identity: the Hub's duplicate guard is keyed by
+      // provider + accountKey/email.
+      return {
+        ...accountProbe(provider),
+        accountKey: `${provider}-account-${probes}`,
+        accountEmail: `account-${probes}@example.test`
+      };
+    },
+    // Keep the interval timer out of the test: the startup pass finds no
+    // accounts, and the next scheduled pass is an hour away.
+    accountRefreshMs: 60 * 60 * 1000,
+    repository,
+    logger: { error() {}, warn() {}, info() {} }
+  });
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    for (const name of ['one', 'two']) {
+      const added = await requestJson(port, '/api/accounts', {
+        method: 'POST',
+        token: 'admin-token',
+        body: { provider: 'deepseek', name, credential: { apiKey: `key-${name}` } }
+      });
+      assert.equal(added.response.status, 201);
+    }
+
+    const anonymous = await requestJson(port, '/api/accounts/refresh', { method: 'POST' });
+    assert.equal(anonymous.response.status, 401);
+
+    const before = probes;
+    const refreshed = await requestJson(port, '/api/accounts/refresh', {
+      method: 'POST',
+      token: 'admin-token'
+    });
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(refreshed.body.ok, true);
+    assert.equal(refreshed.body.refreshed, 2);
+    assert.equal(probes - before, 2, 'a manual sweep probes each enabled account once');
+    assert.ok(repository.hubAudit.some((row) => row.action === 'account.refresh_all'));
+
+    const stats = await requestJson(port, '/api/stats', { token: 'admin-token' });
+    assert.equal(stats.response.status, 200);
+    const provider = stats.body.limits.providers[0];
+    assert.ok(provider.lastAttemptAt, 'the limits payload carries the last attempt');
+    assert.ok(provider.lastSuccessAt, 'the limits payload carries the last success');
+    assert.ok(provider.nextRefreshAt, 'the limits payload carries the next due time');
+  } finally {
+    await hub.stop();
+  }
+});

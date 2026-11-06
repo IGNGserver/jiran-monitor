@@ -418,6 +418,9 @@ function normalizeLimitProvider(input) {
     windows.sort((a, b) => WINDOW_ORDER.indexOf(a.kind) - WINDOW_ORDER.indexOf(b.kind));
   }
   const balance = normalizeProviderBalance(input.balance);
+  const lastAttemptAt = normalizeIsoTimestamp(input.lastAttemptAt);
+  const lastSuccessAt = normalizeIsoTimestamp(input.lastSuccessAt);
+  const nextRefreshAt = normalizeIsoTimestamp(input.nextRefreshAt);
   // Compatibility shim: devices older than the credits-window change post a
   // balance with no window at all, so every renderer would drop the row.
   // Synthesize the window here — the one funnel both the local collector and
@@ -454,6 +457,9 @@ function normalizeLimitProvider(input) {
     sourceDetail: normalizeSourceDetail(input.sourceDetail ?? input.source_detail),
     credentialOrigin: normalizeCredentialOrigin(input.credentialOrigin ?? input.credential_origin),
     updatedAt: normalizeIsoTimestamp(input.updatedAt) || normalizeIsoTimestamp(input.checkedAt),
+    ...(lastAttemptAt ? { lastAttemptAt } : {}),
+    ...(lastSuccessAt ? { lastSuccessAt } : {}),
+    ...(nextRefreshAt ? { nextRefreshAt } : {}),
     windows,
     balanceUsd: numberOrNull(input.balanceUsd),
     balance,
