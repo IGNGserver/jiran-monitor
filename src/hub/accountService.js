@@ -31,6 +31,16 @@ const MAX_QUEUED_PROBES = 256;
 // process is restarted.
 const DEFAULT_PROBE_DEADLINE_MS = 60 * 1000;
 
+// Retry policy for a failed probe. A transport failure says nothing about the
+// account, so it retries within minutes (bounded by the configured cadence); a
+// rejected credential backs off much further because retrying it only burns the
+// provider's tolerance. The first unauthorized retry is deliberately short: a
+// 401 that follows a failed OAuth renewal is usually the expired access token,
+// not a revoked credential, and the next probe is what distinguishes them.
+const TRANSPORT_RETRY_BASE_MS = 60 * 1000;
+const TRANSPORT_RETRY_CAP_MS = 5 * 60 * 1000;
+const AUTH_RETRY_STEPS_MS = [5, 15, 30, 60, 120, 240, 360].map((minutes) => minutes * 60 * 1000);
+
 // These providers already accept an explicit API key, Cookie, or profile. The
 // remaining providers currently depend on a local CLI, browser profile, or OS
 // credential store and must not silently fall back to those sources on the Hub.
@@ -390,6 +400,19 @@ function shouldRefreshOAuthCredential(provider, credential, nowMs) {
   return expiresAt !== null && expiresAt - nowMs <= 2 * 60 * 1000;
 }
 
+// A failed token renewal is not proof that the credential was rejected. Only a
+// transport/5xx/429 failure of the renewal endpoint is ambiguous; an
+// invalid_grant (or any other 4xx) is the provider saying the credential is no
+// longer usable, which must remain `unauthorized`.
+function refreshFailureStatus(error) {
+  if (!error) return '';
+  if (error.code === 'refresh_network_error') return 'unavailable';
+  const status = Number(error.status);
+  if (status === 429) return 'rateLimited';
+  if (Number.isFinite(status) && status >= 500) return 'unavailable';
+  return '';
+}
+
 function publicAccount(account, snapshot = null) {
   const current = snapshot?.provider || null;
   return {
@@ -455,7 +478,9 @@ function createHubAccountService({
     ? Number(probeDeadlineMs)
     : DEFAULT_PROBE_DEADLINE_MS;
   let timer = null;
+  let started = false;
   let stopped = false;
+  let scheduleGeneration = 0;
   let refreshPromise = null;
   let refreshStartedAt = 0;
   const refreshFlights = new Map();
@@ -578,19 +603,39 @@ function createHubAccountService({
     return new Date(Math.max(now(), (Date.parse(account.updatedAt) || 0) + 1)).toISOString();
   }
 
-  function retryDelay(status, failures) {
+  function retryDelay(status, failures, retryAfterMs = null) {
     if (status === 'notConfigured') return Math.max(intervalMs, 6 * 60 * 60 * 1000);
-    if (status === 'unauthorized') return Math.max(intervalMs, Math.min(6 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** (failures - 1)));
-    const base = ['rateLimited', 'sourceRateLimited'].includes(status) ? intervalMs * 2 : intervalMs;
-    // A transport failure says nothing about the account, and the proxy/network
-    // heals in minutes. Capping these at 15 minutes keeps a recovered link from
-    // staying invisible for up to an hour; rate limits and auth still back off
-    // to the full hour because retrying them faster only burns quota.
-    const cap = status === 'unavailable' || status === 'error' ? 15 * 60 * 1000 : 60 * 60 * 1000;
-    return Math.max(intervalMs, Math.min(cap, base * 2 ** Math.min(6, failures - 1)));
+    if (status === 'unauthorized') {
+      const step = AUTH_RETRY_STEPS_MS[Math.min(Math.max(0, failures - 1), AUTH_RETRY_STEPS_MS.length - 1)];
+      return Math.max(intervalMs, step);
+    }
+    if (status === 'rateLimited' || status === 'sourceRateLimited') {
+      // The provider's Retry-After is authoritative when it sent one: retrying
+      // sooner is exactly what turns a short rate-limit into a longer ban.
+      const retryAfter = Number(retryAfterMs);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        return Math.max(intervalMs, Math.min(6 * 60 * 60 * 1000, Math.round(retryAfter)));
+      }
+      return Math.max(intervalMs, Math.min(
+        60 * 60 * 1000,
+        intervalMs * 2 * 2 ** Math.min(6, failures - 1)
+      ));
+    }
+    // Transport/unknown failures retry within minutes even when the configured
+    // cadence is longer, but the cap is never above that cadence and never more
+    // aggressive than once a minute.
+    const cap = Math.max(TRANSPORT_RETRY_BASE_MS, Math.min(TRANSPORT_RETRY_CAP_MS, intervalMs));
+    return Math.min(cap, TRANSPORT_RETRY_BASE_MS * 2 ** Math.min(6, failures - 1));
   }
 
   function scheduledLater(account, reason) {
+    if (reason === 'startup') {
+      const lastSuccess = Date.parse(account.lastSuccessAt || '');
+      // A process restart must not inherit a backoff that belongs to the previous
+      // process. Re-probe anything whose last success is older than one interval;
+      // a just-added or just-refreshed account is still fresh and stays skipped.
+      if (!Number.isFinite(lastSuccess) || now() - lastSuccess >= intervalMs) return false;
+    }
     // Timers and repository reads can straddle the due millisecond. A tiny
     // tolerance avoids skipping a healthy account for an entire extra cycle.
     return ['interval', 'startup'].includes(reason)
@@ -666,7 +711,12 @@ function createHubAccountService({
           authority: 'hub',
           accountId: account.id,
           accountName: snapshot.provider.accountName || account.name || '',
-          accountLabel: snapshot.provider.accountLabel || account.label || ''
+          accountLabel: snapshot.provider.accountLabel || account.label || '',
+          // Scheduler state, so a client can explain a stale card without the
+          // owner-only accounts API. Optional and backward-compatible.
+          lastAttemptAt: account.lastAttemptAt || null,
+          lastSuccessAt: account.lastSuccessAt || null,
+          nextRefreshAt: account.nextRefreshAt || null
         });
       }
     }
@@ -679,6 +729,7 @@ function createHubAccountService({
 
   async function probeAccountRaw(account, credential, signal, state, fetch) {
     if (account.provider === 'thirdparty') validateHubThirdPartyCredential(credential);
+    let retryAfterMs = null;
     const runtime = {
       env: Object.create(null),
       homeDir: '',
@@ -686,11 +737,18 @@ function createHubAccountService({
       signal,
       now,
       limitsRefreshMs: intervalMs,
-      providerRuntimeState: state.providerRuntimeState
+      providerRuntimeState: state.providerRuntimeState,
+      // Provider adapters report a Retry-After they received so the Hub can
+      // honour it instead of guessing an exponential delay.
+      onRetryAfter: (value) => {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed) && parsed > 0) retryAfterMs = parsed;
+      }
     };
     const checkAbort = () => signal.throwIfAborted();
     checkAbort();
     let activeCredential = credential;
+    let refreshFailure = null;
     if (shouldRefreshOAuthCredential(account.provider, activeCredential, now())) {
       try {
         activeCredential = (await refreshCredential(account.provider, activeCredential, {
@@ -700,6 +758,7 @@ function createHubAccountService({
         })).credential;
       } catch (error) {
         checkAbort();
+        refreshFailure = error;
         logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} proactive token refresh failed (${error.code || 'error'})`);
       }
     }
@@ -727,17 +786,34 @@ function createHubAccountService({
         usable = attempt.rows.find((row) => row.status === 'ok') || attempt.rows[0];
       } catch (error) {
         checkAbort();
+        refreshFailure = error;
         logger.warn?.(`[hub-accounts] ${account.provider}/${account.id} token refresh failed (${error.code || 'error'})`);
       }
     }
     if (!usable || usable.status !== 'ok') {
-      const detail = String(usable?.errorDetail || '').trim();
-      const error = new Error(`Provider validation failed: ${usable?.status || 'unavailable'}${detail ? ` (${detail})` : ''}`);
-      error.code = usable?.status || 'unavailable';
-      error.providerRow = usable || null;
+      // A 401 after a renewal that failed on the network does not prove the
+      // credential is invalid; it only proves we could not renew the access
+      // token. Publishing `unavailable` keeps the card honest (last known values,
+      // retry shortly) instead of sending the account down the credential-expiry
+      // backoff for an outage of the renewal endpoint.
+      const renewalStatus = usable?.status === 'unauthorized'
+        ? refreshFailureStatus(refreshFailure)
+        : '';
+      const status = renewalStatus || usable?.status || 'unavailable';
+      const detail = renewalStatus
+        ? `token refresh ${renewalStatus}`
+        : String(usable?.errorDetail || '').trim();
+      const error = new Error(`Provider validation failed: ${status}${detail ? ` (${detail})` : ''}`);
+      error.code = status;
+      error.retryAfterMs = retryAfterMs;
+      error.providerRow = {
+        ...(usable || { provider: account.provider }),
+        status,
+        ...(renewalStatus ? { errorDetail: detail } : {})
+      };
       throw error;
     }
-    return { row: usable, credential: activeCredential };
+    return { row: usable, credential: activeCredential, retryAfterMs };
   }
 
   function probeAccount(account, credential) {
@@ -871,7 +947,7 @@ function createHubAccountService({
           lastAttemptAt: attemptAt,
           lastErrorCode: cleanText(error?.code || status, 64),
           lastErrorMessage: errorMessage(error),
-          nextRefreshAt: new Date(now() + retryDelay(status, failures)).toISOString()
+          nextRefreshAt: new Date(now() + retryDelay(status, failures, error?.retryAfterMs)).toISOString()
         }, executor);
         await store.saveHubAccountSnapshot(account.id, {
           provider: failed,
@@ -914,7 +990,8 @@ function createHubAccountService({
         refreshStartedAt = 0;
       }
     }
-    refreshStartedAt = now();
+    const cycleStartedAt = now();
+    refreshStartedAt = cycleStartedAt;
     let cyclePromise;
     cyclePromise = (async () => {
       let accounts = [];
@@ -944,7 +1021,12 @@ function createHubAccountService({
       } catch (err) {
         logger.warn?.(`[hub-accounts] refresh worker pool error: ${err?.message || err}`);
       }
-      return results.filter(Boolean);
+      const refreshed = results.filter(Boolean);
+      const failed = refreshed.filter((row) => row.status !== 'ok').length;
+      logger.info?.(
+        `[hub-accounts] refresh ${reason}: due=${refreshed.length}/${accounts.length} ok=${refreshed.length - failed} failed=${failed} elapsed=${now() - cycleStartedAt}ms`
+      );
+      return refreshed;
     })().catch((err) => {
       logger.warn?.(`[hub-accounts] refreshAll unhandled failure: ${err?.message || err}`);
       return [];
@@ -953,6 +1035,10 @@ function createHubAccountService({
         refreshPromise = null;
         refreshStartedAt = 0;
       }
+      // Wake at the earliest next due time (with the configured cadence as the
+      // upper bound), so a short transport retry is not rounded up to the next
+      // five-minute tick.
+      if (started && !stopped) void scheduleNextCycle();
     });
     refreshPromise = cyclePromise;
     return cyclePromise;
@@ -1222,16 +1308,48 @@ function createHubAccountService({
     return true;
   }
 
-  function start() {
-    if (timer || stopped) return;
-    timer = setInterval(() => { void refreshAll('interval'); }, intervalMs);
+  async function scheduleNextCycle() {
+    if (!started || stopped) return;
+    const generation = ++scheduleGeneration;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    let delay = intervalMs;
+    try {
+      const accounts = await store.listHubAccounts();
+      const nowMs = now();
+      // A missing/invalid nextRefreshAt means "due now": the next cycle picks it
+      // up after the minimum guard instead of waiting a full interval.
+      const due = accounts
+        .filter((account) => account.enabled !== false)
+        .map((account) => Date.parse(account.nextRefreshAt || '') || nowMs);
+      if (due.length) delay = Math.min(...due) - nowMs;
+    } catch (error) {
+      logger.warn?.(`[hub-accounts] could not schedule next refresh: ${error?.message || error}`);
+    }
+    if (generation !== scheduleGeneration || !started || stopped) return;
+    const minDelay = Math.min(5000, intervalMs);
+    delay = Math.max(minDelay, Math.min(intervalMs, Number.isFinite(delay) ? delay : intervalMs));
+    timer = setTimeout(() => {
+      timer = null;
+      void refreshAll('interval');
+    }, delay);
     timer.unref?.();
+  }
+
+  function start() {
+    if (started || stopped) return;
+    started = true;
+    // refreshAll() schedules the next due cycle in its finally block.
     void refreshAll('startup');
   }
 
   async function stop() {
     stopped = true;
-    if (timer) clearInterval(timer);
+    started = false;
+    scheduleGeneration += 1;
+    if (timer) clearTimeout(timer);
     timer = null;
     for (const entry of probeQueue.splice(0)) {
       entry.signal.removeEventListener('abort', entry.abort);
@@ -1249,7 +1367,11 @@ function createHubAccountService({
     deleteAccount,
     getLimitsSummary,
     listAccounts,
-    refreshAccount: (id) => refreshOne(id, 'manual'),
+    refreshAccount: (id) => refreshOne(id, 'manual').finally(() => {
+      // A manual failure may set a retry sooner than the currently sleeping
+      // timer; re-arm it from the account rows we just wrote.
+      if (started && !stopped) void scheduleNextCycle();
+    }),
     refreshAll,
     start,
     stop,

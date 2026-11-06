@@ -2077,6 +2077,22 @@ function createHub({
       }
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/accounts/refresh') {
+      const owner = authorize(AUTHENTICATED_SCOPE);
+      if (!owner) return;
+      if (!accountService) return accountUnavailable(res);
+      try {
+        const refreshed = await accountService.refreshAll('manual');
+        await recordAccountAudit(owner.principal, 'account.refresh_all', '', { refreshed: refreshed.length });
+        return sendJson(res, 200, { ok: true, refreshed: refreshed.length });
+      } catch (error) {
+        return sendJson(res, accountErrorStatus(error), {
+          error: error.code || 'account_refresh_all_failed',
+          message: errorMessageForApi(error)
+        });
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/accounts/oauth/start') {
       const owner = authorize(AUTHENTICATED_SCOPE);
       if (!owner) return;

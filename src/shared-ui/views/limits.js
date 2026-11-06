@@ -118,33 +118,32 @@ export function renderLimitCardWindows(card) {
 }
 
 export function formatLimitBadge(card) {
-  if (card.stale) {
-    return `<span class="badge stale">${escapeHtml(tr('limits.stale'))}</span>`;
-  }
   const status = String(card.status || '').toLowerCase();
+  let badge;
   if (status === 'ok') {
-    return `<span class="badge ok">${escapeHtml(tr('accounts.statusOk'))}</span>`;
-  }
-  if (status === 'disabled') {
-    return `<span class="badge">${escapeHtml(tr('accounts.statusDisabled'))}</span>`;
-  }
-  if (status === 'unauthorized') {
+    badge = `<span class="badge ok">${escapeHtml(tr('accounts.statusOk'))}</span>`;
+  } else if (status === 'disabled') {
+    badge = `<span class="badge">${escapeHtml(tr('accounts.statusDisabled'))}</span>`;
+  } else if (status === 'unauthorized') {
     // Distinguish a retired plan from a stale credential: both need user action,
     // but only one is fixed by re-pasting. `region:'retired'` is set by the
     // Gemini adapter when Google reports the tier as no longer served.
     const retired = String(card.region || '').toLowerCase() === 'retired';
-    return `<span class="badge warn bad">${escapeHtml(tr(retired ? 'limits.statusRetired' : 'limits.statusNeedsCredentials'))}</span>`;
+    badge = `<span class="badge warn bad">${escapeHtml(tr(retired ? 'limits.statusRetired' : 'limits.statusNeedsCredentials'))}</span>`;
+  } else if (status === 'notconfigured') {
+    badge = `<span class="badge">${escapeHtml(tr('limits.statusNotConfigured'))}</span>`;
+  } else if (status === 'unavailable') {
+    badge = `<span class="badge warn">${escapeHtml(tr('limits.statusUnavailable'))}</span>`;
+  } else if (status === 'error') {
+    badge = `<span class="badge warn bad">${escapeHtml(tr('limits.statusError'))}</span>`;
+  } else {
+    badge = `<span class="badge warn">${escapeHtml(card.status || tr('accounts.statusError'))}</span>`;
   }
-  if (status === 'notconfigured') {
-    return `<span class="badge">${escapeHtml(tr('limits.statusNotConfigured'))}</span>`;
-  }
-  if (status === 'unavailable') {
-    return `<span class="badge warn">${escapeHtml(tr('limits.statusUnavailable'))}</span>`;
-  }
-  if (status === 'error') {
-    return `<span class="badge warn bad">${escapeHtml(tr('limits.statusError'))}</span>`;
-  }
-  return `<span class="badge warn">${escapeHtml(card.status || tr('accounts.statusError'))}</span>`;
+  if (!card.stale) return badge;
+  // Keep the failure reason visible. Showing only "stale" made a credential
+  // expiry and a transient outage look identical; the stale marker is an
+  // additional fact, not a replacement for the status.
+  return `<span class="badge-stack">${badge}<span class="badge stale">${escapeHtml(tr('limits.stale'))}</span></span>`;
 }
 
 /**
@@ -155,17 +154,34 @@ export function formatLimitBadge(card) {
  */
 export function formatLimitHint(card) {
   const status = String(card.status || '').toLowerCase();
-  if (card.stale) return tr('limits.hintStale');
-  if (status === 'ok' || status === 'disabled') return '';
-  if (status === 'unauthorized') {
-    return String(card.region || '').toLowerCase() === 'retired'
+  const staleHint = card.stale ? tr('limits.hintStale') : '';
+  let hint = '';
+  if (status === 'ok' || status === 'disabled') {
+    // A stale healthy/disabled row still gets the last-known-values note below.
+  } else if (status === 'unauthorized') {
+    hint = String(card.region || '').toLowerCase() === 'retired'
       ? tr('limits.hintRetired')
       : tr('limits.hintNeedsCredentials');
+  } else if (status === 'notconfigured') {
+    hint = tr('limits.hintNotConfigured');
+  } else if (status === 'sourceratelimited' || status === 'ratelimited') {
+    hint = tr('limits.hintRateLimited');
+  } else if (status === 'unavailable' || status === 'error') {
+    hint = tr('limits.hintUnavailable');
   }
-  if (status === 'notconfigured') return tr('limits.hintNotConfigured');
-  if (status === 'sourceratelimited' || status === 'ratelimited') return tr('limits.hintRateLimited');
-  if (status === 'unavailable' || status === 'error') return tr('limits.hintUnavailable');
-  return '';
+  return [hint, staleHint].filter(Boolean).join(' ');
+}
+
+/**
+ * The scheduler's next due time, rendered only when it explains a card that is
+ * not currently fresh. Older Hubs omit `nextRefreshAt`, so an absent value is
+ * silent rather than an error.
+ */
+export function formatLimitNextRetry(card, locale = 'en') {
+  const status = String(card?.status || '').toLowerCase();
+  if (!card?.nextRefreshAt) return '';
+  if (!card.stale && (status === 'ok' || status === 'disabled')) return '';
+  return tr('limits.nextRetry', { time: formatRelative(card.nextRefreshAt, locale) });
 }
 
 export function renderLimitCards(cards, { compact = false, hideProvider = false } = {}) {
@@ -182,6 +198,7 @@ export function renderLimitCards(cards, { compact = false, hideProvider = false 
           card.source ? String(card.source).toUpperCase() : '',
           account
         ].filter(Boolean).join(' · ');
+        const nextRetry = formatLimitNextRetry(card, appState().locale);
         return `
         <article class="limit-card${compact ? ' limit-card-compact' : ''}">
           <div class="limit-head">
@@ -208,7 +225,7 @@ export function renderLimitCards(cards, { compact = false, hideProvider = false 
             return hint || action ? `<div class="limit-card-followup">${hint ? `<p class="muted tiny limit-card-hint">${escapeHtml(hint)}</p>` : ''}${action}</div>` : '';
           })()}
           <div class="limit-card-foot" title="${escapeHtml(card.updatedAt ? formatReset(card.updatedAt, appState().locale) : '')}">
-            <span>${tr('limits.lastFetched', { time: formatRelative(card.updatedAt, appState().locale) })}</span>
+            <span>${tr('limits.lastFetched', { time: formatRelative(card.updatedAt, appState().locale) })}</span>${nextRetry ? ` · ${nextRetry}` : ''}
           </div>
         </article>`;
       }).join('')}
@@ -237,6 +254,12 @@ export function renderLimits() {
     ${usageMetricCard(tr('limits.attention'), attention, '', attention > 0 ? 'is-attention' : '')}
     ${usageMetricCard(tr('limits.stale'), stale, '', stale > 0 ? 'is-stale' : '')}
   </div>`;
+  const canRefreshAll = canRenderManagementSection('accounts')
+    && appState().authorization?.authenticated === true
+    && appState().authorization?.capabilities?.hubAccounts !== false;
+  const refreshAction = canRefreshAll
+    ? `<fluent-button appearance="transparent" type="button" class="ghost-btn" data-limits-refresh-all ${appState().limitsRefreshing ? 'disabled' : ''}>${tr('limits.refreshAll')}</fluent-button>`
+    : '';
   const filter = `
     <div class="toolbar-row view-toolbar">
       <label class="field inline-field">
@@ -249,6 +272,7 @@ export function renderLimits() {
         </fluent-dropdown>
       </label>
       <span class="panel-meta tiny">${tr('limits.accountsCount', { count: cards.length })}</span>
+      ${refreshAction}
     </div>`;
   const healthPanel = appState().prefs.limitTab === 'health' ? renderStatus() : '';
   const grouped = new Map();

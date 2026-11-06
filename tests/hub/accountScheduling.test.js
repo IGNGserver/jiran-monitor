@@ -203,18 +203,99 @@ test('classified failures back off, retain lastGood, and manual success restores
   assert.equal(failed.status, 'unauthorized');
   assert.deepEqual(failed.windows, good.windows);
   assert.deepEqual(store.hubSnapshots.get(account.id).lastGood, good);
-  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 30 * 60 * 1000);
-  clock += 5 * 60 * 1000;
+  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 5 * 60 * 1000);
+  clock += 60 * 1000;
   await service.refreshAll('interval');
   assert.equal(calls, 2);
   await service.refreshAccount(account.id);
-  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 60 * 60 * 1000);
+  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 15 * 60 * 1000);
   status = 'ok';
   await service.refreshAccount(account.id);
   assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 5 * 60 * 1000);
   status = 'rateLimited';
   await service.refreshAccount(account.id);
   assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 10 * 60 * 1000);
+  await service.stop();
+});
+
+test('startup re-probes an account whose last success is older than one interval', async () => {
+  let clock = Date.parse('2026-10-24T00:00:00Z');
+  let status = 'ok';
+  let calls = 0;
+  const { store, service, add } = fixture({
+    now: () => clock,
+    probe: async (provider) => { calls += 1; return { ...row(provider), status }; }
+  });
+  const account = await add('key');
+  status = 'unauthorized';
+  await service.refreshAccount(account.id);
+  // Simulate the persisted backoff a restart used to inherit.
+  const future = new Date(clock + 60 * 60 * 1000).toISOString();
+  store.hubAccounts.get(account.id).nextRefreshAt = future;
+  clock += 6 * 60 * 1000;
+  status = 'ok';
+  const before = calls;
+  await service.refreshAll('startup');
+  assert.equal(calls, before + 1, 'startup must not skip an account whose last success is stale');
+  assert.equal(store.hubAccounts.get(account.id).status, 'ok');
+  assert.notEqual(store.hubAccounts.get(account.id).nextRefreshAt, future);
+  await service.stop();
+});
+
+test('a failed OAuth renewal publishes unavailable, not an expired credential', async () => {
+  let clock = Date.parse('2026-10-24T00:00:00Z');
+  let unauthorized = false;
+  let calls = 0;
+  const { store, service } = fixture({
+    now: () => clock,
+    // The renewal endpoint is unreachable; the probe then gets a 401 because the
+    // old access token has expired. That is "cannot verify", not "credential
+    // rejected".
+    oauthFetch: async () => { throw new Error('proxy timeout'); },
+    probe: async (provider) => {
+      calls += 1;
+      return { ...row(provider), status: unauthorized ? 'unauthorized' : 'ok' };
+    }
+  });
+  const account = await service.addAccount({
+    provider: 'antigravity',
+    name: 'agy',
+    credential: {
+      accessToken: 'old-access-token',
+      refreshToken: 'refresh-token',
+      expiresAt: new Date(clock + 10 * 60 * 1000).toISOString()
+    }
+  });
+  const good = structuredClone(store.hubSnapshots.get(account.id).lastGood);
+  unauthorized = true;
+  clock += 9 * 60 * 1000;
+  const failed = await service.refreshAccount(account.id);
+  assert.equal(failed.status, 'unavailable');
+  assert.equal(store.hubAccounts.get(account.id).status, 'unavailable');
+  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 60 * 1000);
+  assert.deepEqual(store.hubSnapshots.get(account.id).lastGood, good);
+  assert.equal(calls, 2, 'a failed renewal must not be retried as a fresh provider probe');
+  await service.stop();
+});
+
+test('a provider Retry-After is honored for a rate-limited refresh', async () => {
+  let clock = Date.parse('2026-10-24T00:00:00Z');
+  let limited = false;
+  const { store, service, add } = fixture({
+    now: () => clock,
+    refreshMs: 60 * 1000,
+    probe: async (provider) => {
+      if (limited) {
+        throw Object.assign(new Error('rate limited'), { code: 'rateLimited', retryAfterMs: 2 * 60 * 1000 });
+      }
+      return row(provider);
+    }
+  });
+  const account = await add('key');
+  limited = true;
+  const failed = await service.refreshAccount(account.id);
+  assert.equal(failed.status, 'rateLimited');
+  assert.equal(Date.parse(store.hubAccounts.get(account.id).nextRefreshAt) - clock, 2 * 60 * 1000);
   await service.stop();
 });
 
