@@ -1111,8 +1111,9 @@ function createRepository(pool) {
     await executor.execute('UPDATE usage_daily_facts SET device_id = ? WHERE device_id = ?', [nextDeviceId, previousDeviceId]);
     await executor.execute(`INSERT INTO usage_daily_fact_days (
       device_id, day_key, source, time_basis, time_zone, fact_count, truncated
-    ) SELECT ?, day_key, source, time_basis, time_zone, fact_count, truncated
-      FROM usage_daily_fact_days WHERE device_id = ?
+    ) SELECT ?, source_days.day_key, source_days.source, source_days.time_basis, source_days.time_zone,
+      source_days.fact_count, source_days.truncated
+      FROM usage_daily_fact_days AS source_days WHERE source_days.device_id = ?
       ON DUPLICATE KEY UPDATE fact_count = usage_daily_fact_days.fact_count + VALUES(fact_count),
         truncated = GREATEST(usage_daily_fact_days.truncated, VALUES(truncated))`, [nextDeviceId, previousDeviceId]);
     await executor.execute('DELETE FROM usage_daily_fact_days WHERE device_id = ?', [previousDeviceId]);
