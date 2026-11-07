@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_fact_days (
   time_zone VARCHAR(128) NOT NULL DEFAULT '',
   fact_count INT UNSIGNED NOT NULL DEFAULT 0,
   truncated BOOLEAN NOT NULL DEFAULT FALSE,
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (device_id, day_key, source),
   KEY idx_usage_daily_fact_days_day (day_key, device_id),
   CONSTRAINT fk_usage_daily_fact_days_device FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_facts (
   provenance VARCHAR(32) NOT NULL DEFAULT 'unknown',
   source VARCHAR(32) NOT NULL,
   time_basis VARCHAR(32) NOT NULL,
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
   KEY idx_usage_daily_facts_day_device (day_key, device_id),
   KEY idx_usage_daily_facts_client_day (client, day_key),
