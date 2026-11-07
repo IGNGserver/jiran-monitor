@@ -701,6 +701,16 @@ test('daily fact analytics SQL excludes hidden devices and qualifies joined colu
   assert.match(sql.calls[1].sql, /ORDER BY fd\.day_key, fd\.device_id/);
 });
 
+test('daily fact transfer qualifies source columns for MySQL 8.4', async () => {
+  const sql = recorder([]);
+  const repository = createRepository(sql);
+  await repository.moveDeviceUsageEvents('source-device', 'target-device');
+  assert.equal(sql.calls.length, 4);
+  assert.match(sql.calls[2].sql, /FROM usage_daily_fact_days AS source_days/);
+  assert.match(sql.calls[2].sql, /source_days\.day_key/);
+  assert.match(sql.calls[2].sql, /source_days\.fact_count/);
+});
+
 test('event analytics SQL keeps uncached input separate and excludes hidden devices', async () => {
   const sql = recorder([]);
   const repository = createRepository(sql);
