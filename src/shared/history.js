@@ -88,6 +88,94 @@ function applyComponentSummary(summary, totalTokens, perClient, perModel) {
   return { totals, clients, models };
 }
 
+const FACT_PROVENANCE = new Set(['exact', 'estimated', 'unknown', 'bestEffort']);
+
+function factProvenance(...values) {
+  for (const value of values) {
+    const candidate = String(value || '').trim();
+    if (FACT_PROVENANCE.has(candidate)) return candidate;
+  }
+  return 'exact';
+}
+
+function mergeFactProvenance(left, right) {
+  const rank = { exact: 0, unknown: 1, estimated: 2, bestEffort: 3 };
+  return (rank[right] ?? 1) > (rank[left] ?? 1) ? right : left;
+}
+
+// The graph's client rows are the only place where the four-dimensional joint
+// distribution survives. Keep it beside (not inside) the legacy summaries, before
+// display pruning. Null components mean "not reported", never a measured zero.
+function graphFact(date, entry) {
+  const client = safeDynamicKey(entry?.client, 'unknown');
+  const model = safeDynamicKey(entry?.modelId || entry?.model || entry?.model_id, 'unknown');
+  const provider = safeDynamicKey(entry?.providerId || entry?.provider || '', '');
+  const tokens = entry?.tokens && typeof entry.tokens === 'object' ? entry.tokens : {};
+  const totalTokens = sumTokens(tokens, client);
+  const hasExplicitUnclassified = hasOwn(entry, 'unclassifiedTokens') || hasOwn(entry, 'unclassified_tokens');
+  const available = entry?.tokenComponentsAvailable === true
+    || (entry?.tokenComponentsAvailable !== false && hasExplicitUnclassified);
+  const component = (value) => available ? Math.max(0, num(value)) : null;
+  return {
+    date,
+    client,
+    model,
+    provider,
+    tokens: totalTokens,
+    cost: entry?.cost === null || entry?.cost === undefined ? null : Math.max(0, num(entry.cost)),
+    messages: String(client).toLowerCase() === REASONIX_CLIENT ? 0 : Math.max(0, num(entry?.messages)),
+    outputTokens: component(sumOutputTokens(tokens, client)),
+    cacheReadTokens: component(tokens.cacheRead ?? tokens.cache_read),
+    cacheWriteTokens: component(tokens.cacheWrite ?? tokens.cache_write),
+    unclassifiedTokens: available
+      ? Math.min(totalTokens, Math.max(0, hasExplicitUnclassified
+        ? num(entry.unclassifiedTokens ?? entry.unclassified_tokens)
+        : 0))
+      : null,
+    tokenComponentsAvailable: available,
+    provenance: factProvenance(entry?.provenance, tokens.provenance, entry?.costProvenance)
+  };
+}
+
+function storedGraphFact(date, entry) {
+  const available = entry?.tokenComponentsAvailable === true;
+  const nullableNumber = (value) => available && value !== null && value !== undefined
+    ? Math.max(0, num(value))
+    : null;
+  return {
+    date,
+    client: safeDynamicKey(entry?.client, 'unknown'),
+    model: safeDynamicKey(entry?.model || entry?.modelId, 'unknown'),
+    provider: safeDynamicKey(entry?.provider || entry?.providerId || '', ''),
+    tokens: Math.max(0, num(entry?.tokens)),
+    cost: entry?.cost === null || entry?.cost === undefined ? null : Math.max(0, num(entry.cost)),
+    messages: Math.max(0, num(entry?.messages)),
+    outputTokens: nullableNumber(entry?.outputTokens),
+    cacheReadTokens: nullableNumber(entry?.cacheReadTokens),
+    cacheWriteTokens: nullableNumber(entry?.cacheWriteTokens),
+    unclassifiedTokens: nullableNumber(entry?.unclassifiedTokens),
+    tokenComponentsAvailable: available,
+    provenance: factProvenance(entry?.provenance)
+  };
+}
+
+function mergeGraphFacts(target, fact) {
+  const key = `${fact.client}\u0000${fact.model}\u0000${fact.provider}`;
+  const existing = target.get(key);
+  if (!existing) {
+    target.set(key, { ...fact });
+    return;
+  }
+  const available = existing.tokenComponentsAvailable && fact.tokenComponentsAvailable;
+  for (const field of ['tokens', 'messages']) existing[field] += fact[field];
+  existing.cost = existing.cost === null || fact.cost === null ? null : num(existing.cost) + num(fact.cost);
+  for (const field of ['outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'unclassifiedTokens']) {
+    existing[field] = available ? num(existing[field]) + num(fact[field]) : null;
+  }
+  existing.tokenComponentsAvailable = available;
+  existing.provenance = mergeFactProvenance(existing.provenance, fact.provenance);
+}
+
 // Folds tokscale `graph` output (contributions[].clients[]) into a per-day shape where a
 // day's total always equals the sum of its perClient and perModel stacks.
 function parseGraphResult(raw) {
@@ -99,6 +187,7 @@ function parseGraphResult(raw) {
     if (!date) continue;
     const perClient = {};
     const perModel = {};
+    const factRows = new Map();
     let tokens = 0;
     let cost = 0;
     let messages = 0;
@@ -127,6 +216,7 @@ function parseGraphResult(raw) {
       // Keep it out of Jiran's message/activity semantics; its tokens and
       // cost still contribute normally to the history totals.
       const msg = String(client).trim().toLowerCase() === REASONIX_CLIENT ? 0 : num(c.messages);
+      mergeGraphFacts(factRows, graphFact(date, c));
       tokens += t;
       cost += cst;
       messages += msg;
@@ -192,7 +282,8 @@ function parseGraphResult(raw) {
       tokenComponentsAvailable,
       activeTimeMs: num(row.activeTimeMs ?? row.active_time_ms),
       perClient,
-      perModel
+      perModel,
+      ...(factRows.size > 0 ? { facts: [...factRows.values()] } : {})
     };
     // Component fields are optional on the legacy graph contract. Keep them
     // available to the richer history pipeline without changing the
@@ -416,8 +507,14 @@ function normalizeHistory(graphData, options = {}) {
 
 function mergeDailyMaps(histories) {
   const byDate = new Map();
+  const factsByDate = new Map();
   for (const h of histories) {
     for (const d of (h && Array.isArray(h.daily) ? h.daily : [])) {
+      if (Array.isArray(d?.facts) && d.facts.length > 0) {
+        const facts = factsByDate.get(d.date) || new Map();
+        for (const entry of d.facts) mergeGraphFacts(facts, storedGraphFact(d.date, entry));
+        factsByDate.set(d.date, facts);
+      }
       const cur = byDate.get(d.date)
         || {
           date: d.date, tokens: 0, cost: 0, messages: 0, activeTimeMs: 0,
@@ -436,7 +533,10 @@ function mergeDailyMaps(histories) {
       byDate.set(d.date, cur);
     }
   }
-  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => {
+    const facts = factsByDate.get(day.date);
+    return facts?.size ? { ...day, facts: [...facts.values()] } : day;
+  });
 }
 
 function mergeMonthlyMaps(histories) {

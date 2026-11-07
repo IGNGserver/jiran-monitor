@@ -2,6 +2,7 @@ package com.igng.tokenmonitor.android.widget
 
 import android.content.Context
 import com.igng.tokenmonitor.android.data.local.UserPreferencesStore
+import com.igng.tokenmonitor.android.data.model.FleetCalendar
 import com.igng.tokenmonitor.android.data.model.HistoryDto
 import com.igng.tokenmonitor.android.data.model.StatsDto
 import com.igng.tokenmonitor.android.data.repository.HubError
@@ -9,7 +10,6 @@ import com.igng.tokenmonitor.android.data.repository.HubRepository
 import com.igng.tokenmonitor.android.data.repository.HubResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
-import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -124,7 +124,7 @@ class WidgetUpdater @Inject constructor(
       rates = rates,
       currency = currency,
       now = Instant.now(),
-      zone = ZoneId.systemDefault()
+      zone = FleetCalendar.zone(stats.fleetTimeZone)
     )
     snapshotStore.write(snapshot)
     withContext(Dispatchers.IO) { WidgetRenderer.updateAll(context) }

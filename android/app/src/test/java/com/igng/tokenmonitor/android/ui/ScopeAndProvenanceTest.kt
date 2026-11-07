@@ -271,6 +271,7 @@ class ScopeAndProvenanceTest {
     assertEquals(2, entries.size)
     val qoder = entries.first { it.key == "qoder" }
     assertEquals(42.0, qoder.credits!!, 0.0001)
+    assertNull(qoder.costUsd)
     assertTrue(qoder.creditsOnly)
     assertTrue(entries.first { it.key == "claude" }.estimated)
   }
@@ -284,6 +285,7 @@ class ScopeAndProvenanceTest {
     )
     val other = entries.last()
     assertEquals("其他", other.key)
+    assertNull(other.costUsd)
     assertTrue(
       "one estimated member makes the summed row estimated — OR semantics, as docs/API.md states",
       other.estimated

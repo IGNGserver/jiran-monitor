@@ -58,7 +58,7 @@ object DateRanges {
   }
 
   /** The ISO Monday that starts [date]'s week. */
-  fun scopeWeekStart(date: LocalDate = LocalDate.now()): LocalDate {
+  fun scopeWeekStart(date: LocalDate): LocalDate {
     val back = (date.dayOfWeek.value - SCOPE_WEEK_FIRST_DAY.value + 7) % 7
     return date.minusDays(back.toLong())
   }
@@ -105,7 +105,7 @@ object DateRanges {
     endDate: LocalDate,
     startHour: Int = 0,
     endHour: Int = 23,
-    zone: ZoneId = ZoneId.systemDefault()
+    zone: ZoneId
   ): WindowInstants {
     val from = startDate.atTime(startHour.coerceIn(0, 23), 0).atZone(zone).toInstant()
     val to = endDate.atTime(endHour.coerceIn(0, 23), 59, 59, 999_000_000).atZone(zone).toInstant()

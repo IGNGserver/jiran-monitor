@@ -1,7 +1,7 @@
 package com.igng.tokenmonitor.android.ui.components
 
 import com.igng.tokenmonitor.android.data.model.SessionRowDto
-import com.igng.tokenmonitor.android.ui.more.toSessionDto
+import com.igng.tokenmonitor.android.ui.toSessionDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

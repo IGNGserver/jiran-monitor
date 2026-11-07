@@ -25,6 +25,8 @@ import {
 import { tr, escapeHtml, appState, toolIconHtml, viewHelper } from '../core/viewContext.js';
 import { historySource, renderSparkline, renderHeatmap, renderHistoryScopeNotice } from './trends.js';
 import { formatLimitBadge, formatLimitHint } from './limits.js';
+import { renderAnalysisScopeBar } from './analysis.js';
+import { filterHistoryForAnalysis, filterPeriodByAnalysis, hasAnalysisFilters } from '../core/analysis.js';
 
 const emptyHtml = (key) => viewHelper('emptyHtml')(key);
 const panel = (...args) => viewHelper('panel')(...args);
@@ -40,7 +42,12 @@ export function renderHome() {
   const stats = viewStats();
   const tools = toolRows(period).slice(0, 5);
   const models = modelRows(period).slice(0, 5);
-  const devices = deviceRows(stats, appState().customPeriod ? 'today' : appState().prefs.period).slice(0, 5);
+  const devicePeriod = appState().customPeriod ? 'today' : appState().prefs.period;
+  const devices = deviceRows(stats, devicePeriod).map((row) => {
+    if (!hasAnalysisFilters(appState().prefs) || appState().customPeriod) return row;
+    const scoped = filterPeriodByAnalysis(row.raw?.periods?.[devicePeriod] || {}, appState().prefs);
+    return { ...row, value: Number(scoped.totalTokens || 0), cost: Number(scoped.costUsd || 0) };
+  }).sort((a, b) => b.value - a.value).slice(0, 5);
   const limits = limitCards(stats, appState().locale)
     .sort((a, b) => {
       const rank = (card) => card.stale ? 1 : String(card.status || '').toLowerCase() === 'ok' ? 3 : 0;
@@ -48,23 +55,28 @@ export function renderHome() {
     })
     .slice(0, clampHomeLimitAccountCount(appState().prefs.homeLimitAccountCount, 3));
   const history = historySource();
-  const daily = historyDaily(history, 14);
-  const heatDaily = historyDaily(history, 90);
+  const historyAnalysis = filterHistoryForAnalysis(history, appState().prefs, { custom: Boolean(appState().customPeriod) });
+  const scopedHistory = { ...history, daily: historyAnalysis.daily };
+  const daily = historyDaily(scopedHistory, 14);
+  const heatDaily = historyDaily(scopedHistory, 90);
   const historyDeviceId = String(appState().prefs.deviceFilter || '').trim();
   const historyPending = Boolean(historyDeviceId)
     && appState().historyLoading
     && appState().historyLoadingDeviceId === historyDeviceId;
   const historyError = appState().historyError
     && appState().historyErrorDeviceId === historyDeviceId;
-  const hasHistory = daily.length > 0;
+  const hasHistory = daily.length > 0 && historyAnalysis.available;
   const heatMetric = appState().prefs.heatmapMetric === 'tokens' ? 'tokens' : 'cost';
   const activeDaysWindow = appState().prefs.activeDaysWindow === 'year' ? 'year' : 'all';
-  const summary = history?.summary || null;
-  const displayActiveDays = hasHistory ? countActiveDays(history?.daily || [], activeDaysWindow) : null;
+  const scopedSummary = hasAnalysisFilters(appState().prefs) && !appState().customPeriod;
+  const summary = scopedSummary ? null : history?.summary || null;
+  const displayActiveDays = hasHistory ? countActiveDays(historyAnalysis.daily, activeDaysWindow) : null;
   const summaryActiveDays = Number(summary?.activeDays);
-  const activeDaysValue = activeDaysWindow === 'year'
+  const activeDaysValue = scopedSummary
     ? displayActiveDays
-    : (Number.isFinite(summaryActiveDays) ? summaryActiveDays : displayActiveDays);
+    : activeDaysWindow === 'year'
+      ? displayActiveDays
+      : (Number.isFinite(summaryActiveDays) ? summaryActiveDays : displayActiveDays);
 
   const totalTokens = Math.max(1, period.totalTokens || 0);
 
@@ -99,7 +111,7 @@ export function renderHome() {
     ? `<div class="stack">${models.map((row) => {
         const pct = Math.round((row.value / totalTokens) * 100);
         return `
-          <fluent-button appearance="secondary" type="button" class="home-interactive-row" data-jump-view="model" data-jump-usage-tab="models">
+          <fluent-button appearance="secondary" type="button" class="home-interactive-row" data-select-model="${escapeHtml(row.key)}" data-jump-view="usage" data-jump-usage-tab="models">
             <div class="row">
               <div class="row-main">
                 <span class="swatch" style="background:${row.color}"></span>
@@ -185,21 +197,26 @@ export function renderHome() {
     <div class="home-sparkline-head">
       <div class="home-sparkline-pills">
         <div class="home-pill"><span class="home-pill-label">${tr('home.activeDays')}:</span><span class="home-pill-val">${formatNumber(activeDaysValue)}</span></div>
-        <div class="home-pill"><span class="home-pill-label">${tr('home.streak')}:</span><span class="home-pill-val">${formatNumber(summary?.currentStreak || 0)}d</span></div>
+        ${scopedSummary ? '' : `<div class="home-pill"><span class="home-pill-label">${tr('home.streak')}:</span><span class="home-pill-val">${formatNumber(summary?.currentStreak || 0)}d</span></div>
         <div class="home-pill"><span class="home-pill-label">${tr('home.peakDay')}:</span><span class="home-pill-val">${formatCompact(summary?.peakDayTokens || 0)}</span></div>
-        ${activeTime > 0 ? `<div class="home-pill"><span class="home-pill-label">${tr('home.activeTime')}:</span><span class="home-pill-val">${formatDuration(activeTime)}</span></div>` : ''}
+        ${activeTime > 0 ? `<div class="home-pill"><span class="home-pill-label">${tr('home.activeTime')}:</span><span class="home-pill-val">${formatDuration(activeTime)}</span></div>` : ''}`}
       </div>
       ${viewAllAction('trends')}
     </div>
   ` : '';
 
+  const historyNotice = !historyAnalysis.available
+    ? `<div class="empty-inline" role="status">${escapeHtml(tr('analysis.historyProjectUnavailable'))}</div>`
+    : historyAnalysis.partial
+      ? `<div class="page-notice" role="note">${escapeHtml(tr('analysis.historyPartial'))}</div>`
+      : '';
   const historyStateBlock = historyPending
     ? `<div class="history-load-status" role="status"><fluent-spinner size="small">${tr('loading')}</fluent-spinner><span>${tr('loading')}</span></div>`
     : historyError
       ? `<div class="history-load-status" role="alert"><span>${escapeHtml(tr('error.generic'))}</span><fluent-button appearance="transparent" type="button" data-retry-history>${tr('actions.retry')}</fluent-button></div>`
-      : `<div class="empty-inline" role="status">${tr('empty.history')}</div>`;
+      : historyNotice || `<div class="empty-inline" role="status">${tr('empty.history')}</div>`;
   const sparklineBlock = hasHistory
-    ? `${sparklineHeader}${renderSparkline(daily)}`
+    ? `${historyNotice}${sparklineHeader}${renderSparkline(daily)}`
     : historyStateBlock;
 
   const heatmapBody = heatDaily.length
@@ -217,6 +234,7 @@ export function renderHome() {
     : emptyHtml('empty.history');
 
   return `
+    ${renderAnalysisScopeBar()}
     ${completeness}
     ${renderHistoryScopeNotice()}
     <div class="overview-workspace">

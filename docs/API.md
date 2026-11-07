@@ -105,7 +105,9 @@ Requires an authenticated device session or the owner key and returns the server
 Staged reads are advertised as `statsSummary`, `deviceDetail`, and `sessionList`
 (see `GET /api/stats/summary`). They are additive: a Hub that omits them has only
 `/api/stats`, so a client must treat absence as "not available" and fall back
-rather than call an endpoint that may not exist.
+rather than call an endpoint that may not exist. `sessionQuery`, `usageAnalytics`,
+and `usageDailyFacts` similarly advertise advanced session pagination/filtering,
+bounded usage analytics, and exact daily joint-grain fact persistence.
 
 `sessionAuth` advertises the device-session endpoints below. An older Hub omits
 it and only accepts the owner secret, so clients must keep that fallback.
@@ -411,6 +413,65 @@ Returns `{ total, shown, sessions }`:
 
 The optional `period` query parameter restricts the list to one of those three.
 Advertised as `capabilities.sessionList`.
+
+When `capabilities.sessionQuery` is true, adding any of `deviceId`, `client`,
+`model`, `project`, `q`, `sort`, `order`, `limit`, or `cursor` selects the
+bounded query form. A request with no parameters, or only `period`, keeps the
+legacy response above byte-for-byte in shape. The advanced form returns
+`{ sessions, total, limit, nextCursor, period, sort, order, filters }`:
+
+- `period` is `today`, `month`, or `allTime` (default `allTime`). These are
+  overlapping snapshots; rows from different periods must never be concatenated.
+- Filters are exact except `q`, a case-insensitive search over session, device,
+  client, project, and model identifiers. `project` accepts its raw id, label,
+  key, or the unambiguous `deviceId:projectId` form.
+- `sort` is `lastUsedAt`, `totalTokens`, `costUsd`, `client`, or `messageCount`;
+  `order` is `asc` or `desc`. The row key is the deterministic tie-breaker.
+- `limit` is 1–200 (default 200). Pass the returned opaque `nextCursor` unchanged
+  to retrieve the next page; a cursor is valid only for the same query signature.
+  `total` is the filtered row count, not the page size. Each row includes `key`,
+  `deviceId`, `hostname`, and nullable token-component fields when unknown.
+
+## `GET /api/usage/analytics`
+
+Runs an explicit, bounded aggregate over recorded usage; it never adds work to
+stats/SSE frames or the collector tick. Advertised as
+`capabilities.usageAnalytics`. Soft-deleted devices do not contribute.
+
+- `startDate` / `endDate` are inclusive `YYYY-MM-DD` days, at most 370 days
+  (default: the latest 30-day window). `timeZone` (alias `timezone`) is an IANA
+  zone; otherwise the configured fleet zone is used, then UTC.
+- `bucket` is `day`, `hour`, or `none`. `groupBy` accepts up to five comma-separated
+  or repeated dimensions from `date`, `device`, `client`, `model`, `provider`,
+  `project`, and `session`. Matching filter names accept repeated or
+  comma-separated values, with a bounded number of values per dimension.
+- `metrics` accepts `totalTokens`, `costUsd`, `messageCount`, `outputTokens`,
+  `cacheReadTokens`, `cacheWriteTokens`, `unclassifiedTokens`, and `credits`
+  (short aliases such as `tokens`, `cost`, and `output` are also accepted).
+  Token components and costs remain `null` when their source does not provide
+  them; any unknown contribution makes the corresponding aggregate unknown too.
+  `coverage.costUnavailable` and `metricSemantics.costUsd.available` expose that
+  state explicitly. `input_tokens` elsewhere in the API means uncached input, not
+  unclassified tokens, and messages are not API request counts.
+- `sort` may be a dimension, `bucket`, or metric; `order` is `asc` or `desc`.
+  `limit` is at most 5,000 and `top` at most 100. `nextCursor` is an opaque
+  deterministic cursor tied to the query signature. `truncated` is explicit when
+  source-row, response, series, or Top-N limits discard detail.
+- `source=auto` (default) prefers exact daily graph facts and uses event-derived
+  rows only for uncovered partitions. `source=history` and `source=events` force
+  one source. `format=csv` downloads the same rows and metadata semantics as JSON;
+  spreadsheet-formula prefixes are escaped and export remains bounded.
+
+JSON includes `source`, `bestEffort`, `sourceSelection`, `timeBasis`, `timeZone`,
+requested/actual ranges, `coverage`, `totals`, `rows`, `breakdown`, `series`, and
+an opaque `revision`. `tokscaleGraph` daily facts retain producer-local calendar
+attribution; `usageEventsBestEffort` uses ledger recording time. The latter is a
+cumulative-snapshot delta ledger, not raw requests or exact request-time history.
+Missing days and unavailable components are unknown, not zero. Exact daily facts
+win over event fallback for the same device/day. One-dimensional
+`history.daily.perClient` / `perModel` data cannot reconstruct client×model
+history; `usageDailyFacts` advertises incremental storage of that joint grain on
+subsequent ingests, with no unbounded migration backfill.
 
 ## `GET /api/stats/stream`
 

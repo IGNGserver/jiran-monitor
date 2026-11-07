@@ -1,4 +1,12 @@
 package com.igng.tokenmonitor.android.ui.more
+import com.igng.tokenmonitor.android.R
+import androidx.compose.ui.res.stringResource
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.igng.tokenmonitor.android.ui.SessionSort
+import com.igng.tokenmonitor.android.ui.querySessionRows
+import com.igng.tokenmonitor.android.ui.ScopePeriod
+import com.igng.tokenmonitor.android.ui.ProjectSort
+import com.igng.tokenmonitor.android.ui.queryProjects
 import com.igng.tokenmonitor.android.ui.components.FluentIcons
 import com.igng.tokenmonitor.android.ui.components.FluentSection
 import androidx.compose.ui.semantics.semantics
@@ -37,6 +45,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.text.font.FontWeight
 import com.igng.tokenmonitor.android.ui.components.LimitsSection
 import com.igng.tokenmonitor.android.ui.components.formatRelativeTime
+import com.igng.tokenmonitor.android.ui.components.rememberCostFormatter
 import com.igng.tokenmonitor.android.ui.components.wslStatusLabel
 import com.igng.tokenmonitor.android.ui.components.devicePlatformLabel
 import com.igng.tokenmonitor.android.ui.components.agentRuntimeLabel
@@ -310,170 +319,92 @@ private fun MoreNavRow(
 private const val MAX_SESSION_ROWS = 200
 @Composable
 fun SessionsScreen(
-  stats: StatsDto?,
-  navController: NavHostController,
-  onHome: (() -> Unit)? = null,
-  /**
-   * Session rows fetched from `/api/sessions`. The fleet summary no longer carries
-   * the aggregate session archive, so this is the primary source; the snapshot is
-   * only a fallback for a Hub that does not stage it.
-   */
-  stagedSessions: List<SessionRowDto> = emptyList(),
-  stagedTotal: Int = 0,
-  stagedLoading: Boolean = false,
-  stagedError: String? = null,
-  stagedSupported: Boolean = false,
-  onEnsureSessions: () -> Unit = {},
-  onRetrySessions: () -> Unit = {}
+  state: HubUiState,
+  onOpen: (String) -> Unit,
+  onEnsureSessions: () -> Unit,
+  onRetrySessions: () -> Unit,
+  onHome: (() -> Unit)? = null
 ) {
-  val haptics = rememberAppHaptics()
-  val listState = rememberLazyListState()
-  val scrolled = rememberScrolledFlag(listState)
-  // One row shape for both sources: the staged response is keyed by period, so
-  // fall back to the snapshot key when it is absent.
-  val allSessions: List<Pair<String, SessionDto>> = when {
-    stagedSupported && stagedSessions.isNotEmpty() -> stagedSessions.map { row ->
-      (row.sessionId?.takeIf { it.isNotBlank() } ?: "${row.client.orEmpty()}:${row.period.orEmpty()}") to row.toSessionDto()
-    }
-    else -> availableSessions(stats)
-  }
-  val totalSessions = if (stagedSupported && stagedSessions.isNotEmpty()) stagedTotal else allSessions.size
-  val sessions = if (stagedSupported && stagedSessions.isNotEmpty()) allSessions else allSessions.take(MAX_SESSION_ROWS)
-  val sessionsTruncated = totalSessions > sessions.size
-  // The Hub's list is already capped; without re-asking there is no fuller list to
-  // show, only the stale flag. Refresh on open the first time it is empty.
-  LaunchedEffect(stagedSupported) {
-    if (stagedSupported && stagedSessions.isEmpty()) onEnsureSessions()
-  }
-  val costRank = allSessions
-    .sortedByDescending { it.second.costUsd }
-    .take(8)
-    .map { (key, session) ->
-      val label = buildString {
-        val client = session.client?.let { ClientBranding.label(it) }.orEmpty()
-        if (client.isNotBlank()) append(client)
-        session.projectLabel?.takeIf { it.isNotBlank() }?.let {
-          if (isNotEmpty()) append(" · ")
-          append(it)
-        }
-        val sid = session.sessionId.orEmpty().ifBlank { key }
-        val short = if (sid.length > 18) sid.take(16) + "…" else sid
-        if (isNotEmpty()) append(" · ")
-        append(short)
-      }
-      ShareEntry(
-        key = label,
-        tokens = session.totalTokens.coerceAtLeast(0L),
-        costUsd = session.costUsd
+  val staged = state.authorization?.capabilities?.sessionList == true
+  LaunchedEffect(staged, state.analyticsPeriod, state.deviceFilter) { if (staged) onEnsureSessions() }
+  var query by rememberSaveable { mutableStateOf("") }
+  var sort by rememberSaveable { mutableStateOf(SessionSort.Recent) }
+  val cost = rememberCostFormatter()
+  val rows = querySessionRows(state.normalizedSessionRows(), query, sort)
+  LazyColumn(
+    contentPadding = PaddingValues(horizontal = FluentSpacingDefaults.l, vertical = FluentSpacingDefaults.m),
+    verticalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.xs)
+  ) {
+    item { FluentPageHeader(stringResource(R.string.sessions_title), subtitle = stringResource(R.string.sessions_subtitle)) }
+    item {
+      Text(
+        stringResource(R.string.loaded_period_cap, state.sessionsPeriod, state.sessionsTotal, state.sessionsShown),
+        style = FluentTypeRamp.caption1,
+        color = LocalFluentColors.current.neutralForeground2
       )
     }
-  Column(Modifier.fillMaxSize()) {
-    FluentTopBar(
-      title = "对话",
-      onBack = { haptics.perform(HapticEvent.Tap); navController.popBackStack() },
-      onHome = onHome,
-      scrolled = scrolled
-    )
-    if (sessions.isEmpty() && stagedLoading) {
-      Row(
-        Modifier.padding(FluentSpacingDefaults.l),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.s)
-      ) {
-        FluentProgressRing(size = 16.dp, strokeWidth = 2.dp)
-        Text("正在获取会话…", style = FluentTypeRamp.caption1, color = LocalFluentColors.current.neutralForeground2)
-      }
-    } else if (sessions.isEmpty() && stagedError != null) {
-      Column(Modifier.padding(FluentSpacingDefaults.l)) {
-        Text(stagedError, style = FluentTypeRamp.body2, color = LocalFluentColors.current.neutralForeground2)
-        Spacer(Modifier.height(FluentSpacingDefaults.s))
-        FluentButton(label = "重试", onClick = onRetrySessions, variant = FluentButtonVariant.Outline)
-      }
-    } else if (sessions.isEmpty()) {
-      EmptyState(title = "暂无对话", text = "Hub 当前没有可用的会话快照。")
-    } else {
-      LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-      ) {
-        if (sessionsTruncated) {
-          item {
-            AppCard {
-              Text(
-                "显示 ${sessions.size}/$totalSessions 个会话（已截断以提升性能）。",
-                style = FluentTypeRamp.body2,
-                color = LocalFluentColors.current.neutralForeground2
-              )
-            }
-          }
-        }
-        if (costRank.isNotEmpty()) {
-          item {
-            AppCard {
-              SectionHeader(
-                title = "费用排行",
-                subtitle = "按会话费用 Top ${costRank.size}"
-              )
-              Spacer(Modifier.height(12.dp))
-              ShareBarList(entries = costRank, brandClients = false, showCost = true)
-            }
-          }
-        }
-        items(sessions, key = { it.first }) { (key, session) ->
-          val clientId = session.client.orEmpty()
-          AppCard(onClick = {
-          haptics.perform(HapticEvent.Tap)
-          navController.navigate("session/${Uri.encode(key)}")
-        }) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              if (clientId.isNotBlank()) {
-                ClientMonogram(clientId, size = 28.dp)
-                Spacer(Modifier.width(FluentSpacingDefaults.m))
-              }
-              Column(Modifier.weight(1f)) {
-                Text(
-                  if (clientId.isBlank()) "未知客户端" else ClientBranding.label(clientId),
-                  style = FluentTypeRamp.caption1,
-                  color = LocalFluentColors.current.brandForeground1
-                )
-                Text(
-                  session.sessionId.orEmpty().ifBlank { key },
-                  style = FluentTypeRamp.title3,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis
-                )
-              }
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(
-              Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text(formatTokensShort(session.totalTokens), style = FluentTypeRamp.subtitle)
-              Text(
-                formatUsd(session.costUsd, compact = true),
-                style = FluentTypeRamp.subtitle,
-                color = LocalFluentColors.current.neutralForeground2
-              )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-              "消息 ${session.messageCount} · 最后使用 ${session.lastUsedAt ?: "未知"}",
-              style = FluentTypeRamp.caption1,
-              color = LocalFluentColors.current.neutralForeground2
-            )
-          }
-        }
+    item {
+      FluentTextField(value = query, onValueChange = { query = it }, label = stringResource(R.string.search_loaded_sessions))
+    }
+    item {
+      FluentTabStrip(
+        options = listOf(
+          stringResource(R.string.sort_recent), stringResource(R.string.sort_tokens),
+          stringResource(R.string.sort_cost), stringResource(R.string.sort_name)
+        ),
+        selectedIndex = sort.ordinal,
+        onSelect = { sort = SessionSort.entries[it] }
+      )
+    }
+    if (state.deviceFilter != null && !staged) {
+      item { Text(stringResource(R.string.device_scope_active), color = LocalFluentColors.current.neutralForeground2) }
+    }
+    if (state.sessionsError != null) {
+      item {
+        FluentButton(stringResource(R.string.retry), onRetrySessions, variant = FluentButtonVariant.Outline)
+        Text(state.sessionsError, color = LocalFluentColors.current.errorForeground)
       }
     }
+    if (state.sessionsLoading) item { Text(stringResource(R.string.loading)) }
+    items(rows, key = { it.key }) { row ->
+      val session = row.session
+      FluentListRow(
+        primary = session.projectLabel ?: session.sessionId ?: stringResource(R.string.unnamed_session),
+        secondary = stringResource(
+          R.string.session_row_subtitle,
+          session.client ?: stringResource(R.string.unknown),
+          session.sessionId ?: stringResource(R.string.no_session_id),
+          session.deviceName ?: session.deviceId ?: stringResource(R.string.hub_wide)
+        ),
+        leading = { ClientMonogram(session.client.orEmpty(), size = 30.dp) },
+        onClick = { onOpen(row.key) },
+        trailingPrimary = formatTokensShort(session.totalTokens),
+        trailingSecondary = cost.format(session.costUsd),
+        tertiary = listOfNotNull(
+          session.models.keys.firstOrNull(),
+          session.lastUsedAt?.let { formatRelativeTime(it) }
+        ).joinToString(" · "),
+        containerShape = FluentShapeDefaults.controlCorner,
+        containerBorder = true
+      )
+    }
+    if (!state.sessionsLoading && rows.isEmpty()) {
+      item { Text(stringResource(if (query.isBlank()) R.string.no_loaded_sessions else R.string.no_search_results)) }
+    }
+    if (state.stats?.sessionDetailsOmitted == true || state.stats?.periodProjectsOmitted == true) {
+      item { Text(stringResource(R.string.loaded_rows_may_be_capped), style = FluentTypeRamp.caption1) }
+    }
+    if (onHome != null) item { FluentButton(stringResource(R.string.back_overview), onHome, variant = FluentButtonVariant.Subtle) }
   }
 }
+
 @Composable
-fun SessionDetailScreen(stats: StatsDto?, key: String, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
+fun SessionDetailScreen(state: HubUiState, key: String, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
+  val normalized = state.normalizedSessionRows().firstOrNull { it.key == key }
   val haptics = rememberAppHaptics()
   val scrollState = rememberScrollState()
   val scrolled = rememberScrolledFlag(scrollState)
-  val session = availableSessions(stats).firstOrNull { it.first == key }?.second
+  val session = normalized?.session
   Column(Modifier.fillMaxSize()) {
     FluentTopBar(
       title = "对话详情",
@@ -524,15 +455,19 @@ fun SessionDetailScreen(stats: StatsDto?, key: String, onBack: () -> Unit, onHom
       AppCard {
         Text("Token 类型", style = FluentTypeRamp.title3)
         Spacer(Modifier.height(12.dp))
-        SegmentedTokenBar(
-          listOf(
-            "输入" to session.inputTokens,
-            "输出" to session.outputTokens,
-            "缓存读取" to session.cacheReadTokens,
-            "缓存写入" to session.cacheWriteTokens,
-            "推理" to session.reasoningTokens
-          )
+        val tokenParts = listOfNotNull(
+          session.inputTokens?.let { "输入" to it },
+          session.outputTokens?.let { "输出" to it },
+          session.cacheReadTokens?.let { "缓存读取" to it },
+          session.cacheWriteTokens?.let { "缓存写入" to it }
         )
+        if (tokenParts.isNotEmpty()) SegmentedTokenBar(tokenParts)
+        if (tokenParts.size < 4) {
+          Text(stringResource(R.string.token_components_partial), style = FluentTypeRamp.caption1)
+        }
+        session.reasoningTokens?.let {
+          Text(stringResource(R.string.reasoning_tokens_overlap, it), style = FluentTypeRamp.caption1)
+        }
         Spacer(Modifier.height(FluentSpacingDefaults.m))
         Text(
           "消息 ${session.messageCount} · 开始 ${session.startedAt ?: "未知"} · 最后使用 ${session.lastUsedAt ?: "未知"}",
@@ -565,7 +500,7 @@ fun SessionDetailScreen(stats: StatsDto?, key: String, onBack: () -> Unit, onHom
         }
       }
       Text(
-        "当前 Hub 未提供按会话和时间范围查询事件流水的接口；此页展示已有 stats 快照，不会虚构历史趋势。",
+        "此页展示当前周期已加载的会话快照；列表搜索与排序仅作用于这些行，不代表完整事件流水或逐时历史趋势。",
         style = FluentTypeRamp.caption1,
         color = LocalFluentColors.current.neutralForeground2
       )
@@ -573,110 +508,71 @@ fun SessionDetailScreen(stats: StatsDto?, key: String, onBack: () -> Unit, onHom
   }
 }
 @Composable
-fun ProjectsScreen(stats: StatsDto?, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
-  val haptics = rememberAppHaptics()
-  val listState = rememberLazyListState()
-  val scrolled = rememberScrolledFlag(listState)
-  var periodKey by remember { mutableStateOf("today") }
-  val period = when (periodKey) {
-    "month" -> stats?.periods?.month
-    "allTime" -> stats?.periods?.allTime
-    else -> stats?.periods?.today
+fun ProjectsScreen(
+  state: HubUiState,
+  onBack: () -> Unit,
+  onEnsureDevice: (String) -> Unit,
+  onEnsureRange: () -> Unit,
+  onHome: (() -> Unit)? = null
+) {
+  val deviceDetailSupported = state.authorization?.capabilities?.deviceDetail == true
+  val rangeSupported = state.authorization?.capabilities?.usageRange == true
+  LaunchedEffect(state.deviceFilter, state.analyticsPeriod, deviceDetailSupported, rangeSupported) {
+    if (state.analyticsPeriod.needsRange) {
+      if (rangeSupported && state.customRangeResult == null && !state.customRangeLoading) onEnsureRange()
+    } else {
+      val deviceId = state.deviceFilter
+      if (deviceId != null && deviceDetailSupported && deviceId !in state.deviceDetails) {
+        onEnsureDevice(deviceId)
+      }
+    }
   }
-  val projects = period?.projects.orEmpty().entries
-    .map { (key, project) -> key to project }
-    .filter { (_, project) -> project.tokens > 0L || project.costUsd > 0.0 }
-    .sortedByDescending { it.second.tokens }
-  Column(Modifier.fillMaxSize()) {
-    FluentTopBar(
-      title = "项目",
-      onBack = { haptics.perform(HapticEvent.Tap); onBack() },
-      onHome = onHome,
-      scrolled = scrolled
-    )
-    val periodKeys = listOf("today", "month", "allTime")
-    FluentTabStrip(
-      options = listOf("今日", "本月", "全部"),
-      selectedIndex = periodKeys.indexOf(periodKey).coerceAtLeast(0),
-      onSelect = { index ->
-        haptics.perform(HapticEvent.Selection)
-        periodKey = periodKeys[index]
-      },
-      contentPadding = FluentSpacingDefaults.l,
-    )
-    Spacer(Modifier.height(8.dp))
-    val showIncomplete = periodKey == "allTime" && stats?.projectsIncomplete == true
-    if (projects.isEmpty()) {
-      if (showIncomplete) {
-        AppCard(modifier = Modifier.padding(horizontal = 16.dp)) {
-          Text(
-            "部分设备未上报全部时间的项目汇总，统计可能不完整。",
-            style = FluentTypeRamp.body2,
-            color = LocalFluentColors.current.neutralForeground2
-          )
-        }
-        Spacer(Modifier.height(12.dp))
-      }
-      EmptyState(text = "当前周期暂无项目数据。")
-      return
+  var query by rememberSaveable { mutableStateOf("") }
+  var sort by rememberSaveable { mutableStateOf(ProjectSort.Tokens) }
+  val period = ScopePeriod.resolve(state)
+  val projects = queryProjects(period?.projects.orEmpty(), query, sort)
+  val cost = rememberCostFormatter()
+  LazyColumn(contentPadding = PaddingValues(FluentSpacingDefaults.l), verticalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.xs)) {
+    item { FluentPageHeader(stringResource(R.string.projects_title), subtitle = stringResource(R.string.projects_subtitle)) }
+    item {
+      Text(
+        stringResource(R.string.loaded_projects_cap, period?.projects.orEmpty().size),
+        style = FluentTypeRamp.caption1,
+        color = LocalFluentColors.current.neutralForeground2
+      )
     }
-    LazyColumn(
-      state = listState,
-      contentPadding = PaddingValues(16.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-      if (showIncomplete) {
-        item {
-          AppCard {
-            Text(
-              "部分设备未上报全部时间的项目汇总，统计可能不完整。",
-              style = FluentTypeRamp.body2,
-              color = LocalFluentColors.current.neutralForeground2
-            )
-          }
-        }
-      }
-      items(projects, key = { it.first }) { (key, project) ->
-        AppCard {
-          Text(
-            project.label?.takeIf { it.isNotBlank() } ?: key,
-            style = FluentTypeRamp.title3
-          )
-          Spacer(Modifier.height(FluentSpacingDefaults.s))
-          Text(
-            buildString {
-              append(formatTokens(project.tokens))
-              append(" · ")
-              append(formatUsd(project.costUsd, compact = true))
-              val clients = project.clients.keys.map { ClientBranding.label(it) }
-              if (clients.isNotEmpty()) {
-                append(" · ")
-                append(clients.joinToString(" / "))
-              }
-            },
-            style = FluentTypeRamp.caption1,
-            color = LocalFluentColors.current.neutralForeground2
-          )
-          if (project.clients.isNotEmpty()) {
-            Spacer(Modifier.height(FluentSpacingDefaults.m))
-            ShareBarList(
-              project.clients.entries
-                .sortedByDescending { it.value }
-                .take(6)
-                .map { (client, tokens) ->
-                  ShareEntry(
-                    key = ClientBranding.label(client),
-                    tokens = tokens.coerceAtLeast(0L),
-                    costUsd = 0.0
-                  )
-                }
-            )
-          }
-        }
-      }
+    item { FluentTextField(value = query, onValueChange = { query = it }, label = stringResource(R.string.search_loaded_projects)) }
+    item {
+      FluentTabStrip(
+        options = listOf(stringResource(R.string.sort_tokens), stringResource(R.string.sort_cost), stringResource(R.string.sort_name)),
+        selectedIndex = sort.ordinal,
+        onSelect = { sort = ProjectSort.entries[it] }
+      )
     }
+    items(projects, key = { it.id }) { project ->
+      val client = project.clients.keys.firstOrNull()
+      FluentListRow(
+        primary = project.label.ifBlank { project.id },
+        secondary = stringResource(R.string.project_client_count, project.clients.size),
+        leading = { ClientMonogram(client.orEmpty(), size = 30.dp) },
+        trailingPrimary = formatTokensShort(project.tokens),
+        trailingSecondary = cost.format(project.costUsd, compact = true),
+        tertiary = project.clients.keys.joinToString(" · ").ifEmpty { project.id },
+        containerShape = FluentShapeDefaults.controlCorner,
+        containerBorder = true
+      )
+    }
+    if (projects.isEmpty()) item {
+      Text(stringResource(if (period == null) R.string.loading else if (query.isBlank()) R.string.no_loaded_projects else R.string.no_search_results))
+    }
+    if (state.stats?.periodProjectsOmitted == true || state.stats?.sessionDetailsOmitted == true) {
+      item { Text(stringResource(R.string.loaded_rows_may_be_capped), style = FluentTypeRamp.caption1) }
+    }
+    item { FluentButton(stringResource(R.string.back), onBack, variant = FluentButtonVariant.Subtle) }
+    if (onHome != null) item { FluentButton(stringResource(R.string.back_overview), onHome, variant = FluentButtonVariant.Subtle) }
   }
 }
+
 @Composable
 fun PricingScreen(state: HubUiState, viewModel: HubViewModel, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
   LaunchedEffect(state.authorization?.capabilities?.pricing) {
@@ -1530,36 +1426,6 @@ private fun channelLabel(channel: String?): String = when (channel) {
   else -> "未知渠道"
 }
 
-fun availableSessions(stats: StatsDto?): List<Pair<String, SessionDto>> {
-  val periods = listOf(stats?.periods?.today, stats?.periods?.month, stats?.periods?.allTime)
-  return periods
-    .firstOrNull { !it?.sessions.isNullOrEmpty() }
-    ?.sessions
-    .orEmpty()
-    .toList()
-    .sortedByDescending { it.second.lastUsedAt.orEmpty() }
-}
-
-/** Fold the staged `/api/sessions` row onto the snapshot [SessionDto] shape. */
-internal fun SessionRowDto.toSessionDto(): SessionDto = SessionDto(
-  client = client,
-  sessionId = sessionId,
-  projectId = projectId,
-  projectLabel = projectLabel,
-  totalTokens = totalTokens,
-  costUsd = costUsd,
-  messageCount = messageCount,
-  inputTokens = inputTokens,
-  outputTokens = outputTokens,
-  cacheReadTokens = cacheReadTokens,
-  cacheWriteTokens = cacheWriteTokens,
-  reasoningTokens = reasoningTokens,
-  startedAt = startedAt,
-  lastUsedAt = lastUsedAt,
-  models = models,
-  credits = credits,
-  modelCredits = modelCredits
-)
 @Composable
 fun StatusScreen(stats: StatsDto?, onBack: () -> Unit, onHome: (() -> Unit)? = null) {
   val haptics = rememberAppHaptics()

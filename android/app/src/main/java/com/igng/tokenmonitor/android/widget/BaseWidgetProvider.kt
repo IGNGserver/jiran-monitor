@@ -72,3 +72,7 @@ class TrendWidgetProvider : BaseWidgetProvider() {
 class DashboardWidgetProvider : BaseWidgetProvider() {
   override val kind: WidgetKind = WidgetKind.Dashboard
 }
+
+class ModelsWidgetProvider : BaseWidgetProvider() {
+  override val kind: WidgetKind = WidgetKind.Models
+}

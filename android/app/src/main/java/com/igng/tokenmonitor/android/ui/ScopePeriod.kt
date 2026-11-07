@@ -1,5 +1,6 @@
 package com.igng.tokenmonitor.android.ui
 
+import com.igng.tokenmonitor.android.data.model.FleetCalendar
 import com.igng.tokenmonitor.android.data.model.PeriodDto
 import com.igng.tokenmonitor.android.data.model.PeriodsDto
 import com.igng.tokenmonitor.android.data.model.UsageRangeDto
@@ -40,11 +41,16 @@ object ScopePeriod {
    * day keys on [HubUiState.customRange] are cross-checked as well, so a half-written
    * state can never present one window's number under another window's label.
    */
-  fun rangeAnswerIsCurrent(state: HubUiState, today: LocalDate = LocalDate.now()): Boolean {
+  fun rangeAnswerIsCurrent(
+    state: HubUiState,
+    today: LocalDate = FleetCalendar.today(state.fleetTimeZone)
+  ): Boolean {
     val kind = state.analyticsPeriod
     if (!kind.needsRange) return false
     val answer = state.customRangeResult ?: return false
     val range = state.customRange ?: return false
+    // A zone change re-keys the calendar even when every date label stays identical.
+    if (state.customRangeZoneId != FleetCalendar.zoneId(state.fleetTimeZone)) return false
     return when (kind) {
       AnalyticsPeriodKind.Yesterday, AnalyticsPeriodKind.Week -> {
         val window = DateRanges.presetRangeWindow(kind.presetPeriodName(), today) ?: return false
@@ -88,9 +94,23 @@ object ScopePeriod {
    * midnight renders a loading or retry affordance instead of the snapshot period that
    * the *previous* tab was showing.
    */
-  fun resolve(state: HubUiState, today: LocalDate = LocalDate.now()): PeriodDto? {
+  fun resolve(
+    state: HubUiState,
+    today: LocalDate = FleetCalendar.today(state.fleetTimeZone)
+  ): PeriodDto? {
     val kind = state.analyticsPeriod
-    if (!kind.needsRange) return snapshotPeriod(state.stats?.periods, kind)
+    if (!kind.needsRange) {
+      val selectedId = state.deviceFilter
+      if (selectedId == null) return snapshotPeriod(state.stats?.periods, kind)
+      // A capable staged Hub must answer from the full device document. Falling back to
+      // its slim row would silently drop client×model/session grain and fake a filter.
+      val device = if (state.authorization?.capabilities?.deviceDetail == true) {
+        state.deviceDetails[selectedId]
+      } else {
+        state.devices.firstOrNull { it.deviceId == selectedId }
+      }
+      return snapshotPeriod(device?.periods, kind)
+    }
     val result = state.customRangeResult ?: return null
     if (!rangeAnswerIsCurrent(state, today)) return null
     return result.toPeriodDto()
@@ -105,7 +125,10 @@ object ScopePeriod {
    * re-requesting the Hub on every tick.  A hand-picked range has a fixed window and is
    * never pending.
    */
-  fun pendingRangeWindow(state: HubUiState, today: LocalDate = LocalDate.now()): PresetRangeWindow? {
+  fun pendingRangeWindow(
+    state: HubUiState,
+    today: LocalDate = FleetCalendar.today(state.fleetTimeZone)
+  ): PresetRangeWindow? {
     val kind = state.analyticsPeriod
     if (!kind.needsRange) return null
     val window = DateRanges.presetRangeWindow(kind.presetPeriodName(), today) ?: return null
@@ -122,7 +145,10 @@ object ScopePeriod {
    * attribution at this grain*.  The event ledger and the live windows do carry the
    * split, so only these sources downgrade the message.
    */
-  fun rangeLacksModelSplit(state: HubUiState, today: LocalDate = LocalDate.now()): Boolean {
+  fun rangeLacksModelSplit(
+    state: HubUiState,
+    today: LocalDate = FleetCalendar.today(state.fleetTimeZone)
+  ): Boolean {
     if (!state.analyticsPeriod.needsRange) return false
     if (!rangeAnswerIsCurrent(state, today)) return false
     return when (state.customRangeResult?.source) {

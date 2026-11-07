@@ -22,7 +22,8 @@ object WidgetRegistry {
     WidgetSpec(WidgetKind.Today, TodayWidgetProvider::class.java, R.string.widget_today_label),
     WidgetSpec(WidgetKind.Quota, QuotaWidgetProvider::class.java, R.string.widget_quota_label),
     WidgetSpec(WidgetKind.Trend, TrendWidgetProvider::class.java, R.string.widget_trend_label),
-    WidgetSpec(WidgetKind.Dashboard, DashboardWidgetProvider::class.java, R.string.widget_dashboard_label)
+    WidgetSpec(WidgetKind.Dashboard, DashboardWidgetProvider::class.java, R.string.widget_dashboard_label),
+    WidgetSpec(WidgetKind.Models, ModelsWidgetProvider::class.java, R.string.widget_models_label)
   )
 
   fun component(context: Context, kind: WidgetKind): ComponentName {

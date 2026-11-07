@@ -125,6 +125,31 @@ class WidgetSnapshotMapperTest {
   }
 
   @Test
+  fun `top models are deterministic bounded and preserve unknown cost`() {
+    val stats = StatsDto(
+      periods = PeriodsDto(
+        today = PeriodDto(
+          models = mapOf("z" to 100L, "a" to 100L, "b" to 90L, "c" to 80L, "d" to 70L, "e" to 60L),
+          modelCosts = mapOf("a" to 1.0, "z" to 2.0)
+        )
+      )
+    )
+    val snapshot = WidgetSnapshotMapper.build(stats, null, emptyMap(), "USD", now, zone)
+
+    assertTrue(snapshot.modelsCaptured)
+    assertEquals(listOf("a", "z", "b", "c", "d"), snapshot.topModels.map { it.name })
+    assertEquals(1.0, snapshot.topModels.first().costUsd!!, 0.0)
+    assertNull(snapshot.topModels.first { it.name == "b" }.costUsd)
+    assertFalse(WidgetSnapshot().modelsCaptured)
+  }
+
+  @Test
+  fun `model widget opens the model workspace while trend keeps general analytics`() {
+    assertEquals("analytics/models", WidgetIntents.routeFor(WidgetKind.Models))
+    assertEquals("analytics", WidgetIntents.routeFor(WidgetKind.Trend))
+  }
+
+  @Test
   fun `failure keeps the last good snapshot but records the attempt`() {
     val previous = WidgetSnapshot(
       capturedAtMs = now.toEpochMilli(),

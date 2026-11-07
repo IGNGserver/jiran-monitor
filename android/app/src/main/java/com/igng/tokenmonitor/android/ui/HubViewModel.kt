@@ -2,8 +2,10 @@ package com.igng.tokenmonitor.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.igng.tokenmonitor.android.data.local.UserPreferencesStore
 import com.igng.tokenmonitor.android.data.model.BatchPricingResponseDto
 import com.igng.tokenmonitor.android.data.model.DeviceDto
+import com.igng.tokenmonitor.android.data.model.FleetCalendar
 import com.igng.tokenmonitor.android.data.model.AccountRequestDto
 import com.igng.tokenmonitor.android.data.model.HubAccountDto
 import com.igng.tokenmonitor.android.data.model.OAuthExchangeRequestDto
@@ -72,7 +74,13 @@ data class CustomRangeSelection(
 
 data class HubUiState(
   val stats: StatsDto? = null,
+  /** Last advertised fleet calendar; null keeps the system-default fallback. */
+  val fleetTimeZone: String? = null,
+  /** Null is Hub-wide. Persisted and shared by Overview, Analytics and Trends. */
+  val deviceFilter: String? = null,
   val history: HistoryDto? = null,
+  /** Device id for [history], or an empty string for the fleet document. */
+  val historyIdentity: String = "",
   val devices: List<DeviceDto> = emptyList(),
   val authorization: HubAuthorizationDto? = null,
   val pricing: List<PricingDto> = emptyList(),
@@ -84,6 +92,8 @@ data class HubUiState(
   val analyticsPeriod: AnalyticsPeriodKind = AnalyticsPeriodKind.Today,
   val customRange: CustomRangeSelection? = null,
   val customRangeResult: UsageRangeDto? = null,
+  /** Zone is part of the range request/cache identity, not just request metadata. */
+  val customRangeZoneId: String = FleetCalendar.zoneId(null),
   val customRangeLoading: Boolean = false,
   /**
    * The calendar window a `Yesterday` / `Week` tab last resolved.  Kept separately
@@ -126,20 +136,38 @@ data class HubUiState(
   /** Set when a device detail request failed, so the page can offer a retry. */
   val deviceDetailError: String? = null,
   val deviceDetailLoading: Boolean = false,
-  /** Aggregate session list from `/api/sessions`, independent of the snapshot. */
-  val sessions: List<SessionRowDto> = emptyList(),
+  /** One normalized source for the session list and detail route. */
+  val sessions: List<NormalizedSessionRow> = emptyList(),
+  val sessionsPeriod: String = "today",
   val sessionsTotal: Int = 0,
   val sessionsShown: Int = 0,
   val sessionsLoading: Boolean = false,
-  val sessionsError: String? = null
-)
+  val sessionsError: String? = null,
+  /** 0–4 names; ViewModel ownership survives refresh and navigation. */
+  val comparisonModels: Set<String> = emptySet()
+) {
+  fun historyForFilter(): HistoryDto? =
+    history.takeIf { historyIdentity == (deviceFilter ?: "") }
+
+  fun normalizedSessionRows(): List<NormalizedSessionRow> {
+    val capabilities = authorization?.capabilities
+    val staged = capabilities?.sessionList == true
+    return if (staged && (deviceFilter == null || capabilities?.sessionQuery == true)) sessions else normalizeLegacySessionRows(
+      ScopePeriod.resolve(this),
+      analyticsPeriod.presetPeriodName()
+    )
+  }
+}
 
 @HiltViewModel
 class HubViewModel @Inject constructor(
   private val repository: HubRepository,
-  private val widgetUpdater: WidgetUpdater
+  private val widgetUpdater: WidgetUpdater,
+  private val userPreferences: UserPreferencesStore
 ) : ViewModel() {
-  private val _state = MutableStateFlow(HubUiState())
+  private val _state = MutableStateFlow(
+    HubUiState(deviceFilter = userPreferences.read().deviceFilter)
+  )
   val state = _state.asStateFlow()
   private var sseJob: Job? = null
   private var rangeJob: Job? = null
@@ -165,6 +193,8 @@ class HubViewModel @Inject constructor(
   private var historyRevisionSeen: String? = null
   /** Whether a history document has been fetched at least once this session. */
   private var hasObservedHistory = false
+  private var historySequence = 0L
+  private var sessionsSequence = 0L
 
   private fun isCurrent(generation: Long) = generation == connectionGeneration
 
@@ -234,17 +264,20 @@ class HubViewModel @Inject constructor(
     // Conditional: the Hub answers 304 when the document has not moved, so the
     // repeated "re-ask for history" a stream frame triggers costs headers, not a
     // body. A Hub without the revision-based validator simply answers 200.
-    when (val result = repository.historyIfChanged(etag = historyEtag)) {
-      is HubResult.Success -> if (isCurrent(generation)) {
+    val filter = _state.value.deviceFilter
+    val identity = filter ?: ""
+    val sequence = ++historySequence
+    when (val result = repository.historyIfChanged(etag = historyEtag, deviceId = filter)) {
+      is HubResult.Success -> if (isCurrent(generation) && sequence == historySequence && _state.value.deviceFilter == filter) {
         result.value.etag?.let { historyEtag = it }
         val document = result.value.document
         if (document != null) {
           hasObservedHistory = true
-          _state.value = _state.value.copy(history = document, historyError = null)
+          _state.value = _state.value.copy(history = document, historyIdentity = identity, historyError = null)
           scheduleWidgetPublish()
         }
       }
-      is HubResult.Failure -> if (isCurrent(generation)) {
+      is HubResult.Failure -> if (isCurrent(generation) && sequence == historySequence && _state.value.deviceFilter == filter) {
         // Not fatal to the dashboard, but the fallback (historyPreview) carries no
         // per-client/per-model stacks and is capped at 30 days, so trends and the
         // client model split stay degraded until this succeeds. Record it so the
@@ -267,11 +300,24 @@ class HubViewModel @Inject constructor(
     when (val result = repository.stats(staged)) {
       is HubResult.Success -> if (isCurrent(generation)) {
         if (frameVersion == statsFrameVersion) {
+          val zoneChanged = _state.value.fleetTimeZone != result.value.fleetTimeZone
+          if (zoneChanged) {
+            rangeJob?.cancel()
+            rangeSequence += 1
+          }
           _state.value = _state.value.copy(
             stats = result.value,
+            fleetTimeZone = result.value.fleetTimeZone,
             devices = result.value.devices,
-            isLoading = false
+            isLoading = false,
+            customRangeResult = if (zoneChanged) null else _state.value.customRangeResult,
+            customRangeLoading = if (zoneChanged) false else _state.value.customRangeLoading,
+            customRangeZoneId = if (zoneChanged) FleetCalendar.zoneId(result.value.fleetTimeZone) else _state.value.customRangeZoneId
           )
+          val selected = _state.value.deviceFilter
+          if (selected != null && result.value.devices.none { it.deviceId == selected }) {
+            setDeviceFilter(null)
+          }
         } else {
           _state.value = _state.value.copy(isLoading = false)
         }
@@ -340,20 +386,37 @@ class HubViewModel @Inject constructor(
     }
   }
 
-  /** Load the aggregate session list from `/api/sessions`, independent of the snapshot. */
+  /** Load only the selected snapshot period; range answers have their own sessions. */
   fun refreshSessions(period: String? = null) = launchRequest { generation ->
     if (_state.value.authorization?.capabilities?.sessionList != true) return@launchRequest
-    _state.value = _state.value.copy(sessionsLoading = true, sessionsError = null)
-    when (val result = repository.sessions(period)) {
-      is HubResult.Success -> if (isCurrent(generation)) {
+    val requested = period ?: when (_state.value.analyticsPeriod) {
+      AnalyticsPeriodKind.Today -> "today"
+      AnalyticsPeriodKind.Month -> "month"
+      AnalyticsPeriodKind.AllTime -> "allTime"
+      else -> return@launchRequest
+    }
+    val filter = _state.value.deviceFilter
+    val sequence = ++sessionsSequence
+    _state.value = _state.value.copy(
+      sessions = emptyList(),
+      sessionsTotal = 0,
+      sessionsShown = 0,
+      sessionsLoading = true,
+      sessionsError = null,
+      sessionsPeriod = requested
+    )
+    val deviceId = filter.takeIf { _state.value.authorization?.capabilities?.sessionQuery == true }
+    when (val result = repository.sessions(requested, deviceId)) {
+      is HubResult.Success -> if (isCurrent(generation) && sequence == sessionsSequence && _state.value.deviceFilter == filter) {
         _state.value = _state.value.copy(
-          sessions = result.value.sessions,
+          sessions = normalizeSessionRows(result.value.sessions, requested),
+          sessionsPeriod = requested,
           sessionsTotal = result.value.total,
-          sessionsShown = result.value.shown,
+          sessionsShown = result.value.shown.takeIf { it > 0 } ?: result.value.sessions.size,
           sessionsLoading = false
         )
       }
-      is HubResult.Failure -> if (isCurrent(generation)) {
+      is HubResult.Failure -> if (isCurrent(generation) && sequence == sessionsSequence && _state.value.deviceFilter == filter) {
         _state.value = _state.value.copy(sessionsLoading = false, sessionsError = result.error.message)
       }
     }
@@ -432,7 +495,11 @@ class HubViewModel @Inject constructor(
     refreshJob?.cancel()
     refreshJob = null
     cancelRequests()
-    _state.value = HubUiState(isLoading = true, realtime = RealtimeStatus.Reconnecting)
+    _state.value = HubUiState(
+      isLoading = true,
+      realtime = RealtimeStatus.Reconnecting,
+      deviceFilter = userPreferences.read().deviceFilter
+    )
     refreshAll()
     startRealtime(generation)
     viewModelScope.launch {
@@ -447,6 +514,34 @@ class HubViewModel @Inject constructor(
 
   fun clearBatchResult() { _state.value = _state.value.copy(batchResult = null) }
   fun dismissError() { _state.value = _state.value.copy(error = null) }
+
+  fun setDeviceFilter(deviceId: String?) {
+    val next = deviceId?.takeIf { it.isNotBlank() }
+    if (_state.value.deviceFilter == next) return
+    userPreferences.setDeviceFilter(next)
+    historyEtag = null
+    hasObservedHistory = false
+    _state.value = _state.value.copy(
+      deviceFilter = next,
+      history = null,
+      historyIdentity = next ?: "",
+      historyError = null
+    )
+    if (next != null) refreshDeviceDetail(next)
+    refreshHistory()
+    if (!_state.value.analyticsPeriod.needsRange) refreshSessions()
+  }
+
+  fun toggleModelComparison(model: String) {
+    val selected = _state.value.comparisonModels
+    _state.value = _state.value.copy(
+      comparisonModels = if (model in selected) selected - model
+      else if (selected.size < 4) selected + model
+      else selected
+    )
+  }
+
+  fun clearModelComparison() { _state.value = _state.value.copy(comparisonModels = emptySet()) }
 
   fun setAnalyticsPeriod(kind: AnalyticsPeriodKind) {
     if (kind == AnalyticsPeriodKind.Yesterday || kind == AnalyticsPeriodKind.Week) {
@@ -496,6 +591,7 @@ class HubViewModel @Inject constructor(
       customRangeLoading = false,
       activePresetWindow = null
     )
+    refreshSessions()
   }
 
   /**
@@ -516,8 +612,10 @@ class HubViewModel @Inject constructor(
       loadCustomRange(range.startDate, range.endDate, range.startHour, range.endHour, range.label)
       return
     }
-    val window = com.igng.tokenmonitor.android.ui.core.DateRanges.presetRangeWindow(kind.presetPeriodName())
-      ?: return
+    val window = com.igng.tokenmonitor.android.ui.core.DateRanges.presetRangeWindow(
+      kind.presetPeriodName(),
+      FleetCalendar.today(current.fleetTimeZone)
+    ) ?: return
     // Tapping the tab that is already being fetched must not spend a second request: the
     // in-flight call already describes this exact window.
     if (_state.value.customRangeLoading && window.stillMatches(_state.value.activePresetWindow)) return
@@ -543,7 +641,9 @@ class HubViewModel @Inject constructor(
    * (`pendingPresetRangeWindow()` in `src/shared-ui/app.js`), and the reason a preset
    * never re-scans tokscale per tick in local mode.
    */
-  private fun refreshPendingRangeWindow(today: java.time.LocalDate = java.time.LocalDate.now()) {
+  private fun refreshPendingRangeWindow(
+    today: java.time.LocalDate = FleetCalendar.today(_state.value.fleetTimeZone)
+  ) {
     if (_state.value.authorization?.capabilities?.usageRange != true) return
     if (_state.value.customRangeLoading) return
     val window = ScopePeriod.pendingRangeWindow(_state.value, today) ?: return
@@ -553,7 +653,7 @@ class HubViewModel @Inject constructor(
   }
 
   private fun rangeKey(startDate: String, endDate: String, startHour: Int, endHour: Int): String =
-    "$startDate:$endDate:$startHour:$endHour"
+    "${FleetCalendar.zoneId(_state.value.fleetTimeZone)}:$startDate:$endDate:$startHour:$endHour"
 
   fun loadCustomRange(
     startDate: String,
@@ -570,6 +670,7 @@ class HubViewModel @Inject constructor(
     }
     val rangeLabel = label ?: formatRangeLabel(startDate, endDate, startHour, endHour)
     val selection = CustomRangeSelection(startDate, endDate, startHour, endHour, rangeLabel)
+    val zone = FleetCalendar.zone(_state.value.fleetTimeZone)
     val key = rangeKey(startDate, endDate, startHour, endHour)
     // Send the local window's absolute instants alongside the day labels: the Hub
     // aggregates history on the labels but filters the event ledger on the instants, and
@@ -579,7 +680,8 @@ class HubViewModel @Inject constructor(
         java.time.LocalDate.parse(startDate),
         java.time.LocalDate.parse(endDate),
         startHour,
-        endHour
+        endHour,
+        zone
       )
     }.getOrNull()
     val sequence = ++rangeSequence
@@ -593,6 +695,7 @@ class HubViewModel @Inject constructor(
       customRangeResult = null,
       customRangeLoading = true,
       activePresetWindow = presetWindow,
+      customRangeZoneId = zone.id,
       error = null
     )
     rangeJob = viewModelScope.launch {
@@ -673,12 +776,21 @@ class HubViewModel @Inject constructor(
               // A frame without a device list retains the last REST snapshot.
               val devices = stats.devices.ifEmpty { _state.value.devices }
               statsFrameVersion += 1
+              val zoneChanged = _state.value.fleetTimeZone != stats.fleetTimeZone
+              if (zoneChanged) {
+                rangeJob?.cancel()
+                rangeSequence += 1
+              }
               _state.value = _state.value.copy(
                 stats = stats,
+                fleetTimeZone = stats.fleetTimeZone,
                 devices = devices,
                 isLoading = false,
                 realtime = RealtimeStatus.Live,
-                error = null
+                error = null,
+                customRangeResult = if (zoneChanged) null else _state.value.customRangeResult,
+                customRangeLoading = if (zoneChanged) false else _state.value.customRangeLoading,
+                customRangeZoneId = if (zoneChanged) FleetCalendar.zoneId(stats.fleetTimeZone) else _state.value.customRangeZoneId
               )
               // A snapshot frame is also the clock check for a preset scope tab: past
               // local midnight the cached window no longer names 昨日/本周, so it is

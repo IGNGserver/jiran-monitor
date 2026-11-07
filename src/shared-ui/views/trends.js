@@ -10,6 +10,8 @@ import {
   formatNumber
 } from '../core/format.js';
 import { ALL_DEVICES_OPTION_VALUE, clientLabel, deviceOptionValue, heatmapValue, historyDaily } from '../core/data.js';
+import { filterHistoryForAnalysis, hasAnalysisFilters, topNWithOther } from '../core/analysis.js';
+import { renderAnalysisScopeBar } from './analysis.js';
 import {
   tr,
   escapeHtml,
@@ -92,13 +94,22 @@ function tipText(parts) {
   return parts.filter(Boolean).join(' · ');
 }
 
-export function renderSparkline(daily) {
+function unavailableMetric(daily, metric) {
+  return metric === 'cost' && daily.some((day) => day?.cost === null)
+    ? `<div class="page-notice" role="note">${escapeHtml(tr('data.unavailable'))}</div>` : '';
+}
+
+export function renderSparkline(daily, metric = 'tokens') {
   if (!daily.length) return emptyHtml('empty.history');
+  const unavailable = unavailableMetric(daily, metric);
+  if (unavailable) return unavailable;
+  const valueMetric = metric === 'cost' ? 'cost' : 'tokens';
   const width = 720;
   const height = 240;
   const pad = { top: 18, right: 16, bottom: 32, left: 52 };
-  const values = daily.map((day) => Number(day.tokens || 0));
-  const { top, ticks } = yAxisScale(Math.max(1, ...values));
+  const values = daily.map((day) => Number(day[valueMetric] || 0));
+  const minimum = valueMetric === 'cost' ? 0.0001 : 1;
+  const { top, ticks } = yAxisScale(Math.max(minimum, ...values), 4, minimum);
   const innerW = width - pad.left - pad.right;
   const innerH = height - pad.top - pad.bottom;
   const slot = innerW / Math.max(1, daily.length);
@@ -106,7 +117,8 @@ export function renderSparkline(daily) {
   const bars = daily.map((day, index) => {
     const tokens = Number(day.tokens || 0);
     const cost = Number(day.cost || 0);
-    const h = Math.max(tokens > 0 ? 2 : 0, (innerH * tokens) / top);
+    const value = Number(day[valueMetric] || 0);
+    const h = Math.max(value > 0 ? 2 : 0, (innerH * value) / top);
     const x = pad.left + index * slot + (slot - barW) / 2;
     const y = height - pad.bottom - h;
     const tip = tipText([
@@ -114,7 +126,7 @@ export function renderSparkline(daily) {
       `${formatNumber(tokens)} ${tr('stats.tokens')}`,
       cost ? formatCost(cost, appState().prefs.currency) : ''
     ]);
-    return `<g class="chart-bar"><rect class="bar-seg chart-hit" x="${x}" y="${tokens > 0 ? y : height - pad.bottom - 2}" width="${barW}" height="${tokens > 0 ? h : 2}" rx="3" fill="var(--accent)" opacity="${tokens > 0 ? 0.9 : 0.25}" data-tip="${escapeHtml(tip)}"></rect></g>`;
+    return `<g class="chart-bar"><rect class="bar-seg chart-hit" x="${x}" y="${value > 0 ? y : height - pad.bottom - 2}" width="${barW}" height="${value > 0 ? h : 2}" rx="3" fill="var(--accent)" opacity="${value > 0 ? 0.9 : 0.25}" data-tip="${escapeHtml(tip)}"></rect></g>`;
   }).join('');
   const labelDays = [daily[0], daily[Math.floor(daily.length / 2)], daily[daily.length - 1]].filter(Boolean);
   const labels = labelDays.map((day) => {
@@ -125,7 +137,7 @@ export function renderSparkline(daily) {
   return `
     <div class="chart-wrap">
       <svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Usage trend">
-        ${renderYAxis({ pad, width, height, top, ticks })}
+        ${renderYAxis({ pad, width, height, top, ticks, formatTick: (value) => formatTrendValue(value, valueMetric) })}
         <line class="axis-base" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" />
         ${bars}
         ${labels}
@@ -136,6 +148,8 @@ export function renderSparkline(daily) {
 
 export function renderHeatmap(daily, metric = 'tokens') {
   if (!daily.length) return emptyHtml('empty.history');
+  const unavailable = unavailableMetric(daily, metric);
+  if (unavailable) return unavailable;
   const heatMetric = metric === 'cost' ? 'cost' : 'tokens';
   const values = daily.map((day) => heatmapValue(day, heatMetric));
   const max = Math.max(1, ...values);
@@ -180,8 +194,27 @@ export function renderHeatmap(daily, metric = 'tokens') {
   `;
 }
 
+function trendSeriesLabel(stackBy, key) {
+  if (key === '__other__') return tr('analysis.other');
+  return stackBy === 'model' ? key : clientLabel(key);
+}
+
 export function renderStackedBars(daily, stackBy, metric = 'tokens') {
   if (!daily.length) return emptyHtml('empty.history');
+  const unavailable = unavailableMetric(daily, metric);
+  if (unavailable) return unavailable;
+  const collapsed = topNWithOther(daily, stackBy, 8, metric);
+  if (collapsed.totalKeys > 8) {
+    const property = stackBy === 'model' ? 'perModel' : 'perClient';
+    daily = collapsed.days.map((day) => ({
+      ...day,
+      [property]: Object.fromEntries(collapsed.keys.map((key) => [key, {
+        tokens: metric === 'tokens' ? day.values[key] : 0,
+        cost: metric === 'cost' ? day.values[key] : 0,
+        activeTimeMs: metric === 'activeTime' ? day.values[key] : 0
+      }]))
+    }));
+  }
   const width = 760;
   const height = 280;
   const pad = { top: 18, right: 16, bottom: 36, left: 52 };
@@ -195,7 +228,7 @@ export function renderStackedBars(daily, stackBy, metric = 'tokens') {
   }
   let topKeys = [...seriesKeys.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 8)
+    .slice(0, collapsed.totalKeys > 8 ? 9 : 8)
     .map(([key]) => key);
   const useTotalsFallback = topKeys.length === 0;
   if (useTotalsFallback) {
@@ -233,7 +266,7 @@ export function renderStackedBars(daily, stackBy, metric = 'tokens') {
       y -= h;
       const label = useTotalsFallback
         ? tr('stats.tokens')
-        : (stackBy === 'model' ? key : clientLabel(key));
+        : trendSeriesLabel(stackBy, key);
       tipLines.push(`${label}: ${formatTrendValue(amount, metric)}`);
       barsForDay.push(`<rect class="bar-seg chart-hit" x="${x}" y="${y}" width="${barW}" height="${h}" fill="${colorMap[key]}" data-tip="${escapeHtml(tipText([day.date || '', `${label}: ${formatTrendValue(amount, metric)}`]))}"></rect>`);
     }
@@ -265,7 +298,7 @@ export function renderStackedBars(daily, stackBy, metric = 'tokens') {
       <li class="trend-rank-row">
         <span class="trend-rank-index">${index + 1}</span>
         <span class="swatch" style="background:${colorMap[key]}"></span>
-        <span class="trend-rank-name">${escapeHtml(useTotalsFallback ? tr('stats.tokens') : (stackBy === 'model' ? key : clientLabel(key)))}</span>
+        <span class="trend-rank-name">${escapeHtml(useTotalsFallback ? tr('stats.tokens') : trendSeriesLabel(stackBy, key))}</span>
         <span class="trend-rank-value">${escapeHtml(formatTrendValue(amount, metric))}</span>
         <span class="trend-rank-share">${percent}%</span>
       </li>
@@ -324,7 +357,7 @@ function renderTrendBreakdownTable(daily, stackBy, metric) {
   const rowHtml = rows.map(([key, row]) => {
     const value = trendValue(row, metric);
     const share = totalMetric > 0 ? Math.round((value / totalMetric) * 100) : 0;
-    const name = key ? (stackBy === 'model' ? key : clientLabel(key)) : tr('trends.allUsage');
+    const name = key ? trendSeriesLabel(stackBy, key) : tr('trends.allUsage');
     return '<tr><th scope="row">' + escapeHtml(name)
       + '</th><td>' + escapeHtml(formatNumber(row.tokens))
       + '</td><td>' + escapeHtml(formatCost(row.cost, appState().prefs.currency))
@@ -351,11 +384,14 @@ export function renderTrends() {
   const historyError = appState().historyError
     && appState().historyErrorDeviceId === deviceId;
   const history = historySource();
+  const historyAnalysis = filterHistoryForAnalysis(history, appState().prefs, { custom: Boolean(appState().customPeriod) });
+  const scopedHistory = { ...history, daily: historyAnalysis.daily };
   const daily = historyLoading || historyError
     ? []
-    : historyDaily(history, appState().prefs.trendsRange === 'all' ? 0 : appState().prefs.trendsRange);
-  const hasHistory = daily.length > 0;
+    : historyDaily(scopedHistory, appState().prefs.trendsRange === 'all' ? 0 : appState().prefs.trendsRange);
+  const hasHistory = daily.length > 0 && historyAnalysis.available;
   const trendMetric = ['tokens', 'cost', 'activeTime'].includes(appState().prefs.trendsMetric) ? appState().prefs.trendsMetric : 'tokens';
+  const activeTimeUnavailable = trendMetric === 'activeTime' && !historyAnalysis.activeTimeAvailable;
   const rangeSummary = daily.reduce((summary, day) => ({
     tokens: summary.tokens + Number(day?.tokens || 0),
     cost: summary.cost + Number(day?.cost || 0),
@@ -365,7 +401,7 @@ export function renderTrends() {
     ${usageMetricCard(tr('home.activeDays'), formatNumber(daily.filter((day) => Number(day?.tokens || 0) > 0 || Number(day?.cost || 0) > 0).length))}
     ${usageMetricCard(tr('stats.tokens'), formatNumber(rangeSummary.tokens))}
     ${usageMetricCard(tr('stats.cost'), formatCost(rangeSummary.cost, appState().prefs.currency))}
-    ${usageMetricCard(tr('home.activeTime'), formatDuration(rangeSummary.activeTime))}
+    ${usageMetricCard(tr('home.activeTime'), historyAnalysis.activeTimeAvailable ? formatDuration(rangeSummary.activeTime) : '—')}
   </div>` : '';
   const selectedDevice = devices.find((device) => String(device.deviceId || '') === deviceId);
   const deviceOptions = [
@@ -383,9 +419,18 @@ export function renderTrends() {
     ? `<div class="history-load-status" role="status"><fluent-spinner size="small">${escapeHtml(tr('loading'))}</fluent-spinner><span>${escapeHtml(tr('loading'))}</span></div>`
     : historyError
       ? `<div class="history-load-status" role="alert"><span>${escapeHtml(tr('error.generic'))}</span><fluent-button appearance="transparent" type="button" data-retry-history>${escapeHtml(tr('actions.retry'))}</fluent-button></div>`
-      : hasHistory ? renderStackedBars(daily, appState().prefs.trendsStack, trendMetric) : emptyHtml('empty.history');
+      : !historyAnalysis.available
+        ? `<div class="empty-inline" role="status">${escapeHtml(tr('analysis.historyProjectUnavailable'))}</div>`
+        : activeTimeUnavailable
+          ? `<div class="empty-inline" role="status">${escapeHtml(tr('analysis.historyActiveTimeUnavailable'))}</div>`
+          : hasHistory ? renderStackedBars(daily, appState().prefs.trendsStack, trendMetric) : emptyHtml('empty.history');
+  const historyFilterNotice = historyAnalysis.partial && hasAnalysisFilters(appState().prefs) && !appState().customPeriod
+    ? `<div class="page-notice" role="note">${escapeHtml(tr('analysis.historyPartial'))}</div>`
+    : '';
   return `
+    ${renderAnalysisScopeBar()}
     ${renderHistoryScopeNotice()}
+    ${historyFilterNotice}
     ${trendSummary}
     <div class="trends-toolbar" role="group" aria-label="${tr('nav.trends')}">
       <label class="field trends-device-filter"><span>${escapeHtml(tr('trends.device'))}</span><fluent-dropdown data-trends-device aria-label="${escapeHtml(tr('trends.device'))}" title="${escapeHtml(selectedDevice?.hostname || selectedDevice?.deviceId || tr('filters.allDevices'))}"><fluent-listbox>${deviceOptions}</fluent-listbox></fluent-dropdown></label>
@@ -394,6 +439,6 @@ export function renderTrends() {
       ${trendSelect('trendsStack', tr('trends.stack'), appState().prefs.trendsStack === 'model' ? 'model' : 'client', [['client', tr('trends.stack.client')], ['model', tr('trends.stack.model')]])}
     </div>
     ${panel(tr('nav.trends'), historyContent, hasHistory ? `${daily[0].date} – ${daily.at(-1).date}` : selectedDevice?.hostname || '')}
-    ${hasHistory ? renderTrendBreakdownTable(daily, appState().prefs.trendsStack === 'model' ? 'model' : 'client', trendMetric) : ''}
+    ${hasHistory && !activeTimeUnavailable ? renderTrendBreakdownTable(daily, appState().prefs.trendsStack === 'model' ? 'model' : 'client', trendMetric) : ''}
   `;
 }

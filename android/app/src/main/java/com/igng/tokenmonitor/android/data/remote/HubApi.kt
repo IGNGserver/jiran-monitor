@@ -65,7 +65,10 @@ interface HubApi {
    */
   @GET("api/devices/{id}") suspend fun device(@Path("id") id: String): DeviceResponseDto
   /** The aggregate session list, paged by display cap on the Hub. */
-  @GET("api/sessions") suspend fun sessions(@Query("period") period: String? = null): SessionsResponseDto
+  @GET("api/sessions") suspend fun sessions(
+    @Query("period") period: String? = null,
+    @Query("deviceId") deviceId: String? = null
+  ): SessionsResponseDto
   // [deviceId] scopes the daily/monthly history to one machine.  Without the parameter
   // every trend the client drew was the whole fleet aggregated, which is why the
   // device detail could not show a device's own history.

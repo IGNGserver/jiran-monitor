@@ -47,6 +47,13 @@ object WidgetSnapshotMapper {
       today = totals(stats.periods.today),
       month = totals(stats.periods.month),
       allTime = totals(stats.periods.allTime),
+      modelsCaptured = true,
+      topModels = stats.periods.today.models.entries
+        .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+        .take(5)
+        .map { (name, tokens) ->
+          WidgetModel(name = name, tokens = tokens, costUsd = stats.periods.today.modelCosts[name])
+        },
       yesterday = byDate[today.minusDays(1)]?.let { dayTotals(it) },
       days = (6L downTo 0L).map { offset ->
         val date = today.minusDays(offset)

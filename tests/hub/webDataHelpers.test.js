@@ -399,6 +399,7 @@ test('usage rows expose desktop-aligned token mix fields', () => {
     cacheReadTokens: 400,
     cacheWriteTokens: 50,
     uncachedInputTokens: 450,
+    available: true,
     cacheHitPercent: 400 / 900 * 100
   });
   assert.equal(toolRows(period)[0].metrics.cacheReadTokens, 300);
@@ -674,34 +675,14 @@ test('a custom range derives the per-client model split from its sessions', () =
   assert.match(appSource, /clientModelCosts: payload\.clientModelCosts \|\| deriveClientModels\(payload\.sessions, 'modelCosts'\)/);
 });
 
-test('every locale defines every shared-UI translation key', () => {
-  // A missing key silently falls back to English (t() resolves
-  // MESSAGES[locale][key] || MESSAGES.en[key] || key), so a locale can ship with
-  // holes that read as the wrong language rather than as an error. Japanese and
-  // Korean were each missing seven account-help strings this way.
-  const i18nSource = fs.readFileSync(path.join(__dirname, '../../src/shared-ui/core/i18n.js'), 'utf8');
-  const keysFor = (marker, source) => {
-    const start = source.indexOf(marker);
-    if (start < 0) return null;
-    const rest = source.slice(start);
-    // Close of a locale block: two spaces then `}`.
-    const end = rest.search(/\n\s{2}\},?\n/);
-    // Indentation is the dictionary's, so match it explicitly rather than with
-    // literal spaces (which are hard to count and trip no-regex-spaces).
-    const keyPattern = new RegExp("^\\s{4}'([^']+)':", 'gm');
-    return new Set([...rest.slice(0, end).matchAll(keyPattern)].map((m) => m[1]));
-  };
-  const messages = i18nSource.slice(0, i18nSource.indexOf('const PAGE_MESSAGES'));
-  const page = i18nSource.slice(i18nSource.indexOf('const PAGE_MESSAGES'));
-  const union = (marker) => {
-    const a = keysFor(marker, messages) || new Set();
-    const b = keysFor(marker, page) || new Set();
-    return new Set([...a, ...b]);
-  };
-  const en = union('  en: {');
+test('every locale defines every shared-UI translation key', async () => {
+  // Inspect the assembled runtime dictionaries. Source-regex checks miss keys
+  // introduced through a locale-scoped spread even when t() can resolve them.
+  const { MESSAGE_KEYS } = await import(pathToFileUrl(path.join(__dirname, '../../src/shared-ui/core/i18n.js')));
+  const en = new Set(MESSAGE_KEYS.en);
   assert.ok(en.size > 200, 'the English dictionary should be substantial');
-  for (const locale of ["'zh-CN'", "'zh-TW'", 'ja', 'ko']) {
-    const other = union(`  ${locale}: {`);
+  for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) {
+    const other = new Set(MESSAGE_KEYS[locale]);
     const missing = [...en].filter((key) => !other.has(key));
     assert.deepEqual(missing, [], `${locale} is missing: ${missing.join(', ')}`);
   }

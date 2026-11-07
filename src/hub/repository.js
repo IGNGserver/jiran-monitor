@@ -869,6 +869,156 @@ function createRepository(pool) {
     }
   }
 
+  async function replaceUsageDailyFacts(deviceId, document, executor = pool) {
+    const id = String(deviceId || '').trim();
+    const source = String(document?.source || 'tokscaleGraph');
+    const replaceAll = document?.replaceAll === true || !Array.isArray(document?.changedDays);
+    let writeDates = new Set((document?.days || []).map((day) => String(day.date).slice(0, 10)));
+    const removeDates = new Set((document?.removeDays || []).map((day) => String(day).slice(0, 10)));
+    if (!replaceAll) {
+      // One small indexed read replaces a full delete/insert of the rolling
+      // history on every collector tick. Missing partitions are backfilled once;
+      // unchanged partitions are left untouched.
+      const [existing] = await executor.execute(
+        'SELECT DATE_FORMAT(day_key, \'%Y-%m-%d\') AS day_key FROM usage_daily_fact_days WHERE device_id = ? AND source = ?',
+        [id, source]
+      );
+      const covered = new Set(existing.map((row) => String(row.day_key).slice(0, 10)));
+      writeDates = new Set([
+        ...document.changedDays.map((day) => String(day).slice(0, 10)),
+        ...[...writeDates].filter((day) => !covered.has(day))
+      ]);
+    }
+    if (replaceAll) {
+      await executor.execute('DELETE FROM usage_daily_facts WHERE device_id = ? AND source = ?', [id, source]);
+      await executor.execute('DELETE FROM usage_daily_fact_days WHERE device_id = ? AND source = ?', [id, source]);
+    } else {
+      const deleteDates = new Set([...writeDates, ...removeDates]);
+      for (const batch of writeBatches([...deleteDates].map((day) => [day]))) {
+        const marks = batch.map(() => '?').join(', ');
+        const values = [id, source, ...batch.flat()];
+        await executor.execute(`DELETE FROM usage_daily_facts WHERE device_id = ? AND source = ? AND day_key IN (${marks})`, values);
+        await executor.execute(`DELETE FROM usage_daily_fact_days WHERE device_id = ? AND source = ? AND day_key IN (${marks})`, values);
+      }
+    }
+    let factCount = 0;
+    let dayCount = 0;
+    function* days() {
+      for (const day of document?.days || []) {
+        if (!writeDates.has(String(day.date).slice(0, 10))) continue;
+        dayCount += 1;
+        yield [
+          id, day.date, source, day.timeBasis || document.timeBasis || 'producerCalendarDay',
+          String(day.timeZone ?? document.timeZone ?? ''), Number(day.factCount) || 0, day.truncated === true ? 1 : 0
+        ];
+      }
+    }
+    const daySql = `INSERT INTO usage_daily_fact_days (
+      device_id, day_key, source, time_basis, time_zone, fact_count, truncated
+    ) VALUES `;
+    for (const batch of writeBatches(days())) {
+      await executor.execute(daySql + placeholders(batch), batch.flat());
+    }
+    function* facts() {
+      for (const fact of document?.facts || []) {
+        if (!writeDates.has(String(fact.date).slice(0, 10))) continue;
+        factCount += 1;
+        yield [
+          id, fact.date, fact.client, fact.model, fact.provider || '', fact.tokens,
+          fact.outputTokens, fact.cacheReadTokens, fact.cacheWriteTokens, fact.unclassifiedTokens,
+          fact.cost, fact.messages, fact.tokenComponentsAvailable === true ? 1 : 0,
+          fact.provenance || 'unknown', source, fact.timeBasis || document.timeBasis || 'producerCalendarDay'
+        ];
+      }
+    }
+    const factSql = `INSERT INTO usage_daily_facts (
+      device_id, day_key, client, model, provider, total_tokens, output_tokens,
+      cache_read_tokens, cache_write_tokens, unclassified_tokens, cost_usd, message_count,
+      token_components_available, provenance, source, time_basis
+    ) VALUES `;
+    for (const batch of writeBatches(facts())) {
+      await executor.execute(factSql + placeholders(batch), batch.flat());
+    }
+    return { factCount, dayCount, truncated: document?.truncated === true };
+  }
+
+  function analyticsFilterSql(filters = {}, { events = false, alias = '' } = {}) {
+    const clauses = [];
+    const values = [];
+    const prefix = alias ? `${alias}.` : '';
+    const columns = {
+      device: `${prefix}device_id`, client: `${prefix}client`, model: `${prefix}model`, provider: events ? `COALESCE(${prefix}provider, '')` : `${prefix}provider`
+    };
+    for (const [name, column] of Object.entries(columns)) {
+      const selected = Array.isArray(filters[name]) ? filters[name] : [];
+      if (!selected.length) continue;
+      clauses.push(`${column} IN (${selected.map(() => '?').join(', ')})`);
+      values.push(...selected);
+    }
+    if (events && Array.isArray(filters.project) && filters.project.length) {
+      const list = filters.project.map(() => '?').join(', ');
+      clauses.push(`(${prefix}project_id IN (${list}) OR ${prefix}project_label IN (${list}))`);
+      values.push(...filters.project, ...filters.project);
+    }
+    if (events && Array.isArray(filters.session) && filters.session.length) {
+      clauses.push(`${prefix}session_id IN (${filters.session.map(() => '?').join(', ')})`);
+      values.push(...filters.session);
+    }
+    return { clauses, values };
+  }
+
+  async function queryUsageDailyFacts({ from, to, filters = {}, limit = 50_000 }, executor = pool) {
+    const { clauses, values } = analyticsFilterSql(filters, { alias: 'f' });
+    clauses.push('f.day_key >= ?', 'f.day_key < ?');
+    values.push(from, to);
+    const where = clauses.join(' AND ');
+    const [rows] = await executor.execute(`SELECT
+      f.device_id, DATE_FORMAT(f.day_key, '%Y-%m-%d') AS day_key, f.client, f.model, f.provider,
+      f.total_tokens, f.output_tokens, f.cache_read_tokens, f.cache_write_tokens, f.unclassified_tokens,
+      f.cost_usd, f.message_count, f.token_components_available, f.provenance, f.source, f.time_basis
+      FROM usage_daily_facts f
+      JOIN devices active_device ON active_device.device_id = f.device_id AND active_device.deleted_at IS NULL
+      WHERE ${where}
+      ORDER BY f.day_key, f.device_id, f.client, f.model, f.provider, f.id
+      LIMIT ${Math.max(1, Math.floor(limit) + 1)}`, values);
+    const dayFilters = analyticsFilterSql({ device: filters.device }, { alias: 'fd' });
+    dayFilters.clauses.push('fd.day_key >= ?', 'fd.day_key < ?');
+    dayFilters.values.push(from, to);
+    const [days] = await executor.execute(`SELECT
+      fd.device_id, DATE_FORMAT(fd.day_key, '%Y-%m-%d') AS day_key, fd.source, fd.time_basis, fd.time_zone,
+      fd.fact_count, fd.truncated FROM usage_daily_fact_days fd
+      JOIN devices active_device ON active_device.device_id = fd.device_id AND active_device.deleted_at IS NULL
+      WHERE ${dayFilters.clauses.join(' AND ')}
+      ORDER BY fd.day_key, fd.device_id, fd.source LIMIT 10001`, dayFilters.values);
+    return {
+      rows,
+      days,
+      truncated: rows.length > limit || days.length > 10000
+    };
+  }
+
+  async function queryUsageEventAnalytics({ from, to, filters = {}, limit = 50_000 }, executor = pool) {
+    const { clauses, values } = analyticsFilterSql(filters, { events: true, alias: 'e' });
+    clauses.push('e.recorded_at >= ?', 'e.recorded_at < ?');
+    values.push(date(from), date(to));
+    const [rows] = await executor.execute(`SELECT
+      DATE_FORMAT(e.recorded_at, '%Y-%m-%d %H:00:00.000') AS hour_bucket,
+      e.device_id, e.client, e.session_id, e.model, COALESCE(e.provider, '') AS provider,
+      COALESCE(e.project_id, '') AS project_id, COALESCE(e.project_label, '') AS project_label,
+      SUM(e.input_tokens + e.output_tokens + e.cache_read_tokens + e.cache_write_tokens) AS total_tokens,
+      SUM(e.input_tokens) AS input_tokens, SUM(e.output_tokens) AS output_tokens,
+      SUM(e.cache_read_tokens) AS cache_read_tokens, SUM(e.cache_write_tokens) AS cache_write_tokens,
+      0 AS unclassified_tokens, SUM(e.cost_usd) AS cost_usd,
+      SUM(e.message_count_delta) AS message_count, SUM(e.credits) AS credits
+      FROM usage_events e
+      JOIN devices active_device ON active_device.device_id = e.device_id AND active_device.deleted_at IS NULL
+      WHERE ${clauses.join(' AND ')}
+      GROUP BY hour_bucket, e.device_id, e.client, e.session_id, e.model, provider, project_id, project_label
+      ORDER BY hour_bucket, e.device_id, e.client, e.session_id, e.model, provider, project_id
+      LIMIT ${Math.max(1, Math.floor(limit) + 1)}`, values);
+    return { rows, truncated: rows.length > limit };
+  }
+
   async function replaceSessions(deviceId, summaries, executor = pool, { previousSummaries } = {}) {
     // This is a mutable materialized view of the latest all-time snapshot, not
     // the immutable event ledger. Diff against SQL, not a process cache: rollback,
@@ -958,6 +1108,14 @@ function createRepository(pool) {
 
   async function moveDeviceUsageEvents(previousDeviceId, nextDeviceId, executor = pool) {
     await executor.execute('UPDATE usage_events SET device_id = ? WHERE device_id = ?', [nextDeviceId, previousDeviceId]);
+    await executor.execute('UPDATE usage_daily_facts SET device_id = ? WHERE device_id = ?', [nextDeviceId, previousDeviceId]);
+    await executor.execute(`INSERT INTO usage_daily_fact_days (
+      device_id, day_key, source, time_basis, time_zone, fact_count, truncated
+    ) SELECT ?, day_key, source, time_basis, time_zone, fact_count, truncated
+      FROM usage_daily_fact_days WHERE device_id = ?
+      ON DUPLICATE KEY UPDATE fact_count = usage_daily_fact_days.fact_count + VALUES(fact_count),
+        truncated = GREATEST(usage_daily_fact_days.truncated, VALUES(truncated))`, [nextDeviceId, previousDeviceId]);
+    await executor.execute('DELETE FROM usage_daily_fact_days WHERE device_id = ?', [previousDeviceId]);
   }
 
   async function mergeDeviceSessions(fromDeviceId, toDeviceId, executor = pool) {
@@ -1018,6 +1176,8 @@ function createRepository(pool) {
       await saveIngestBaseline(nextId, nextBaseline, { transferred: true }, executor);
     }
     await executor.execute('UPDATE usage_events SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
+    await executor.execute('UPDATE usage_daily_facts SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
+    await executor.execute('UPDATE usage_daily_fact_days SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
     await executor.execute('UPDATE sessions SET device_id = ? WHERE device_id = ?', [nextId, previousId]);
     await executor.execute('DELETE FROM device_ingest_state WHERE device_id = ?', [previousId]);
     await executor.execute('DELETE FROM device_ingest_baseline WHERE device_id = ?', [previousId]);
@@ -1154,6 +1314,9 @@ function createRepository(pool) {
     getPricing,
     getSubscriptions,
     insertUsageEvents,
+    replaceUsageDailyFacts,
+    queryUsageDailyFacts,
+    queryUsageEventAnalytics,
     appendHubAccountAudit,
     createHubAccount,
     deleteHubAccount,

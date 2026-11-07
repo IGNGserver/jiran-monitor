@@ -158,6 +158,7 @@ private fun WidgetConfigContent(
         WidgetKind.Quota -> "额度"
         WidgetKind.Trend -> "趋势"
         WidgetKind.Dashboard -> "仪表盘"
+        WidgetKind.Models -> "热门模型"
       },
       onBack = onCancel
     )

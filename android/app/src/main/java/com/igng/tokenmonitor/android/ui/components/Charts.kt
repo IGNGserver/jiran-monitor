@@ -230,7 +230,7 @@ fun ShareBarList(
 fun ShareBarRow(
   name: String,
   tokens: Long,
-  costUsd: Double,
+  costUsd: Double?,
   fraction: Float,
   color: Color,
   credits: Double? = null,
@@ -298,7 +298,7 @@ fun ShareBarRow(
         if (showCost && !(credits != null && credits > 0.0 && tokens == 0L)) {
           Spacer(Modifier.width(FluentSpacingDefaults.s))
           Text(
-            cost.format(costUsd, compact = true),
+            costUsd?.let { cost.format(it, compact = true) } ?: "—",
             style = FluentTypeRamp.caption1,
             color = colors.neutralForeground3
           )

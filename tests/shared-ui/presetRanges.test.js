@@ -13,6 +13,7 @@ const test = require('node:test');
 const {
   PRESET_RANGE_PERIODS,
   SCOPE_WEEK_FIRST_DAY_INDEX,
+  coerceRangeInstants,
   firstDayOfWeekIndex,
   isPresetRangePeriod,
   isRangeScopeSelection,
@@ -91,6 +92,16 @@ test('the scope week start ignores the locale entirely', () => {
   assert.equal(firstDayOfWeekIndex('en'), SCOPE_WEEK_FIRST_DAY_INDEX);
   assert.equal(firstDayOfWeekIndex('not a locale tag!!'), SCOPE_WEEK_FIRST_DAY_INDEX);
   assert.equal(firstDayOfWeekIndex(undefined), firstDayOfWeekIndex('zh-CN'));
+});
+
+test('saved ISO ranges and live Date ranges share one request boundary', () => {
+  const from = new Date('2026-11-01T00:00:00.000Z');
+  const to = new Date('2026-11-02T00:00:00.000Z');
+  const restored = coerceRangeInstants({ from: from.toISOString(), to: to.toISOString() });
+  assert.equal(restored.from.toISOString(), from.toISOString());
+  assert.equal(restored.to.toISOString(), to.toISOString());
+  assert.equal(coerceRangeInstants({ from, to }).from, from);
+  assert.equal(coerceRangeInstants({ from: 'not-a-date', to }), null);
 });
 
 test('only the calendar presets resolve through the range API', () => {

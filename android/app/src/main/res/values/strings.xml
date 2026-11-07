@@ -16,6 +16,8 @@
   <string name="widget_trend_description">最近七日的 token 或费用走势</string>
   <string name="widget_dashboard_label">计然 · 仪表盘</string>
   <string name="widget_dashboard_description">今日用量、趋势、额度与在线设备一屏全览</string>
+  <string name="widget_models_label">计然 · 热门模型</string>
+  <string name="widget_models_description">今日 Token 用量最高的模型与费用</string>
 
   <string name="widget_config_title">配置小组件</string>
   <string name="widget_config_done">完成</string>
@@ -32,4 +34,53 @@
 
   <string name="widget_refresh">刷新</string>
   <string name="widget_open">打开计然</string>
+
+  <string name="sessions_title">对话</string>
+  <string name="sessions_subtitle">搜索、排序并查看已加载会话</string>
+  <string name="loaded_period_cap">周期 %1$s · 共 %2$d 条 · 已加载 %3$d 条</string>
+  <string name="search_loaded_sessions">搜索会话、项目、设备或模型</string>
+  <string name="sort_recent">最近</string>
+  <string name="sort_tokens">Token</string>
+  <string name="sort_cost">费用</string>
+  <string name="sort_name">名称</string>
+  <string name="device_scope_active">仅显示当前设备的已加载数据</string>
+  <string name="retry">重试</string>
+  <string name="loading">正在加载…</string>
+  <string name="unnamed_session">未命名会话</string>
+  <string name="unknown">未知</string>
+  <string name="no_session_id">无会话 ID</string>
+  <string name="hub_wide">全部设备</string>
+  <string name="session_row_subtitle">%1$s · %2$s · %3$s</string>
+  <string name="no_loaded_sessions">当前周期没有已加载会话。</string>
+  <string name="no_search_results">没有符合搜索条件的结果。</string>
+  <string name="loaded_rows_may_be_capped">列表可能经过截断；搜索和排序只作用于已加载数据。</string>
+  <string name="back_overview">返回概览</string>
+  <string name="back">返回</string>
+  <string name="projects_title">项目</string>
+  <string name="projects_subtitle">当前分析范围内的项目用量</string>
+  <string name="loaded_projects_cap">已加载 %1$d 个项目</string>
+  <string name="search_loaded_projects">搜索项目或客户端</string>
+  <string name="project_client_count">%1$d 个客户端</string>
+  <string name="no_loaded_projects">当前范围没有项目数据。</string>
+  <string name="token_components_partial">部分 Token 成分未上报，图中仅展示已知项。</string>
+  <string name="reasoning_tokens_overlap">推理 Token：%1$d（可能与输出重叠）</string>
+  <string name="model_search">搜索模型、客户端或设备</string>
+  <string name="model_input">输入</string>
+  <string name="model_output">输出</string>
+  <string name="model_cache_read">缓存读取</string>
+  <string name="model_cache_write">缓存写入</string>
+  <string name="model_clients">客户端</string>
+  <string name="model_sessions">已加载会话</string>
+  <string name="model_compare_hint">已选择 %1$d 个模型；选择 2–4 个进行比较。</string>
+  <string name="model_compare_clear">清除比较</string>
+  <string name="model_compare_title">模型对比</string>
+  <string name="model_compare_add">加入比较</string>
+  <string name="model_compare_remove">移出比较</string>
+  <string name="model_metric">指标</string>
+  <string name="model_results">模型明细（%1$d）</string>
+  <string name="model_results_capped">仅展示前 100 个搜索结果；请缩小搜索范围。</string>
+  <string name="model_no_results">没有符合当前搜索条件的模型。</string>
+  <string name="model_client_device_count">%1$d 个客户端 · %2$d 台设备</string>
+  <string name="model_output_value">输出 %1$s</string>
+  <string name="model_components_unknown">部分或全部 Token 成分未知</string>
 </resources>

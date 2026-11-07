@@ -7,7 +7,9 @@ import android.widget.RemoteViews
 import com.igng.tokenmonitor.android.R
 import com.igng.tokenmonitor.android.data.local.UserPreferences
 import com.igng.tokenmonitor.android.ui.components.ClientIcons
+import com.igng.tokenmonitor.android.ui.components.formatMoney
 import com.igng.tokenmonitor.android.ui.components.formatMoneyAmount
+import com.igng.tokenmonitor.android.ui.components.formatTokensShort
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
@@ -99,6 +101,7 @@ object WidgetRenderer {
       WidgetKind.Quota -> WidgetSizing.quota(size.widthDp)
       WidgetKind.Trend -> WidgetSizing.trend()
       WidgetKind.Dashboard -> WidgetSizing.dashboard()
+      WidgetKind.Models -> WidgetSizing.models()
     }
     val layoutRes = when (layout) {
       WidgetLayout.TodaySmall -> R.layout.widget_today_small
@@ -107,6 +110,7 @@ object WidgetRenderer {
       WidgetLayout.QuotaMedium -> R.layout.widget_quota_medium
       WidgetLayout.TrendMedium -> R.layout.widget_trend_medium
       WidgetLayout.Dashboard -> R.layout.widget_dashboard
+      WidgetLayout.ModelsMedium -> R.layout.widget_models_medium
     }
     val views = RemoteViews(context.packageName, layoutRes)
     val palette = WidgetPalettes.resolve(context, input.preferences)
@@ -153,8 +157,50 @@ object WidgetRenderer {
       WidgetKind.Dashboard -> renderDashboard(
         views, layout, size, input, palette, bitmaps, now, refreshing, widgetId
       )
+      WidgetKind.Models -> renderModels(views, size, input, palette)
     }
     manager.updateAppWidget(widgetId, views)
+  }
+
+  private fun renderModels(
+    views: RemoteViews,
+    size: WidgetSize,
+    input: RenderInput,
+    palette: WidgetPalette
+  ) {
+    val snapshot = input.snapshot
+    val message = when {
+      snapshot == null || !snapshot.hasData -> "暂无快照，请先刷新"
+      !snapshot.modelsCaptured -> "等待模型数据刷新"
+      snapshot.topModels.isEmpty() -> "今日暂无模型用量"
+      else -> null
+    }
+    val rows = listOf(
+      intArrayOf(R.id.model_row_1, R.id.model_name_1, R.id.model_tokens_1, R.id.model_cost_1),
+      intArrayOf(R.id.model_row_2, R.id.model_name_2, R.id.model_tokens_2, R.id.model_cost_2),
+      intArrayOf(R.id.model_row_3, R.id.model_name_3, R.id.model_tokens_3, R.id.model_cost_3),
+      intArrayOf(R.id.model_row_4, R.id.model_name_4, R.id.model_tokens_4, R.id.model_cost_4),
+      intArrayOf(R.id.model_row_5, R.id.model_name_5, R.id.model_tokens_5, R.id.model_cost_5)
+    )
+    val limit = WidgetSizing.modelRowCount(size.heightDp)
+    rows.forEachIndexed { index, ids ->
+      val model = if (message == null) snapshot?.topModels?.getOrNull(index) else null
+      val showMessage = message != null && index == 0
+      views.setViewVisibility(ids[0], if ((model != null || showMessage) && index < limit) View.VISIBLE else View.GONE)
+      if (model != null && index < limit) {
+        views.text(ids[1], model.name, palette.fg1)
+        views.text(ids[2], formatTokensShort(model.tokens), palette.fg1)
+        val cost = model.costUsd?.let {
+          if (input.preferences.widgetHideCost) "••••"
+          else formatMoney(it, snapshot?.currency ?: "USD", snapshot?.rate, compact = it >= 1000)
+        } ?: "—"
+        views.text(ids[3], cost, palette.brand)
+      } else if (showMessage) {
+        views.text(ids[1], message, palette.fg3)
+        views.text(ids[2], "", palette.fg3)
+        views.text(ids[3], "", palette.fg3)
+      }
+    }
   }
 
   private fun applySurface(
@@ -171,6 +217,7 @@ object WidgetRenderer {
       WidgetLayout.QuotaMedium -> 230 to 120
       WidgetLayout.TrendMedium -> 250 to 130
       WidgetLayout.Dashboard -> 250 to 240
+      WidgetLayout.ModelsMedium -> 250 to 130
     }
     val width = size.widthDp.coerceIn(minW, 600)
     val height = size.heightDp.coerceIn(minH, 600)
@@ -196,7 +243,7 @@ object WidgetRenderer {
   ) {
     val brandSize = when (layout) {
       WidgetLayout.TodaySmall -> 13f
-      WidgetLayout.TodayMedium, WidgetLayout.QuotaMedium, WidgetLayout.TrendMedium -> 14f
+      WidgetLayout.TodayMedium, WidgetLayout.QuotaMedium, WidgetLayout.TrendMedium, WidgetLayout.ModelsMedium -> 14f
       WidgetLayout.QuotaSmall -> 12f
       WidgetLayout.Dashboard -> 16f
     }
@@ -686,6 +733,7 @@ object WidgetRenderer {
     WidgetKind.Quota -> if (layout == WidgetLayout.QuotaSmall) "额度" else "额度 · LIMITS"
     WidgetKind.Trend -> "趋势 · 7 日"
     WidgetKind.Dashboard -> "计然 · 仪表盘"
+    WidgetKind.Models -> "热门模型 · 今日"
   }
 
   private fun hasDot(layout: WidgetLayout): Boolean = when (layout) {
@@ -699,7 +747,8 @@ object WidgetRenderer {
   }
 
   private fun hasRefresh(layout: WidgetLayout): Boolean = when (layout) {
-    WidgetLayout.TodayMedium, WidgetLayout.QuotaMedium, WidgetLayout.TrendMedium, WidgetLayout.Dashboard -> true
+    WidgetLayout.TodayMedium, WidgetLayout.QuotaMedium, WidgetLayout.TrendMedium,
+    WidgetLayout.Dashboard, WidgetLayout.ModelsMedium -> true
     else -> false
   }
 
@@ -710,7 +759,7 @@ object WidgetRenderer {
 
   /** Trend / quota / dashboard always show "更新于…"; today shows it only when stale. */
   private fun hasPersistentStateLine(layout: WidgetLayout): Boolean = when (layout) {
-    WidgetLayout.TrendMedium, WidgetLayout.QuotaMedium, WidgetLayout.Dashboard -> true
+    WidgetLayout.TrendMedium, WidgetLayout.QuotaMedium, WidgetLayout.Dashboard, WidgetLayout.ModelsMedium -> true
     else -> false
   }
 
@@ -772,7 +821,7 @@ object WidgetRenderer {
         widthDp = width.takeIf { it > 0 } ?: 110,
         heightDp = height.takeIf { it > 0 } ?: 110
       )
-      WidgetKind.Trend -> WidgetSize(
+      WidgetKind.Trend, WidgetKind.Models -> WidgetSize(
         widthDp = width.takeIf { it > 0 } ?: 250,
         heightDp = height.takeIf { it > 0 } ?: 130
       )

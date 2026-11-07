@@ -83,6 +83,18 @@
         android:resource="@xml/widget_dashboard_info" />
     </receiver>
 
+    <receiver
+      android:name=".widget.ModelsWidgetProvider"
+      android:exported="true"
+      android:label="@string/widget_models_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/widget_models_info" />
+    </receiver>
+
     <!-- Refresh / metric-toggle actions come only from our own PendingIntents, so
          this receiver stays private: another app cannot spend the owner key's
          network or change what a widget displays. -->
