@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent">
+  <ImageView
+    android:id="@+id/widget_surface"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:contentDescription="@null"
+    android:scaleType="fitXY" />
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="13dp">
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="24dp"
+      android:gravity="center_vertical"
+      android:orientation="horizontal">
+      <ImageView
+        android:id="@+id/widget_brand_mark"
+        android:layout_width="14dp"
+        android:layout_height="14dp"
+        android:background="@drawable/widget_mark_bg"
+        android:contentDescription="@null" />
+      <TextView
+        android:id="@+id/widget_eyebrow"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="5dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
+        android:letterSpacing="0.08"
+        android:maxLines="1"
+        android:text="热门模型 · 今日"
+        android:textColor="@android:color/black"
+        android:textSize="8sp" />
+      <ImageView
+        android:id="@+id/widget_refresh"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:contentDescription="@string/widget_refresh"
+        android:padding="4dp"
+        android:src="@drawable/fluent_arrow_clockwise" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/model_row_1" android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <TextView android:id="@+id/model_name_1" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text="GPT-5" android:textColor="@android:color/black" android:textSize="11sp" />
+      <TextView android:id="@+id/model_tokens_1" android:layout_width="64dp" android:layout_height="wrap_content" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="1.2M" android:textColor="@android:color/black" android:textSize="10sp" />
+      <TextView android:id="@+id/model_cost_1" android:layout_width="72dp" android:layout_height="wrap_content" android:layout_marginStart="6dp" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="$2.40" android:textColor="@android:color/darker_gray" android:textSize="9sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/model_row_2" android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <TextView android:id="@+id/model_name_2" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text="Claude Sonnet" android:textColor="@android:color/black" android:textSize="11sp" />
+      <TextView android:id="@+id/model_tokens_2" android:layout_width="64dp" android:layout_height="wrap_content" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="840K" android:textColor="@android:color/black" android:textSize="10sp" />
+      <TextView android:id="@+id/model_cost_2" android:layout_width="72dp" android:layout_height="wrap_content" android:layout_marginStart="6dp" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="$1.80" android:textColor="@android:color/darker_gray" android:textSize="9sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/model_row_3" android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <TextView android:id="@+id/model_name_3" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text="Gemini" android:textColor="@android:color/black" android:textSize="11sp" />
+      <TextView android:id="@+id/model_tokens_3" android:layout_width="64dp" android:layout_height="wrap_content" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="620K" android:textColor="@android:color/black" android:textSize="10sp" />
+      <TextView android:id="@+id/model_cost_3" android:layout_width="72dp" android:layout_height="wrap_content" android:layout_marginStart="6dp" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="$0.90" android:textColor="@android:color/darker_gray" android:textSize="9sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/model_row_4" android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <TextView android:id="@+id/model_name_4" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text="DeepSeek" android:textColor="@android:color/black" android:textSize="11sp" />
+      <TextView android:id="@+id/model_tokens_4" android:layout_width="64dp" android:layout_height="wrap_content" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="410K" android:textColor="@android:color/black" android:textSize="10sp" />
+      <TextView android:id="@+id/model_cost_4" android:layout_width="72dp" android:layout_height="wrap_content" android:layout_marginStart="6dp" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="$0.40" android:textColor="@android:color/darker_gray" android:textSize="9sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/model_row_5" android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <TextView android:id="@+id/model_name_5" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:text="Qwen" android:textColor="@android:color/black" android:textSize="11sp" />
+      <TextView android:id="@+id/model_tokens_5" android:layout_width="64dp" android:layout_height="wrap_content" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="260K" android:textColor="@android:color/black" android:textSize="10sp" />
+      <TextView android:id="@+id/model_cost_5" android:layout_width="72dp" android:layout_height="wrap_content" android:layout_marginStart="6dp" android:fontFeatureSettings="tnum" android:gravity="end" android:maxLines="1" android:text="$0.20" android:textColor="@android:color/darker_gray" android:textSize="9sp" />
+    </LinearLayout>
+    <Space android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+    <TextView
+      android:id="@+id/widget_state_line"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:ellipsize="end"
+      android:gravity="end"
+      android:includeFontPadding="false"
+      android:maxLines="1"
+      android:text="更新于刚刚"
+      android:textColor="@android:color/darker_gray"
+      android:textSize="7sp" />
+  </LinearLayout>
+</FrameLayout>

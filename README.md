@@ -40,7 +40,9 @@ already lives — your own disk:
 
 - **How much have I used?** Every tracked tool keeps transcripts, session databases or caches
   locally. Jiran turns those into tokens and cost, broken down by tool, model, device, project
-  and individual session, and keeps a durable daily history of it.
+  and individual session, and keeps a durable daily history of it. The model workspace adds
+  unified device/tool/project filters, side-by-side comparison, drill-down, saved views, and
+  bounded CSV export; Android includes the same model drill-down and a snapshot-only Top Models widget.
 - **How much of my plan is left?** Per-provider quota windows — session, weekly, billing,
   credits. Quota probing belongs to the Hub: it refreshes the accounts configured there and
   publishes one sanitized snapshot to every connected device. A device running in local-only

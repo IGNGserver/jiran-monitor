@@ -16,7 +16,9 @@ data class HealthDto(
   val sessionAuth: Boolean = false,
   /** 0 means sessions do not expire while idle; clients do not enforce it. */
   val sessionIdleDays: Int? = null,
-  val now: String? = null
+  val now: String? = null,
+  /** IANA fleet calendar; absent means the device-local fallback. */
+  val fleetTimeZone: String? = null
 )
 
 @Serializable
@@ -103,6 +105,7 @@ data class HubCapabilitiesDto(
   val statsSummary: Boolean = false,
   val deviceDetail: Boolean = false,
   val sessionList: Boolean = false,
+  val sessionQuery: Boolean = false,
   /**
    * Whether this Hub owns quota accounts (`/api/accounts`).  Defaults to true on
    * purpose: an older Hub that omits the field still has the endpoint, and hiding
@@ -123,6 +126,8 @@ data class HubAuthorizationDto(
 @Serializable
 data class StatsDto(
   val staleAfterMs: Long? = null,
+  /** IANA calendar shared by periods, history keys and client-computed ranges. */
+  val fleetTimeZone: String? = null,
   val periods: PeriodsDto = PeriodsDto(),
   val devices: List<DeviceDto> = emptyList(),
   val projectsIncomplete: Boolean? = null,
@@ -305,6 +310,9 @@ data class PeriodDto(
   val clientCosts: Map<String, Double> = emptyMap(),
   val models: Map<String, Long> = emptyMap(),
   val modelCosts: Map<String, Double> = emptyMap(),
+  val modelOutputs: Map<String, Long> = emptyMap(),
+  val modelCacheReads: Map<String, Long> = emptyMap(),
+  val modelCacheWrites: Map<String, Long> = emptyMap(),
   val clientModels: Map<String, Map<String, Long>> = emptyMap(),
   val clientModelCosts: Map<String, Map<String, Double>> = emptyMap(),
   val projects: Map<String, ProjectDto> = emptyMap(),
@@ -350,17 +358,20 @@ data class SessionDto(
   val totalTokens: Long = 0,
   val costUsd: Double = 0.0,
   val messageCount: Long = 0,
-  val inputTokens: Long = 0,
-  val outputTokens: Long = 0,
-  val cacheReadTokens: Long = 0,
-  val cacheWriteTokens: Long = 0,
-  val reasoningTokens: Long = 0,
+  val inputTokens: Long? = null,
+  val outputTokens: Long? = null,
+  val cacheReadTokens: Long? = null,
+  val cacheWriteTokens: Long? = null,
+  val reasoningTokens: Long? = null,
   val startedAt: String? = null,
   val lastUsedAt: String? = null,
   val models: Map<String, Long> = emptyMap(),
+  val modelCosts: Map<String, Double> = emptyMap(),
   /** Credits for this session; see [PeriodDto.clientCredits]. */
   val credits: Double? = null,
-  val modelCredits: Map<String, Double> = emptyMap()
+  val modelCredits: Map<String, Double> = emptyMap(),
+  val deviceId: String? = null,
+  val deviceName: String? = null
 )
 
 @Serializable
@@ -436,7 +447,10 @@ data class SessionsResponseDto(
 /** A [SessionDto] plus the period it was drawn from. */
 @Serializable
 data class SessionRowDto(
+  val key: String? = null,
   val period: String? = null,
+  val deviceId: String? = null,
+  val hostname: String? = null,
   val client: String? = null,
   val sessionId: String? = null,
   val projectId: String? = null,
@@ -444,14 +458,15 @@ data class SessionRowDto(
   val totalTokens: Long = 0,
   val costUsd: Double = 0.0,
   val messageCount: Long = 0,
-  val inputTokens: Long = 0,
-  val outputTokens: Long = 0,
-  val cacheReadTokens: Long = 0,
-  val cacheWriteTokens: Long = 0,
-  val reasoningTokens: Long = 0,
+  val inputTokens: Long? = null,
+  val outputTokens: Long? = null,
+  val cacheReadTokens: Long? = null,
+  val cacheWriteTokens: Long? = null,
+  val reasoningTokens: Long? = null,
   val startedAt: String? = null,
   val lastUsedAt: String? = null,
   val models: Map<String, Long> = emptyMap(),
+  val modelCosts: Map<String, Double> = emptyMap(),
   val credits: Double? = null,
   val modelCredits: Map<String, Double> = emptyMap()
 )

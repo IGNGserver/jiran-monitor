@@ -159,7 +159,7 @@ fun formatHistoryMonthLabel(raw: String?): String =
 data class ShareEntry(
   val key: String,
   val tokens: Long,
-  val costUsd: Double = 0.0,
+  val costUsd: Double? = 0.0,
   /**
    * Some or all of [tokens] were reconstructed from message content rather than
    * read from an exact provider meter. The flag is retained for callers that
@@ -199,7 +199,7 @@ fun topShareEntries(
   fun entryFor(key: String) = ShareEntry(
     key = key,
     tokens = tokens[key] ?: 0L,
-    costUsd = costs[key] ?: 0.0,
+    costUsd = costs[key],
     estimated = measurements[key]?.tokens == "estimated" || estimated[key] == true,
     credits = credits[key] ?: measurements[key]?.meters?.get("credits")?.value
   )
@@ -207,7 +207,7 @@ fun topShareEntries(
   val head = sorted.take(limit - 1)
   val rest = sorted.drop(limit - 1)
   val otherTokens = rest.sumOf { tokens[it] ?: 0L }
-  val otherCost = rest.sumOf { costs[it] ?: 0.0 }
+  val otherCost = rest.map { costs[it] }.takeIf { values -> values.all { it != null } }?.sumOf { it ?: 0.0 }
   val otherCredits = rest.mapNotNull { credits[it] }.takeIf { it.isNotEmpty() }?.sum()
   return head.map(::entryFor) +
     ShareEntry(

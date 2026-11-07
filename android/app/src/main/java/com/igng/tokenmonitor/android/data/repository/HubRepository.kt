@@ -201,8 +201,8 @@ class HubRepository @Inject constructor(
       .mapSuccess { it.sanitizeForDisplay() }
   suspend fun device(deviceId: String): HubResult<DeviceResponseDto> =
     withConnection { apiFactory.create(it).device(deviceId) }
-  suspend fun sessions(period: String? = null): HubResult<SessionsResponseDto> =
-    withConnection { apiFactory.create(it).sessions(period) }
+  suspend fun sessions(period: String? = null, deviceId: String? = null): HubResult<SessionsResponseDto> =
+    withConnection { apiFactory.create(it).sessions(period, deviceId) }
   suspend fun history(deviceId: String? = null): HubResult<HistoryDto> =
     withConnection { apiFactory.create(it).history(deviceId) }
       .mapSuccess { it.sanitizeForDisplay() }

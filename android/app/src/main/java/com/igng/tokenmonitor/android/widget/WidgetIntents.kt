@@ -21,6 +21,7 @@ object WidgetIntents {
     WidgetKind.Today, WidgetKind.Dashboard -> "overview"
     WidgetKind.Quota -> "status"
     WidgetKind.Trend -> "analytics"
+    WidgetKind.Models -> "analytics/models"
   }
 
   fun open(context: Context, kind: WidgetKind, widgetId: Int): PendingIntent {

@@ -1,6 +1,6 @@
 # Android home-screen widgets
 
-Four widget receivers expose the Hub's headline numbers without making the
+Five widget receivers expose the Hub's headline numbers without making the
 launcher a second copy of the app. The surface is deliberately **read-mostly**:
 it answers "what is happening right now?" and sends the user to the page that can
 change something.
@@ -13,6 +13,7 @@ change something.
 | Limits | 2×2, 4×2 | Which quota is closest to running out, and when does it reset? | Service status |
 | Trend | 4×2 | What has the last seven days looked like? | Analytics |
 | Dashboard | 4×4 | Everything above in one card. | Overview |
+| Top Models | 4×2, 4×3 | Which models have the highest token usage today, and what did they cost when exact cost is available? | Analytics › Models |
 
 The 2×2 variants answer exactly one question. The 4×2 variants add the second
 layer (footer totals, three quota rows, a labelled chart). The launcher decides
@@ -34,9 +35,12 @@ WidgetRenderer        (RemoteViews + Canvas bitmaps)
 
 `/api/stats/summary` is the same aggregate the in-app first paint uses and
 already contains `periods`, `limits` and `historyPreview`, so one request feeds
-all four cards. The snapshot keeps:
+all five cards. Its `fleetTimeZone` also selects the snapshot's local day, falling
+back to the device zone only when the Hub does not advertise one. The snapshot keeps:
 
 - today / month / all-time tokens and USD cost, plus an aggregate estimate flag;
+- today's five highest-token models and their exact USD cost when the snapshot
+  provides it (`modelsCaptured` distinguishes an old document from an empty day);
 - yesterday and the trailing seven daily points (missing dates are zero-filled);
 - one row per quota account, reduced to the highest-used window, with status,
   reset instant, balance fallback and a stable id;
@@ -103,7 +107,7 @@ the progress fill instead of rendering a stale gauge.
   quota ordering, failure retention), copy/status decisions, and size
   breakpoints. Compose is not loadable in this suite, which is why the mapper and
   `WidgetCopy` are free of Compose types.
-- `:app:assembleDebug` proves the manifest, four `appwidget-provider` XML files
+- `:app:assembleDebug` proves the manifest, five `appwidget-provider` XML files
   and all RemoteViews layouts link.
 - Visual checks still need a launcher: light/dark, 2×2 vs 4×2 vs 4×4, resize,
   font scale, offline state, long-press reconfigure and the pinned-widget flow

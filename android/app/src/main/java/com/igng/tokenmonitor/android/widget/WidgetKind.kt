@@ -4,7 +4,8 @@ enum class WidgetKind {
   Today,
   Quota,
   Trend,
-  Dashboard
+  Dashboard,
+  Models
 }
 
 enum class WidgetLayout {
@@ -13,7 +14,8 @@ enum class WidgetLayout {
   QuotaSmall,
   QuotaMedium,
   TrendMedium,
-  Dashboard
+  Dashboard,
+  ModelsMedium
 }
 
 /**
@@ -34,6 +36,14 @@ object WidgetSizing {
   fun trend(): WidgetLayout = WidgetLayout.TrendMedium
 
   fun dashboard(): WidgetLayout = WidgetLayout.Dashboard
+
+  fun models(): WidgetLayout = WidgetLayout.ModelsMedium
+
+  fun modelRowCount(heightDp: Int): Int = when {
+    heightDp < 150 -> 2
+    heightDp < 210 -> 3
+    else -> 5
+  }
 
   /** Four rows need a 4×3 card; a 4×2 shows two, which is the honest maximum. */
   fun quotaRowCount(heightDp: Int): Int = when {

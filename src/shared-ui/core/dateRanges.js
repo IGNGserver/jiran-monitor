@@ -31,6 +31,15 @@ export function isPresetRangePeriod(period) {
   return PRESET_RANGE_PERIODS.includes(String(period || ''));
 }
 
+// Saved views persist ISO strings while calendar presets hold Date instances.
+// Coerce both at the single range-request boundary instead of calling Date methods
+// on a restored string (or serializing an already-serialized value differently).
+export function coerceRangeInstants(range = {}) {
+  const from = range.from instanceof Date ? range.from : new Date(range.from);
+  const to = range.to instanceof Date ? range.to : new Date(range.to);
+  return Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) ? null : { from, to };
+}
+
 function pad(value) {
   return String(value).padStart(2, '0');
 }

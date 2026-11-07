@@ -176,7 +176,8 @@ fun TokenMonitorApp(
   }
   val snackbarHost = remember { SnackbarHostState() }
   val navBackStack by navController.currentBackStackEntryAsState()
-  val currentRoute = navBackStack?.destination?.route
+  val destinationRoute = navBackStack?.destination?.route
+  val currentRoute = if (destinationRoute == "analytics/models") "analytics" else destinationRoute
   val showGlobalNav = currentRoute in FluentDestinations.routes
   val colors = LocalFluentColors.current
 
@@ -442,6 +443,9 @@ private fun AppNavHost(
     composable("analytics") {
       AnalyticsScreen(state = hubState, viewModel = hubViewModel, navController = navController)
     }
+    composable("analytics/models") {
+      AnalyticsScreen(state = hubState, viewModel = hubViewModel, navController = navController, initialTab = 1)
+    }
     composable("devices") {
       DevicesScreen(hubState.devices, navController, isLoading = hubState.isLoading)
     }
@@ -450,14 +454,9 @@ private fun AppNavHost(
     }
     composable("sessions") {
       SessionsScreen(
-        stats = hubState.stats,
-        navController = navController,
+        state = hubState,
+        onOpen = { key -> navController.navigate("session/${Uri.encode(key)}") },
         onHome = navigateHome,
-        stagedSessions = hubState.sessions,
-        stagedTotal = hubState.sessionsTotal,
-        stagedLoading = hubState.sessionsLoading,
-        stagedError = hubState.sessionsError,
-        stagedSupported = hubState.authorization?.capabilities?.sessionList == true,
         onEnsureSessions = { hubViewModel.refreshSessions() },
         onRetrySessions = { hubViewModel.refreshSessions() }
       )
@@ -471,8 +470,10 @@ private fun AppNavHost(
     }
     composable("projects") {
       ProjectsScreen(
-        stats = hubState.stats,
+        state = hubState,
         onBack = { navController.popBackStack() },
+        onEnsureDevice = hubViewModel::refreshDeviceDetail,
+        onEnsureRange = hubViewModel::retryScopeRange,
         onHome = navigateHome
       )
     }
@@ -530,7 +531,7 @@ private fun AppNavHost(
     }
     composable("session/{key}") { backStack ->
       SessionDetailScreen(
-        stats = hubState.stats,
+        state = hubState,
         key = Uri.decode(backStack.arguments?.getString("key").orEmpty()),
         onBack = { navController.popBackStack() },
         onHome = navigateHome
@@ -581,6 +582,7 @@ private fun AppNavHost(
         modelId = id,
         state = hubState,
         onBack = { navController.popBackStack() },
+        onOpenSession = { key -> navController.navigate("session/${Uri.encode(key)}") },
         onHome = navigateHome
       )
     }
@@ -600,6 +602,7 @@ private fun AppNavHost(
 private val WIDGET_DESTINATIONS = setOf(
   "overview",
   "analytics",
+  "analytics/models",
   "status",
   "settings",
   "widgets"

@@ -2,6 +2,7 @@
 
 const http = require('node:http');
 const https = require('node:https');
+const { isDeepStrictEqual } = require('node:util');
 const fs = require('node:fs');
 const { URL } = require('node:url');
 const {
@@ -20,7 +21,7 @@ const {
 } = require('../shared/subscriptionDisplay');
 const { CURRENCY_CODES, normalizeCurrency } = require('../shared/currency');
 const { currentHubBuild } = require('../shared/hubBuildIdentity');
-const { createJsonResponseCache, readJsonBody, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
+const { createJsonResponseCache, readJsonBody, sendBuffer, sendJson, sendNotModifiedIfFresh, sendText, startResponseTiming } = require('../shared/http');
 const {
   AUTHENTICATED_SCOPE,
   createHubAuthPolicy,
@@ -46,6 +47,9 @@ const { createDisplayRatesCache } = require('./displayRates');
 const { UpdateCheckError, createUpdateService } = require('./updates');
 const { createFleetReadModel } = require('./fleetReadModel');
 const { createLatestPublisher } = require('./latestPublisher');
+const { usageFactsFromHistory } = require('./usage-facts');
+const { createUsageAnalyticsService, analyticsCsv } = require('./usage-analytics');
+const { querySessions } = require('./session-query');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const PRICE_FIELDS = [
@@ -485,9 +489,13 @@ function createHub({
     })
     : null;
   const oauthManager = createOAuthSessionManager();
+  const usageAnalytics = createUsageAnalyticsService({ store, fleetTimeZone: resolvedFleetTimeZone });
   const capabilities = Object.freeze({
     ...hubCapabilities('node-hub', { hubAccounts: Boolean(accountService) }),
-    sessionAuth: Boolean(sessionService && auth.configured)
+    sessionAuth: Boolean(sessionService && auth.configured),
+    usageAnalytics: true,
+    usageAnalyticsCsv: true,
+    sessionQuery: true
   });
   const maxSseClients = Math.max(1, Math.floor(Number(maxSseClientsOption) || DEFAULT_MAX_SSE_CLIENTS));
   const authFailures = createFixedWindowRateLimiter({ limit: authFailureLimit, windowMs: 60_000 });
@@ -1278,6 +1286,22 @@ function createHub({
         : new Map();
       const pricedEvents = events.map((event) => priceSnapshot(event, pricingByModel.get(event.model)));
       await store.saveDevice(merged, connection, { baseline: rawCumulative, previousRecord: existing, previousBaseline: baselineState.snapshot });
+      if (typeof store.replaceUsageDailyFacts === 'function'
+        && Object.prototype.hasOwnProperty.call(usagePayload, 'history')
+        && !isDeepStrictEqual(existing?.history, merged.history)) {
+        const factDocument = usageFactsFromHistory(merged.deviceId, merged.history, {
+          timeZone: merged.periodWindows?.timeZone || resolvedFleetTimeZone
+        });
+        const previousDays = new Map((existing?.history?.daily || []).map((day) => [String(day?.date || '').slice(0, 10), day]));
+        const nextDates = new Set((merged.history?.daily || []).map((day) => String(day?.date || '').slice(0, 10)));
+        factDocument.changedDays = (merged.history?.daily || [])
+          .filter((day) => !isDeepStrictEqual(previousDays.get(String(day?.date || '').slice(0, 10)), day))
+          .map((day) => String(day?.date || '').slice(0, 10));
+        factDocument.removeDays = [...previousDays.keys()].filter((date) => !nextDates.has(date));
+        factDocument.replaceAll = String(existing?.periodWindows?.timeZone || '') !== String(merged.periodWindows?.timeZone || '')
+          && Boolean(existing?.history);
+        await store.replaceUsageDailyFacts(merged.deviceId, factDocument, connection);
+      }
       await store.insertUsageEvents(merged.deviceId, pricedEvents, connection);
       const displayCandidates = baselineState.transferred ? usageCandidates(merged, { normalized: true }) : candidates;
       // The sessions table is the materialized mirror of the display snapshot's
@@ -1940,6 +1964,7 @@ function createHub({
         '/api/devices',
         '/api/history',
         '/api/subscriptions',
+        '/api/usage/analytics',
         '/api/usage/range',
         '/api/pricing',
         '/api/stats/stream'
@@ -1983,6 +2008,15 @@ function createHub({
     // shared UI's session table; the cap is reported rather than implied.
     if (req.method === 'GET' && url.pathname === '/api/sessions') {
       const stats = await getStats();
+      const advanced = ['deviceId', 'client', 'model', 'project', 'q', 'sort', 'order', 'limit', 'cursor']
+        .some((key) => url.searchParams.has(key));
+      if (advanced) {
+        try {
+          return sendJson(res, 200, querySessions(stats, url.searchParams));
+        } catch (error) {
+          return sendJson(res, Number(error.status) || 500, { error: error.code || 'session_query_failed' });
+        }
+      }
       const requested = String(url.searchParams.get('period') || '').trim();
       const periods = requested && PERIODS.includes(requested)
         ? [requested]
@@ -2037,6 +2071,26 @@ function createHub({
         return sendJson(res, 400, { error: 'bad_request', message: errorMessageForApi(error) });
       }
     }
+    if (req.method === 'GET' && url.pathname === '/api/usage/analytics') {
+      try {
+        const result = await usageAnalytics.query(url.searchParams);
+        if (url.searchParams.get('format') === 'csv') {
+          return sendBuffer(res, 200, analyticsCsv(result), 'text/csv; charset=utf-8', {
+            'content-disposition': `attachment; filename="usage-${result.requestedRange.startDate}-${result.requestedRange.endDate}.csv"`,
+            'x-usage-source': result.source,
+            'x-usage-revision': result.revision,
+            'x-usage-truncated': String(result.truncated)
+          });
+        }
+        return sendJson(res, 200, result, { etag: `"${result.revision}"` });
+      } catch (error) {
+        return sendJson(res, Number(error.status) || 500, {
+          error: error.code || 'usage_analytics_failed',
+          message: errorMessageForApi(error)
+        });
+      }
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/usage/range') {
       try {
         return sendJson(res, 200, await getUsageRange({

@@ -532,7 +532,8 @@ function tokenMetricFields(period = {}, prefix = '') {
     cacheReadTokens,
     cacheWriteTokens,
     uncachedInputTokens,
-    cacheHitPercent: inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : null
+    available: period.metricAvailability?.components !== false,
+    cacheHitPercent: period.metricAvailability?.components !== false && inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : null
   };
 }
 
@@ -544,7 +545,13 @@ export function tokenMetricsForRow(period = {}, kind = 'client', key = '', rowTo
   const prefix = kind === 'model' ? 'model' : (kind === 'client' ? 'client' : '');
   if (kind === 'session') {
     const session = period?.sessions?.[key] || {};
+    const hasComponents = ['cacheReadTokens', 'cacheWriteTokens', 'outputTokens']
+      .some((field) => Object.prototype.hasOwnProperty.call(session, field));
     return tokenMetricFields({
+      metricAvailability: {
+        ...(period.metricAvailability || {}),
+        components: period.metricAvailability?.components !== false && (hasComponents || Number(session.totalTokens || 0) === 0)
+      },
       totalTokens: session.totalTokens,
       cacheReadTokens: session.cacheReadTokens,
       cacheWriteTokens: session.cacheWriteTokens,
@@ -552,6 +559,10 @@ export function tokenMetricsForRow(period = {}, kind = 'client', key = '', rowTo
     });
   }
   return tokenMetricFields({
+    metricAvailability: {
+      ...(period.metricAvailability || {}),
+      components: period.metricAvailability?.components !== false && period.metricAvailability?.[`${kind}Components`] !== false
+    },
     totalTokens: rowTokens ?? (kind === 'model' ? period?.models?.[key] : period?.clients?.[key]),
     [`${prefix}CacheReads`]: period?.[`${prefix}CacheReads`]?.[key],
     [`${prefix}CacheWrites`]: period?.[`${prefix}CacheWrites`]?.[key],
@@ -694,6 +705,7 @@ export function sessionRows(period, { limit = MAX_SESSION_ROWS } = {}) {
       const models = Object.keys(session?.models || {});
       return {
         key,
+        raw: session,
         name: `${clientLabel(client)}${models[0] ? ` · ${models[0]}` : ''}`,
         value,
         cost: Number(session?.costUsd || 0),

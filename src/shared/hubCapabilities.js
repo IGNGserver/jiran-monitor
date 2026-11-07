@@ -24,6 +24,9 @@ function hubCapabilities(runtime, options = {}) {
     statsSummary: true,
     deviceDetail: true,
     sessionList: true,
+    sessionQuery: true,
+    usageAnalytics: true,
+    usageDailyFacts: true,
     // `/api/updates` resolves the newest installable Android release through the
     // Hub. Older Hubs omit the flag and the client must fall back to the release
     // page rather than treating a 404 as "no update".

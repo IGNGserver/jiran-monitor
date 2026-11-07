@@ -682,3 +682,39 @@ test('query instrumentation counts statements and logs SQL text without bound va
   assert.match(logs[0], /SELECT \* FROM devices/);
   assert.doesNotMatch(logs[0], /dev-secret/);
 });
+
+test('daily fact analytics SQL excludes hidden devices and qualifies joined columns', async () => {
+  const sql = recorder([]);
+  const repository = createRepository(sql);
+  await repository.queryUsageDailyFacts({
+    from: '2026-11-01', to: '2026-11-08', limit: 50,
+    filters: { device: ['device-1'], client: ['codex'], model: ['gpt-5'], provider: ['openai'] }
+  });
+  assert.equal(sql.calls.length, 2);
+  const statement = sql.calls[0].sql;
+  assert.match(statement, /FROM usage_daily_facts f/);
+  assert.match(statement, /active_device\.deleted_at IS NULL/);
+  assert.match(statement, /f\.device_id IN \(\?\)/);
+  assert.match(statement, /f\.day_key >= \?/);
+  assert.match(statement, /ORDER BY f\.day_key, f\.device_id/);
+  assert.match(sql.calls[1].sql, /FROM usage_daily_fact_days fd/);
+  assert.match(sql.calls[1].sql, /ORDER BY fd\.day_key, fd\.device_id/);
+});
+
+test('event analytics SQL keeps uncached input separate and excludes hidden devices', async () => {
+  const sql = recorder([]);
+  const repository = createRepository(sql);
+  await repository.queryUsageEventAnalytics({
+    from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-08T00:00:00Z'), limit: 50,
+    filters: { device: ['device-1'], project: ['project-1'], session: ['session-1'] }
+  });
+  assert.equal(sql.calls.length, 1);
+  const statement = sql.calls[0].sql;
+  assert.match(statement, /0 AS unclassified_tokens/);
+  assert.doesNotMatch(statement, /SUM\(e\.input_tokens\) AS unclassified_tokens/);
+  assert.match(statement, /JOIN devices active_device/);
+  assert.match(statement, /active_device\.deleted_at IS NULL/);
+  assert.match(statement, /e\.recorded_at >= \?/);
+  assert.match(statement, /e\.project_id IN \(\?\)/);
+  assert.match(statement, /GROUP BY hour_bucket, e\.device_id/);
+});

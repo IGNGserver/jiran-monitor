@@ -139,3 +139,15 @@ test('the usage_events credit migration is restart-safe ADD COLUMN DDL', () => {
   // Same precision as cost_usd: a per-request credit has ~1e-9 granularity.
   assert.match(sql, /DECIMAL\(24,10\)/);
 });
+
+test('daily facts migration uses matching fractional timestamp precision', () => {
+  const sql = fs.readFileSync(
+    path.join(__dirname, '../../migrations/009_usage_daily_facts.sql'),
+    'utf8'
+  );
+  assert.equal(
+    (sql.match(/updated_at DATETIME\(3\) NOT NULL DEFAULT CURRENT_TIMESTAMP\(3\) ON UPDATE CURRENT_TIMESTAMP\(3\)/g) || []).length,
+    2
+  );
+  assert.doesNotMatch(sql, /ON UPDATE CURRENT_TIMESTAMP,/i);
+});

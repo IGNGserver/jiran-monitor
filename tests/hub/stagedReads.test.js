@@ -117,6 +117,9 @@ test('capabilities advertise the staged read endpoints', async () => {
     assert.equal(response.capabilities.statsSummary, true);
     assert.equal(response.capabilities.deviceDetail, true);
     assert.equal(response.capabilities.sessionList, true);
+    assert.equal(response.capabilities.sessionQuery, true);
+    assert.equal(response.capabilities.usageAnalytics, true);
+    assert.equal(response.capabilities.usageDailyFacts, true);
   } finally {
     await hub.stop();
   }
@@ -221,6 +224,40 @@ test('/api/sessions returns the aggregate list, capped, with the true total', as
     // Scoping to one period filters the list.
     const scoped = await (await fetch(`http://127.0.0.1:${port}/api/sessions?period=today`)).json();
     assert.ok(scoped.sessions.every((row) => row.period === 'today'));
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('advanced session and analytics reads share bounded filter contracts', async () => {
+  const { hub } = createMemoryHub();
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    await seed(hub, [payload(1000, { deviceId: 'dev-a', sessionCount: 5 }), payload(2000, { deviceId: 'dev-b', sessionCount: 5 })]);
+    const base = `http://127.0.0.1:${port}`;
+    const sessions = await (await fetch(`${base}/api/sessions?period=allTime&deviceId=dev-a&q=session-dev-a-&sort=totalTokens&order=desc&limit=2`)).json();
+    assert.equal(sessions.total, 5);
+    assert.equal(sessions.sessions.length, 2);
+    assert.equal(sessions.sessions[0].sessionId, 'session-dev-a-4');
+    assert.ok(sessions.nextCursor);
+    const next = await (await fetch(`${base}/api/sessions?period=allTime&deviceId=dev-a&q=session-dev-a-&sort=totalTokens&order=desc&limit=2&cursor=${encodeURIComponent(sessions.nextCursor)}`)).json();
+    assert.deepEqual(next.sessions.map((row) => row.sessionId), ['session-dev-a-2', 'session-dev-a-1']);
+    const invalid = await fetch(`${base}/api/sessions?limit=1000`);
+    assert.equal(invalid.status, 400);
+
+    const query = 'startDate=2026-01-01&endDate=2026-12-31&source=events&groupBy=model&bucket=none&metrics=tokens,cost';
+    const analyticsResponse = await fetch(`${base}/api/usage/analytics?${query}`);
+    assert.equal(analyticsResponse.status, 200);
+    const analytics = await analyticsResponse.json();
+    assert.equal(analytics.source, 'usageEventsBestEffort');
+    // The shared fixture's ten sessions each carry 500 input + 400 output tokens.
+    assert.equal(analytics.totals.totalTokens, 9000);
+    assert.equal(analytics.rows[0].model, 'gpt-5');
+    const csv = await fetch(`${base}/api/usage/analytics?${query}&format=csv`);
+    assert.equal(csv.status, 200);
+    assert.match(csv.headers.get('content-type'), /text\/csv/);
+    assert.match(await csv.text(), /gpt-5/);
   } finally {
     await hub.stop();
   }

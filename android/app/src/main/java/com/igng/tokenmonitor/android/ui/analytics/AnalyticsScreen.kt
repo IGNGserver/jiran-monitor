@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Box
@@ -40,7 +41,10 @@ import com.igng.tokenmonitor.android.ui.ScopePeriod
 import com.igng.tokenmonitor.android.ui.AnalyticsPeriodKind
 import com.igng.tokenmonitor.android.ui.HubUiState
 import com.igng.tokenmonitor.android.ui.HubViewModel
+import com.igng.tokenmonitor.android.ui.NormalizedSessionRow
 import com.igng.tokenmonitor.android.ui.components.FluentIcons
+import com.igng.tokenmonitor.android.ui.components.FluentListRow
+import com.igng.tokenmonitor.android.ui.components.rememberCostFormatter
 import com.igng.tokenmonitor.android.ui.components.AppCard
 import com.igng.tokenmonitor.android.ui.components.ClientBranding
 import com.igng.tokenmonitor.android.ui.components.ClientMonogram
@@ -95,9 +99,10 @@ private val analyticsTabLabels = listOf("客户端", "模型", "趋势")
 fun AnalyticsScreen(
   state: HubUiState,
   viewModel: HubViewModel,
-  navController: NavHostController
+  navController: NavHostController,
+  initialTab: Int = 0
 ) {
-  var tabIndex by rememberSaveable { mutableIntStateOf(0) }
+  var tabIndex by rememberSaveable(initialTab) { mutableIntStateOf(initialTab.coerceIn(0, analyticsTabLabels.lastIndex)) }
   val haptics = rememberAppHaptics()
   // One entrance per lens, keyed on the tab index, so changing tab replays it (a new view
   // arrived) while a stream frame, a retry or a re-scroll inside the selected lens does
@@ -154,6 +159,16 @@ fun AnalyticsScreen(
   }
 }
 
+private fun modelSessions(state: HubUiState): List<NormalizedSessionRow> {
+  if (state.analyticsPeriod.needsRange) return emptyList()
+  val capabilities = state.authorization?.capabilities
+  val fromSnapshot = capabilities?.sessionList != true ||
+    (state.deviceFilter != null && capabilities.sessionQuery != true)
+  return if (fromSnapshot || state.sessionsPeriod == state.analyticsPeriod.name.lowercase()) {
+    state.normalizedSessionRows()
+  } else emptyList()
+}
+
 @Composable
 private fun ShareAnalyticsTab(
   state: HubUiState,
@@ -165,6 +180,9 @@ private fun ShareAnalyticsTab(
   val haptics = rememberAppHaptics()
   var showPicker by rememberSaveable { mutableStateOf(false) }
   val customSupported = state.authorization?.capabilities?.usageRange == true
+  LaunchedEffect(clients, state.analyticsPeriod, state.deviceFilter) {
+    if (!clients && !state.analyticsPeriod.needsRange) viewModel.refreshSessions()
+  }
   // Same tab order as the shared web UI's `PERIOD_TABS`: the two wire periods first,
   // then the calendar presets, then the picked range.  A host without `usageRange`
   // hides the presets and the custom tab rather than showing tabs that could only
@@ -315,19 +333,32 @@ private fun ShareAnalyticsTab(
             )
           }
         }
-        item(key = "share-detail") {
-          AppCard {
-            SectionHeader(
-              title = "明细",
-              subtitle = if (clients) "点击客户端查看详情" else "点击模型查看详情"
-            )
-            Spacer(Modifier.height(FluentSpacingDefaults.m))
-            ShareBarList(
-              shares,
-              brandClients = clients,
-              onEntryClick = { entry ->
+        if (clients) {
+          item(key = "share-detail") {
+            AppCard {
+              SectionHeader(title = "明细", subtitle = "点击客户端查看详情")
+              Spacer(Modifier.height(FluentSpacingDefaults.m))
+              ShareBarList(
+                shares,
+                brandClients = true,
+                onEntryClick = { entry ->
+                  haptics.perform(HapticEvent.Tap)
+                  onOpenDetail(entry.key)
+                }
+              )
+            }
+          }
+        } else {
+          item(key = "model-workspace") {
+            ModelWorkspacePanel(
+              period = period,
+              sessions = modelSessions(state),
+              selectedModels = state.comparisonModels,
+              onToggleComparison = viewModel::toggleModelComparison,
+              onClearComparison = viewModel::clearModelComparison,
+              onOpenDetail = { name ->
                 haptics.perform(HapticEvent.Tap)
-                onOpenDetail(entry.key)
+                onOpenDetail(name)
               }
             )
           }
@@ -377,20 +408,24 @@ private fun FluentTextButton(
 private fun modelsFromSessions(period: PeriodDto?, clientId: String?): Pair<Map<String, Long>, Map<String, Double>> {
   val tokens = linkedMapOf<String, Long>()
   val costs = linkedMapOf<String, Double>()
+  val unknownCosts = mutableSetOf<String>()
   val sessions = period?.sessions.orEmpty().values
   for (session in sessions) {
     if (clientId != null && session.client != clientId) continue
-    val sessionCost = session.costUsd
-    val models = session.models
-    if (models.isEmpty()) continue
-    val modelTotal = models.values.sum().coerceAtLeast(1L)
-    for ((model, modelTokens) in models) {
+    if (session.models.isEmpty()) continue
+    for ((model, modelTokens) in session.models) {
       val t = modelTokens.coerceAtLeast(0L)
       tokens[model] = (tokens[model] ?: 0L) + t
-      val share = t.toDouble() / modelTotal.toDouble()
-      costs[model] = (costs[model] ?: 0.0) + sessionCost * share
+      val exact = session.modelCosts[model]
+      val allocated = if (exact == null && session.modelCosts.isEmpty() && session.totalTokens > 0L) {
+        session.costUsd * t.toDouble() / session.totalTokens.toDouble()
+      } else null
+      val attributed = exact ?: allocated
+      if (attributed != null && model !in unknownCosts) costs[model] = (costs[model] ?: 0.0) + attributed
+      else if (attributed == null) unknownCosts += model
     }
   }
+  unknownCosts.forEach(costs::remove)
   return tokens to costs
 }
 
@@ -401,7 +436,7 @@ private fun clientsFromPeriod(period: PeriodDto?, modelId: String): Pair<Map<Str
   for ((client, models) in period?.clientModels.orEmpty()) {
     val value = models[modelId] ?: continue
     tokens[client] = value
-    costs[client] = period?.clientModelCosts?.get(client)?.get(modelId) ?: 0.0
+    period?.clientModelCosts?.get(client)?.get(modelId)?.let { costs[client] = it }
   }
   return tokens to costs
 }
@@ -409,14 +444,21 @@ private fun clientsFromPeriod(period: PeriodDto?, modelId: String): Pair<Map<Str
 private fun clientsFromSessions(period: PeriodDto?, modelId: String): Pair<Map<String, Long>, Map<String, Double>> {
   val tokens = linkedMapOf<String, Long>()
   val costs = linkedMapOf<String, Double>()
+  val unknownCosts = mutableSetOf<String>()
   for (session in period?.sessions.orEmpty().values) {
     val modelTokens = session.models[modelId] ?: continue
     val client = session.client?.takeIf { it.isNotBlank() } ?: "unknown"
-    tokens[client] = (tokens[client] ?: 0L) + modelTokens.coerceAtLeast(0L)
-    val modelTotal = session.models.values.sum().coerceAtLeast(1L)
-    val share = modelTokens.toDouble() / modelTotal.toDouble()
-    costs[client] = (costs[client] ?: 0.0) + session.costUsd * share
+    val tokensForModel = modelTokens.coerceAtLeast(0L)
+    tokens[client] = (tokens[client] ?: 0L) + tokensForModel
+    val exact = session.modelCosts[modelId]
+    val allocated = if (exact == null && session.modelCosts.isEmpty() && session.totalTokens > 0L) {
+      session.costUsd * tokensForModel.toDouble() / session.totalTokens.toDouble()
+    } else null
+    val attributed = exact ?: allocated
+    if (attributed != null && client !in unknownCosts) costs[client] = (costs[client] ?: 0.0) + attributed
+    else if (attributed == null) unknownCosts += client
   }
+  unknownCosts.forEach(costs::remove)
   return tokens to costs
 }
 
@@ -430,7 +472,7 @@ fun ClientDetailScreen(
   val periodLabel = periodCaption(state)
   val period = resolvePeriod(state)
   val tokens = period?.clients?.get(clientId) ?: 0L
-  val cost = period?.clientCosts?.get(clientId) ?: 0.0
+  val cost = period?.clientCosts?.get(clientId)
   // One rule for every scope tab: prefer the attribution the period carries, and fall
   // back to session rows only where it has none.  The presets used to read the raw range
   // payload here while the snapshot tabs read the folded period, which is how a tab could
@@ -442,6 +484,10 @@ fun ClientDetailScreen(
     modelsFromSessions(period, clientId)
   }
   val shares = topShareEntries(modelTokens, modelCosts, limit = 12)
+  val sessionCostAllocated = attributed.isEmpty() && period?.sessions.orEmpty().values.any { session ->
+    session.client == clientId && session.models.isNotEmpty() &&
+      session.modelCosts.isEmpty() && session.totalTokens > 0L
+  }
   val title = ClientBranding.label(clientId)
 
   DetailScaffold(
@@ -458,6 +504,7 @@ fun ClientDetailScreen(
     },
     shares = shares,
     brandClients = false,
+    sessionCostAllocated = sessionCostAllocated,
     onHome = onHome
   )
 }
@@ -467,12 +514,13 @@ fun ModelDetailScreen(
   modelId: String,
   state: HubUiState,
   onBack: () -> Unit,
+  onOpenSession: (String) -> Unit,
   onHome: (() -> Unit)? = null
 ) {
   val periodLabel = periodCaption(state)
   val period = resolvePeriod(state)
   val tokens = period?.models?.get(modelId) ?: 0L
-  val cost = period?.modelCosts?.get(modelId) ?: 0.0
+  val cost = period?.modelCosts?.get(modelId)
   // Prefer the same `clientModels` attribution the client-detail screen uses, so the two
   // directions of the same split cannot disagree.  The session-derived fallback apportioned
   // a session's cost across its models by token share, which is a different measurement and
@@ -484,6 +532,11 @@ fun ModelDetailScreen(
     clientsFromSessions(period, modelId)
   }
   val shares = topShareEntries(clientTokens, clientCosts, limit = 12)
+  val sessionCostAllocated = attributed.first.isEmpty() && period?.sessions.orEmpty().values.any { session ->
+    modelId in session.models && session.modelCosts.isEmpty() && session.totalTokens > 0L
+  }
+  val modelRow = buildModelRows(period, modelSessions(state)).firstOrNull { it.name == modelId }
+  val costFormatter = rememberCostFormatter()
 
   DetailScaffold(
     title = modelId,
@@ -499,6 +552,48 @@ fun ModelDetailScreen(
     },
     shares = shares,
     brandClients = true,
+    sessionCostAllocated = sessionCostAllocated,
+    additionalContent = {
+      if (modelRow != null) {
+        item(key = "model-token-mix") {
+          AppCard {
+            Text("Token 类型", style = FluentTypeRamp.title3)
+            Spacer(Modifier.height(FluentSpacingDefaults.s))
+            ModelTokenMix(modelRow)
+            if (modelRow.sessionCostEstimated) {
+              Text("会话成本按 Token 比例分摊，非模型精确计价。", style = FluentTypeRamp.caption1)
+            }
+          }
+        }
+        if (modelRow.projects.isNotEmpty()) {
+          item(key = "model-projects") {
+            AppCard {
+              Text("关联项目", style = FluentTypeRamp.title3)
+              modelRow.projects.take(20).forEach { project ->
+                FluentListRow(primary = project.label, secondary = project.id, trailingPrimary = formatTokensShort(project.tokens))
+              }
+            }
+          }
+        }
+        if (modelRow.sessions.isNotEmpty()) {
+          item(key = "model-sessions") {
+            AppCard {
+              Text("关联会话（已加载）", style = FluentTypeRamp.title3)
+              modelRow.sessions.take(20).forEach { session ->
+                FluentListRow(
+                  primary = session.label,
+                  secondary = session.key,
+                  trailingPrimary = formatTokensShort(session.tokens),
+                  trailingSecondary = session.costUsd?.let { "${if (session.costEstimated) "~" else ""}${costFormatter.format(it)}" } ?: "—",
+                  onClick = { onOpenSession(session.key) },
+                  disclosure = true
+                )
+              }
+            }
+          }
+        }
+      }
+    },
     onHome = onHome
   )
 }
@@ -509,14 +604,17 @@ private fun DetailScaffold(
   subtitle: String,
   onBack: () -> Unit,
   heroTokens: Long,
-  heroCost: Double,
+  heroCost: Double?,
   leading: (@Composable () -> Unit)?,
   emptyText: String,
   shares: List<ShareEntry>,
   brandClients: Boolean,
+  sessionCostAllocated: Boolean = false,
+  additionalContent: LazyListScope.() -> Unit = {},
   onHome: (() -> Unit)? = null
 ) {
   val colors = LocalFluentColors.current
+  val costFormatter = rememberCostFormatter()
   val listState = rememberLazyListState()
   val scrolled = rememberScrolledFlag(listState)
 
@@ -561,12 +659,13 @@ private fun DetailScaffold(
             color = colors.neutralForeground1
           )
           Text(
-            formatUsd(heroCost),
+            heroCost?.let { costFormatter.format(it) } ?: "费用未知",
             style = FluentTypeRamp.body2,
             color = colors.neutralForeground2
           )
         }
       }
+      additionalContent()
       item {
         AppCard {
           Text(
@@ -583,12 +682,20 @@ private fun DetailScaffold(
             )
           } else {
             ShareBarList(entries = shares, brandClients = brandClients)
+            if (sessionCostAllocated) {
+              Text(
+                "会话来源成本按 Token 比例分摊，非精确模型账单；无法归因的成本显示为 —。",
+                style = FluentTypeRamp.caption1,
+                color = colors.neutralForeground2
+              )
+            }
             if (shares.size >= 2) {
               Spacer(Modifier.height(FluentSpacingDefaults.xl))
               DonutChart(
                 entries = shares,
                 centerPrimary = formatTokensShort(shares.sumOf { it.tokens }),
-                centerSecondary = formatUsd(shares.fold(0.0) { acc, e -> acc + e.costUsd }, compact = true)
+                centerSecondary = shares.map { it.costUsd }.takeIf { values -> values.all { it != null } }
+                  ?.sumOf { it ?: 0.0 }?.let { formatUsd(it, compact = true) } ?: "费用未知"
               )
             }
           }

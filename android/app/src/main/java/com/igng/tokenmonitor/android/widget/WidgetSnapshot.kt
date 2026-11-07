@@ -27,6 +27,8 @@ data class WidgetSnapshot(
   val today: WidgetPeriodTotals = WidgetPeriodTotals(),
   val month: WidgetPeriodTotals = WidgetPeriodTotals(),
   val allTime: WidgetPeriodTotals = WidgetPeriodTotals(),
+  val modelsCaptured: Boolean = false,
+  val topModels: List<WidgetModel> = emptyList(),
   val yesterday: WidgetPeriodTotals? = null,
   val days: List<WidgetDay> = emptyList(),
   val accounts: List<WidgetQuotaAccount> = emptyList(),
@@ -60,6 +62,13 @@ data class WidgetPeriodTotals(
   // Retained so an existing `widget-snapshot.json` keeps its shape. Widgets no
   // longer render a marker from it; provenance stays available to callers.
   val estimated: Boolean = false
+)
+
+@Serializable
+data class WidgetModel(
+  val name: String,
+  val tokens: Long,
+  val costUsd: Double? = null
 )
 
 @Serializable

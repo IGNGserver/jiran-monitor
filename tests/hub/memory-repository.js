@@ -40,6 +40,8 @@ class MemoryRepository {
     this.transferredDevices = new Set();
     this.hiddenDevices = new Set();
     this.events = [];
+    this.dailyFacts = [];
+    this.dailyFactDays = [];
     this.pricing = new Map();
     this.sessions = new Map();
     this.hubAccounts = new Map();
@@ -93,6 +95,115 @@ class MemoryRepository {
       delete baseline.limitsOnly;
       this.baselines.set(record.deviceId, clone(baseline));
     }
+  }
+
+  async replaceUsageDailyFacts(deviceId, document) {
+    const replaceAll = document.replaceAll === true || !Array.isArray(document.changedDays);
+    const covered = new Set(this.dailyFactDays
+      .filter((day) => day.deviceId === deviceId && day.source === document.source)
+      .map((day) => day.date));
+    const writeDates = replaceAll
+      ? new Set(document.days.map((day) => day.date))
+      : new Set([
+        ...document.changedDays,
+        ...document.days.map((day) => day.date).filter((date) => !covered.has(date))
+      ]);
+    const removeDates = replaceAll ? null : new Set([...writeDates, ...(document.removeDays || [])]);
+    const retain = (row) => row.deviceId !== deviceId || row.source !== document.source
+      || (removeDates && !removeDates.has(row.date));
+    this.dailyFacts = this.dailyFacts.filter(retain);
+    this.dailyFactDays = this.dailyFactDays.filter(retain);
+    const facts = document.facts.filter((fact) => writeDates.has(fact.date));
+    const days = document.days.filter((day) => writeDates.has(day.date));
+    this.dailyFacts.push(...clone(facts));
+    this.dailyFactDays.push(...clone(days));
+    return { factCount: facts.length, dayCount: days.length, truncated: document.truncated === true };
+  }
+
+  async queryUsageDailyFacts({ from, to, filters = {}, limit = 50_000 }) {
+    const matches = (row) => {
+      if (this.hiddenDevices.has(row.deviceId)) return false;
+      const date = String(row.date || row.day_key);
+      if (date < from || date >= to || row.deviceId !== undefined && filters.device?.length && !filters.device.includes(row.deviceId)) return false;
+      for (const name of ['client', 'model', 'provider']) {
+        if (filters[name]?.length && !filters[name].includes(row[name])) return false;
+      }
+      return true;
+    };
+    const rows = this.dailyFacts.filter(matches).sort((left, right) => (
+      left.date.localeCompare(right.date) || left.deviceId.localeCompare(right.deviceId)
+      || left.client.localeCompare(right.client) || left.model.localeCompare(right.model)
+      || left.provider.localeCompare(right.provider)
+    )).slice(0, limit + 1).map((fact) => ({
+      day_key: fact.date,
+      device_id: fact.deviceId,
+      client: fact.client,
+      model: fact.model,
+      provider: fact.provider,
+      total_tokens: fact.tokens,
+      output_tokens: fact.outputTokens,
+      cache_read_tokens: fact.cacheReadTokens,
+      cache_write_tokens: fact.cacheWriteTokens,
+      unclassified_tokens: fact.unclassifiedTokens,
+      cost_usd: fact.cost,
+      message_count: fact.messages,
+      token_components_available: fact.tokenComponentsAvailable,
+      provenance: fact.provenance,
+      source: fact.source,
+      time_basis: fact.timeBasis
+    }));
+    const days = this.dailyFactDays.filter((day) => !this.hiddenDevices.has(day.deviceId) && day.date >= from && day.date < to
+      && (!filters.device?.length || filters.device.includes(day.deviceId)))
+      .slice(0, 10001).map((day) => ({ ...clone(day), day_key: day.date }));
+    return { rows, days, truncated: this.dailyFacts.filter(matches).length > limit || days.length > 10000 };
+  }
+
+  async queryUsageEventAnalytics({ from, to, filters = {}, limit = 50_000 }) {
+    const fromMs = Date.parse(from);
+    const toMs = Date.parse(to);
+    const groups = new Map();
+    for (const event of this.events) {
+      const at = Date.parse(event.recordedAt);
+      if (!(at >= fromMs && at < toMs) || this.hiddenDevices.has(event.deviceId)) continue;
+      let excluded = false;
+      for (const name of ['client', 'model']) {
+        if (filters[name]?.length && !filters[name].includes(event[name])) excluded = true;
+      }
+      if (filters.device?.length && !filters.device.includes(event.deviceId)) excluded = true;
+      if (filters.provider?.length && !filters.provider.includes(event.provider || '')) excluded = true;
+      if (filters.project?.length && !filters.project.includes(event.projectId || '') && !filters.project.includes(event.projectLabel || '')) excluded = true;
+      if (filters.session?.length && !filters.session.includes(event.sessionId)) excluded = true;
+      if (excluded) continue;
+      const hourStart = new Date(Math.floor(at / 3_600_000) * 3_600_000).toISOString();
+      const key = JSON.stringify([hourStart, event.deviceId, event.client, event.sessionId, event.model,
+        event.provider || '', event.projectId || '', event.projectLabel || '']);
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          hourStart, device_id: event.deviceId, client: event.client, session_id: event.sessionId,
+          model: event.model, provider: event.provider || '', project_id: event.projectId || '',
+          project_label: event.projectLabel || '', total_tokens: 0, input_tokens: 0,
+          output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+          unclassified_tokens: 0, cost_usd: 0, message_count: 0, credits: 0
+        };
+        groups.set(key, group);
+      }
+      group.input_tokens += number(event.inputTokens);
+      group.output_tokens += number(event.outputTokens);
+      group.cache_read_tokens += number(event.cacheReadTokens);
+      group.cache_write_tokens += number(event.cacheWriteTokens);
+      // input_tokens is the uncached-input component, not an unclassified bucket.
+      group.unclassified_tokens += 0;
+      group.total_tokens += number(event.inputTokens) + number(event.outputTokens)
+        + number(event.cacheReadTokens) + number(event.cacheWriteTokens);
+      group.cost_usd += number(event.costUsd);
+      group.message_count += number(event.messageCount);
+      group.credits += number(event.credits);
+    }
+    const all = [...groups.values()].sort((left, right) => left.hourStart.localeCompare(right.hourStart)
+      || String(left.device_id).localeCompare(String(right.device_id)) || left.client.localeCompare(right.client)
+      || left.session_id.localeCompare(right.session_id) || left.model.localeCompare(right.model));
+    return { rows: all.slice(0, limit + 1), truncated: all.length > limit };
   }
 
   async getIngestBaseline(deviceId) {

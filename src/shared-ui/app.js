@@ -33,8 +33,11 @@ import {
 import { applyI18n, resolveLocale, t } from './core/i18n.js';
 import { markLoadingStage } from './core/loadingPerformance.js';
 import { createDetailCache, detailRequest, withStatsDetail } from './core/stagedStats.js';
+import { filterPeriodByAnalysis, toCsv } from './core/analysis.js';
+import { modelRowsForExport } from './views/models.js';
 import {
   isPresetRangePeriod,
+  coerceRangeInstants,
   localDayKey,
   presetRangeWindow,
   presetRangeWindowMatches,
@@ -236,7 +239,13 @@ function routeFromLocation() {
     managementSection: managementSections().includes(params.get('section'))
       ? params.get('section')
       : target.managementSection,
-    limitTab: params.get('tab') === 'health' || target.limitTab ? 'health' : 'limits'
+    limitTab: params.get('tab') === 'health' || target.limitTab ? 'health' : 'limits',
+    selectedModelId: String(params.get('model') || '').slice(0, 512),
+    selectedSessionId: String(params.get('session') || '').slice(0, 512),
+    analysisClient: String(params.get('client') || '').slice(0, 256),
+    analysisModel: String(params.get('modelFilter') || '').slice(0, 512),
+    analysisProject: String(params.get('project') || '').slice(0, 512),
+    modelQuery: String(params.get('q') || '').slice(0, 256)
   };
 }
 
@@ -265,6 +274,20 @@ function syncUrlForView(viewId, { replace = false, tab = '' } = {}) {
     // desktop host has no routed sections, so it writes no `section` param.
     if (viewId === 'settings' && managementSections().includes(state?.prefs?.managementSection)) {
       params.set('section', state.prefs.managementSection);
+    }
+    // Analysis routes carry object/filter identity only — never credentials,
+    // account ids or raw session content. They are valid on both path and hash hosts.
+    if (['overview', 'usage', 'trends'].includes(viewId)) {
+      for (const [key, param] of [['analysisClient', 'client'], ['analysisModel', 'modelFilter'], ['analysisProject', 'project']]) {
+        if (state.prefs[key]) params.set(param, state.prefs[key]);
+      }
+    }
+    if (viewId === 'usage' && state.prefs.usageTab === 'models') {
+      if (state.prefs.selectedModelId) params.set('model', state.prefs.selectedModelId);
+      if (state.prefs.modelQuery) params.set('q', state.prefs.modelQuery);
+    }
+    if (viewId === 'usage' && state.prefs.usageTab === 'sessions' && state.prefs.selectedSessionId) {
+      params.set('session', state.prefs.selectedSessionId);
     }
     const query = params.toString();
     // Desktop loads from file://, where there is no server-side SPA fallback and
@@ -354,9 +377,22 @@ const state = {
     deviceFilter: '',
     selectedDeviceId: '',
     selectedToolId: '',
+    modelSort: 'tokens-desc',
+    modelCompare: [],
+    projectQuery: '',
+    projectSort: 'tokens-desc',
+    sessionQuery: '',
+    sessionSort: 'recent-desc',
+    savedAnalysisViews: [],
     ...storedPrefs,
     view: initialRoute.view || viewFromLocation() || 'overview',
     usageTab: initialRoute.usageTab || 'tools',
+    selectedModelId: initialRoute.selectedModelId || storedPrefs.selectedModelId || '',
+    selectedSessionId: initialRoute.selectedSessionId || storedPrefs.selectedSessionId || '',
+    analysisClient: initialRoute.analysisClient || storedPrefs.analysisClient || '',
+    analysisModel: initialRoute.analysisModel || storedPrefs.analysisModel || '',
+    analysisProject: initialRoute.analysisProject || storedPrefs.analysisProject || '',
+    modelQuery: initialRoute.modelQuery || storedPrefs.modelQuery || '',
     managementTab: initialRoute.managementTab || 'subscriptions',
     managementSection: normalizeManagementSection(initialRoute.managementSection),
     limitTab: initialRoute.limitTab || 'limits'
@@ -366,6 +402,9 @@ const state = {
   sessions: null,
   sessionsLoading: false,
   sessionsError: null,
+  sessionAnalytics: { enabled: false, key: '', rows: [], total: 0, nextCursor: '', loading: false, loaded: false, error: null, stale: false, request: null },
+  sessionAnalyticsSequence: 0,
+  sessionQueryDebounce: null,
   locale: 'en',
   health: null,
   authorization: null,
@@ -409,6 +448,7 @@ const state = {
   oauthSession: null,
   oauthLoading: false,
   limitProvider: '',
+  analysisFilterOpen: false,
   loading: true,
   error: null,
   customRange: null,
@@ -490,7 +530,7 @@ function viewStats() {
   };
 }
 
-function activePeriod() {
+function activePeriod({ applyAnalysis = true } = {}) {
   // A range answer belongs to the tab that asked for it — see `resolveScopePeriod()`.
   // Reading `state.customPeriod` unconditionally would let one fetched range answer every
   // tab, which is exactly how the desktop/Hub client showed the same figure under two
@@ -501,8 +541,7 @@ function activePeriod() {
     customPeriod: state.customPeriod,
     periods: viewStats()?.periods
   });
-  if (resolved) return resolved;
-  return {
+  const period = resolved || {
     totalTokens: 0,
     costUsd: 0,
     clients: {},
@@ -512,6 +551,10 @@ function activePeriod() {
     projects: {},
     sessions: {}
   };
+  // A Hub-wide range cannot be narrowed locally without pretending to have a
+  // joint device×client×model fact. Fixed snapshots have that joint map and can
+  // be filtered exactly; range filtering is negotiated separately with the Hub.
+  return applyAnalysis && !state.customPeriod ? filterPeriodByAnalysis(period, state.prefs) : period;
 }
 
 // The range API is what makes the calendar presets answerable; a Hub that does not
@@ -2095,6 +2138,10 @@ function render({ quiet = false } = {}) {
     renderHero();
     switch (state.prefs.view) {
       case 'usage':
+        if (state.prefs.usageTab === 'sessions' && !state.prefs.selectedSessionId) {
+          const request = ensureSessionAnalytics();
+          if (request) void request.then(() => render({ quiet: true }));
+        }
         html = renderUsage();
         break;
       case 'devices':
@@ -2942,6 +2989,146 @@ async function promptForValue(message, defaultValue = '') {
   });
 }
 
+const ANALYSIS_PREF_KEYS = [
+  'deviceFilter', 'period', 'usageTab', 'selectedModelId', 'modelQuery', 'modelSort', 'modelCompare',
+  'projectQuery', 'projectSort', 'sessionQuery', 'sessionSort', 'analysisClient', 'analysisModel',
+  'analysisProject', 'trendsRange', 'trendsMetric', 'trendsStack'
+];
+
+function analysisViewSnapshot(name) {
+  const preferences = Object.fromEntries(ANALYSIS_PREF_KEYS.map((key) => [key, state.prefs[key]]));
+  return {
+    id: `view_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: String(name || '').trim().slice(0, 80),
+    preferences,
+    customRange: state.customRange ? { ...state.customRange } : null
+  };
+}
+
+async function saveCurrentAnalysisView() {
+  const name = String(await promptForValue(tr('analysis.saveViewPrompt'), '') || '').trim();
+  if (!name) return;
+  const views = Array.isArray(state.prefs.savedAnalysisViews) ? state.prefs.savedAnalysisViews : [];
+  state.prefs.savedAnalysisViews = [...views.filter((view) => view.name !== name), analysisViewSnapshot(name)].slice(-20);
+  savePrefs({ savedAnalysisViews: state.prefs.savedAnalysisViews });
+  render();
+  showToast(tr('analysis.viewSaved'));
+}
+
+async function applySavedAnalysisView(id) {
+  const view = (state.prefs.savedAnalysisViews || []).find((item) => item.id === id);
+  if (!view) return;
+  const allowedPeriod = periodTabs().includes(view.preferences?.period) ? view.preferences.period : 'today';
+  const patch = { period: allowedPeriod };
+  for (const key of ANALYSIS_PREF_KEYS) {
+    if (key === 'period' || view.preferences?.[key] === undefined) continue;
+    patch[key] = view.preferences[key];
+    state.prefs[key] = view.preferences[key];
+  }
+  state.prefs.period = allowedPeriod;
+  state.customPeriod = null;
+  state.customRange = null;
+  savePrefs(patch);
+  render();
+  const preset = presetRangeWindow(allowedPeriod, new Date(), fleetTimeZone());
+  const sequence = ++state.presetRangeSequence;
+  if (preset) {
+    await loadPresetRange(preset, { notify: true });
+  } else if (view.customRange?.kind === 'custom' && view.customRange?.from && view.customRange?.to) {
+    state.customRange = { ...view.customRange };
+    const payload = await requestUsageRange(state.customRange);
+    if (sequence !== state.presetRangeSequence) return;
+    state.customPeriod = customPeriodFromRangePayload(payload);
+  }
+  if (['overview', 'trends'].includes(state.prefs.view)) await ensureHistory({ force: true });
+  render({ quiet: true });
+}
+
+function sessionQueryEnabled() {
+  const capability = state.authorization?.capabilities || state.health?.capabilities || {};
+  return !state.customPeriod && !isCapable('desktopSettings') && capability.sessionQuery === true;
+}
+
+function sessionQueryKey() {
+  const prefs = state.prefs;
+  return JSON.stringify([prefs.period, prefs.deviceFilter, prefs.analysisClient, prefs.analysisModel, prefs.analysisProject, prefs.sessionQuery, prefs.sessionSort]);
+}
+
+function ensureSessionAnalytics({ append = false, force = false } = {}) {
+  if (!sessionQueryEnabled()) {
+    state.sessionAnalytics.enabled = false;
+    return null;
+  }
+  const key = sessionQueryKey();
+  const current = state.sessionAnalytics;
+  if (state.sessionQueryDebounce) return null;
+  if (!append && !force && current.enabled && current.key === key && (current.loaded || current.loading || current.error)) return current.request;
+  if (append && (!current.nextCursor || current.loading || current.key !== key)) return current.request;
+  const sequence = ++state.sessionAnalyticsSequence;
+  const baseRows = append ? current.rows : [];
+  const cursor = append ? current.nextCursor : '';
+  state.sessionAnalytics = {
+    enabled: true, key, rows: baseRows, total: append ? current.total : 0,
+    nextCursor: '', loading: true, loaded: false, error: null, stale: false, request: null
+  };
+  const sort = { 'recent-desc': 'lastUsedAt', 'tokens-desc': 'totalTokens', 'cost-desc': 'costUsd' }[state.prefs.sessionSort] || 'lastUsedAt';
+  const query = new URLSearchParams({ period: state.prefs.period, sort, order: 'desc', limit: '100' });
+  for (const [preference, parameter] of [['deviceFilter', 'deviceId'], ['analysisClient', 'client'], ['analysisModel', 'model'], ['analysisProject', 'project'], ['sessionQuery', 'q']]) {
+    const value = String(state.prefs[preference] || '').trim();
+    if (value) query.set(parameter, value);
+  }
+  if (cursor) query.set('cursor', cursor);
+  const request = (async () => {
+    try {
+      const payload = await fetchJson(`/api/sessions?${query.toString()}`, { secret: state.secret });
+      if (sequence !== state.sessionAnalyticsSequence) return;
+      const rows = [...baseRows, ...(Array.isArray(payload.sessions) ? payload.sessions : Array.isArray(payload.rows) ? payload.rows : [])];
+      const unique = [...new Map(rows.map((row) => [row.key, row])).values()];
+      state.sessionAnalytics = {
+        enabled: true, key, rows: unique, total: Number(payload.total || unique.length),
+        nextCursor: String(payload.nextCursor || ''), loading: false, loaded: true,
+        error: null, stale: false, request: null
+      };
+    } catch (error) {
+      if (sequence !== state.sessionAnalyticsSequence) return;
+      state.sessionAnalytics = {
+        ...state.sessionAnalytics, rows: baseRows, nextCursor: cursor,
+        loading: false, loaded: false, error, stale: false, request: null
+      };
+    }
+  })();
+  state.sessionAnalytics.request = request;
+  return request;
+}
+
+function exportCurrentModels() {
+  const rows = modelRowsForExport();
+  const csv = toCsv([
+    { label: tr('analysis.model'), value: 'key' },
+    { label: tr('stats.tokens'), value: 'tokens' },
+    { label: tr('stats.cost'), value: 'cost' },
+    { label: tr('analysis.costProvenance'), value: 'costProvenance' },
+    { label: tr('usage.output'), value: 'outputTokens' },
+    { label: tr('usage.cacheRead'), value: 'cacheReadTokens' },
+    { label: tr('usage.cacheWrite'), value: 'cacheWriteTokens' },
+    { label: tr('usage.uncached'), value: 'uncachedInputTokens' },
+    { label: tr('usage.cacheRate'), value: 'cacheHitPercent' },
+    { label: tr('analysis.costPerMillion'), value: 'costPerMillion' },
+    { label: tr('analysis.clients'), value: 'clients' },
+    { label: tr('analysis.sessions'), value: 'sessions' }
+  ], rows);
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `jiran-models-${state.prefs.period}-${localDayKey(new Date())}.csv`;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(tr('analysis.exported'));
+}
+
 function subscriptionFromForm(form) {
   const values = new FormData(form);
   const id = String(state.subscriptionEditId || '').trim();
@@ -3103,6 +3290,10 @@ async function fetchAllPricing() {
 // The range API answers both a hand-picked range and the calendar presets, so the
 // payload is folded into a period once, here.
 function customPeriodFromRangePayload(payload) {
+  const sessions = payload.sessions || {};
+  const sessionRows = Object.values(sessions);
+  const hasComponents = sessionRows.some((session) => ['outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+    .some((key) => session?.[key] !== null && session?.[key] !== undefined));
   return {
     totalTokens: payload.totalTokens || 0,
     costUsd: payload.costUsd || 0,
@@ -3110,6 +3301,21 @@ function customPeriodFromRangePayload(payload) {
     clientCosts: payload.clientCosts || {},
     models: payload.models || {},
     modelCosts: payload.modelCosts || {},
+    cacheReadTokens: payload.cacheReadTokens,
+    cacheWriteTokens: payload.cacheWriteTokens,
+    outputTokens: payload.outputTokens,
+    clientCacheReads: payload.clientCacheReads || {},
+    clientCacheWrites: payload.clientCacheWrites || {},
+    clientOutputs: payload.clientOutputs || {},
+    modelCacheReads: payload.modelCacheReads || {},
+    modelCacheWrites: payload.modelCacheWrites || {},
+    modelOutputs: payload.modelOutputs || {},
+    metricAvailability: {
+      components: hasComponents || Number(payload.totalTokens || 0) === 0,
+      clientComponents: ['clientOutputs', 'clientCacheReads', 'clientCacheWrites'].some((key) => Object.prototype.hasOwnProperty.call(payload, key)),
+      modelComponents: ['modelOutputs', 'modelCacheReads', 'modelCacheWrites'].some((key) => Object.prototype.hasOwnProperty.call(payload, key)),
+      ...(payload.metricAvailability || {})
+    },
     // /api/usage/range does not nest client->model maps, so derive them from the
     // returned sessions. Without this the per-client model split read "No usage"
     // for every custom range while the preset periods showed it.
@@ -3120,7 +3326,12 @@ function customPeriodFromRangePayload(payload) {
     clientMeasurements: payload.clientMeasurements || {},
     estimated: payload.estimated === true,
     projects: payload.projects || {},
-    sessions: payload.sessions || {}
+    sessions,
+    source: payload.source || 'usage-range',
+    timeBasis: payload.timeBasis || 'fleet-calendar',
+    range: payload.range || { from: payload.from, to: payload.to, startDate: payload.startDate, endDate: payload.endDate },
+    coverage: payload.coverage || null,
+    provenance: payload.provenance || null
   };
 }
 
@@ -3132,9 +3343,12 @@ function customPeriodFromRangePayload(payload) {
 // back). The instants stay in the request so the event-ledger fallback can filter
 // by the caller's real window instead of the server's.
 async function requestUsageRange({ from, to, startDate, endDate, startHour, endHour }) {
+  const instants = coerceRangeInstants({ from, to });
+  if (!instants) throw new Error(tr('range.invalid'));
+  const { from: fromInstant, to: toInstant } = instants;
   const query = new URLSearchParams({
-    from: from.toISOString(),
-    to: to.toISOString()
+    from: fromInstant.toISOString(),
+    to: toInstant.toISOString()
   });
   if (startDate && endDate) {
     query.set('startDate', startDate);
@@ -3172,7 +3386,11 @@ async function applyCustomRange() {
       startHour: from.getHours(),
       endHour: to.getHours()
     });
-    state.customRange = { kind: 'custom', from: from.toISOString(), to: to.toISOString() };
+    state.customRange = {
+      kind: 'custom', from: from.toISOString(), to: to.toISOString(),
+      startDate: localDayKey(from), endDate: localDayKey(new Date(to.getTime() - 1)),
+      startHour: from.getHours(), endHour: to.getHours()
+    };
     state.customPeriod = customPeriodFromRangePayload(payload);
     openRange(false);
     render();
@@ -3471,6 +3689,124 @@ function bindEvents() {
       switchView('settings', { tab: nextTab, section: 'consumption' });
       return;
     }
+    const analysisToggle = event.target.closest('[data-analysis-toggle]');
+    if (analysisToggle) {
+      state.analysisFilterOpen = !state.analysisFilterOpen;
+      render();
+      return;
+    }
+    const clearAnalysis = event.target.closest('[data-clear-analysis]');
+    if (clearAnalysis) {
+      const dimension = clearAnalysis.dataset.clearAnalysis;
+      const patch = {};
+      for (const [key, name] of [['analysisClient', 'client'], ['analysisModel', 'model'], ['analysisProject', 'project']]) {
+        if (dimension === 'all' || dimension === name) {
+          state.prefs[key] = '';
+          patch[key] = '';
+        }
+      }
+      savePrefs(patch);
+      syncUrlForView(state.prefs.view, { replace: true });
+      render();
+      return;
+    }
+    const saveAnalysis = event.target.closest('[data-save-analysis-view]');
+    if (saveAnalysis) {
+      void saveCurrentAnalysisView().catch((error) => showToast(error?.message || tr('error.generic')));
+      return;
+    }
+    const selectModel = event.target.closest('[data-select-model]');
+    if (selectModel) {
+      state.prefs.selectedModelId = selectModel.dataset.selectModel || '';
+      state.prefs.selectedSessionId = '';
+      state.prefs.analysisModel = '';
+      state.prefs.usageTab = 'models';
+      savePrefs({ selectedModelId: state.prefs.selectedModelId, selectedSessionId: '', analysisModel: '', usageTab: 'models' });
+      switchView('usage', { tab: 'models' });
+      return;
+    }
+    const closeModel = event.target.closest('[data-close-model]');
+    if (closeModel) {
+      state.prefs.selectedModelId = '';
+      savePrefs({ selectedModelId: '' });
+      syncUrlForView('usage', { replace: true });
+      render();
+      return;
+    }
+    const compareModel = event.target.closest('[data-compare-model]');
+    if (compareModel) {
+      const key = compareModel.dataset.compareModel || '';
+      const current = Array.isArray(state.prefs.modelCompare) ? state.prefs.modelCompare : [];
+      if (current.includes(key)) state.prefs.modelCompare = current.filter((item) => item !== key);
+      else if (current.length >= 4) {
+        showToast(tr('analysis.compareLimit'));
+        return;
+      } else state.prefs.modelCompare = [...current, key];
+      savePrefs({ modelCompare: state.prefs.modelCompare });
+      render();
+      return;
+    }
+    const modelSort = event.target.closest('[data-model-sort]');
+    if (modelSort) {
+      state.prefs.modelSort = modelSort.dataset.modelSort || 'tokens-desc';
+      savePrefs({ modelSort: state.prefs.modelSort });
+      render();
+      return;
+    }
+    const filterClient = event.target.closest('[data-filter-client]');
+    if (filterClient) {
+      state.prefs.analysisClient = filterClient.dataset.filterClient || '';
+      state.prefs.selectedModelId = '';
+      savePrefs({ analysisClient: state.prefs.analysisClient, selectedModelId: '' });
+      render();
+      return;
+    }
+    const filterProject = event.target.closest('[data-filter-project]');
+    if (filterProject) {
+      state.prefs.analysisProject = filterProject.dataset.filterProject || '';
+      state.prefs.selectedModelId = '';
+      state.prefs.usageTab = 'projects';
+      savePrefs({ analysisProject: state.prefs.analysisProject, selectedModelId: '', usageTab: 'projects' });
+      switchView('usage', { tab: 'projects' });
+      return;
+    }
+    const loadMoreSessions = event.target.closest('[data-load-more-sessions]');
+    if (loadMoreSessions) {
+      const append = state.sessionAnalytics.rows.length > 0 && Boolean(state.sessionAnalytics.nextCursor);
+      const request = ensureSessionAnalytics({ append, force: !append });
+      render();
+      if (request) void request.then(() => render({ quiet: true }));
+      return;
+    }
+    const selectSession = event.target.closest('[data-select-session]');
+    if (selectSession) {
+      state.prefs.selectedSessionId = selectSession.dataset.selectSession || '';
+      state.prefs.selectedModelId = '';
+      state.prefs.usageTab = 'sessions';
+      savePrefs({ selectedSessionId: state.prefs.selectedSessionId, selectedModelId: '', usageTab: 'sessions' });
+      switchView('usage', { tab: 'sessions' });
+      return;
+    }
+    const closeSession = event.target.closest('[data-close-session]');
+    if (closeSession) {
+      state.prefs.selectedSessionId = '';
+      savePrefs({ selectedSessionId: '' });
+      syncUrlForView('usage', { replace: true });
+      render();
+      return;
+    }
+    const exportModels = event.target.closest('[data-export-models]');
+    if (exportModels) {
+      exportCurrentModels();
+      return;
+    }
+    const copyModel = event.target.closest('[data-copy-model]');
+    if (copyModel) {
+      event.preventDefault();
+      event.stopPropagation();
+      void copyText(copyModel.dataset.copyModel || '').then(() => showToast(tr('analysis.modelCopied'))).catch(() => showToast(tr('error.generic')));
+      return;
+    }
     const jumpView = event.target.closest('[data-jump-view]');
     if (jumpView) {
       const view = jumpView.dataset.jumpView;
@@ -3481,6 +3817,10 @@ function bindEvents() {
       if (jumpView.dataset.jumpDevice) {
         state.prefs.selectedDeviceId = jumpView.dataset.jumpDevice;
         savePrefs({ selectedDeviceId: state.prefs.selectedDeviceId });
+      }
+      if (jumpView.dataset.pricingModel) {
+        state.pricingEditModel = jumpView.dataset.pricingModel;
+        state.pricingDrawerOpen = true;
       }
       // A jump to a folded view lands on the Management page's owning section.
       if (VIEW_REDIRECTS[view]) {
@@ -3779,6 +4119,24 @@ function bindEvents() {
   els.content.addEventListener('input', (event) => {
     rememberFormDraft(event.target);
     syncWebSettingsFormState(event.target.closest('[data-web-settings-form]'));
+    const modelSearch = event.target.closest?.('[data-model-search]');
+    const usageSearch = event.target.closest?.('[data-usage-search]');
+    if (modelSearch || usageSearch) {
+      const key = modelSearch ? 'modelQuery' : usageSearch.dataset.usageSearch === 'sessions' ? 'sessionQuery' : 'projectQuery';
+      state.prefs[key] = String(event.target.value || '').slice(0, 256);
+      savePrefs({ [key]: state.prefs[key] });
+      if (!modelSearch && usageSearch.dataset.usageSearch === 'sessions') {
+        state.sessionAnalytics.stale = true;
+        clearTimeout(state.sessionQueryDebounce);
+        state.sessionQueryDebounce = setTimeout(() => {
+          state.sessionQueryDebounce = null;
+          state.sessionAnalytics.key = '';
+          render();
+        }, 300);
+      }
+      if (modelSearch) syncUrlForView('usage', { replace: true });
+      render();
+    }
   });
 
   // A section-rail click on the Management page persists the choice and keeps
@@ -3793,6 +4151,36 @@ function bindEvents() {
 
   els.content.addEventListener('change', (event) => {
     syncWebSettingsFormState(event.target.closest?.('[data-web-settings-form]'));
+    const analysisFilter = event.target.closest?.('[data-analysis-filter]');
+    if (analysisFilter) {
+      const key = { client: 'analysisClient', model: 'analysisModel', project: 'analysisProject' }[analysisFilter.dataset.analysisFilter];
+      if (!key) return;
+      state.prefs[key] = String(analysisFilter.value || '');
+      savePrefs({ [key]: state.prefs[key] });
+      syncUrlForView(state.prefs.view, { replace: true });
+      render();
+      return;
+    }
+    const savedAnalysis = event.target.closest?.('[data-saved-analysis-view]');
+    if (savedAnalysis) {
+      void applySavedAnalysisView(String(savedAnalysis.value || '')).catch((error) => showToast(error?.message || tr('error.generic')));
+      return;
+    }
+    const modelSort = event.target.closest?.('[data-model-sort-select]');
+    if (modelSort) {
+      state.prefs.modelSort = String(modelSort.value || 'tokens-desc');
+      savePrefs({ modelSort: state.prefs.modelSort });
+      render();
+      return;
+    }
+    const usageSort = event.target.closest?.('[data-usage-list-sort]');
+    if (usageSort) {
+      const key = usageSort.dataset.usageListSort === 'sessions' ? 'sessionSort' : 'projectSort';
+      state.prefs[key] = String(usageSort.value || (key === 'sessionSort' ? 'recent-desc' : 'tokens-desc'));
+      savePrefs({ [key]: state.prefs[key] });
+      render();
+      return;
+    }
     const trendsDevice = event.target.closest?.('[data-trends-device]');
     if (trendsDevice) {
       state.prefs.deviceFilter = deviceIdFromOptionValue(trendsDevice.value);
@@ -4320,6 +4708,9 @@ async function init() {
     if (initialRoute.managementTab) delete prefsPatch.managementTab;
     if (initialRoute.managementSection) delete prefsPatch.managementSection;
     if (initialRoute.limitTab) delete prefsPatch.limitTab;
+    for (const key of ['selectedModelId', 'selectedSessionId', 'analysisClient', 'analysisModel', 'analysisProject', 'modelQuery']) {
+      if (initialRoute[key]) delete prefsPatch[key];
+    }
     Object.assign(state.prefs, prefsPatch);
   }
   const loadedSecret = await loadSecret();

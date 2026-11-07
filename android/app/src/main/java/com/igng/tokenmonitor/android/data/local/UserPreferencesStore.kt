@@ -41,6 +41,13 @@ enum class ThemeMode(val storageKey: String, val labelZh: String) {
   }
 }
 
+enum class ReduceMotionMode(val storageKey: String, val labelZh: String) {
+  System("system", "跟随系统"),
+  Reduced("reduced", "减少动态效果"),
+  Full("full", "完整动态效果");
+  companion object { fun fromStorage(value: String?) = entries.firstOrNull { it.storageKey == value } ?: System }
+}
+
 enum class HapticsMode(val storageKey: String, val labelZh: String) {
   Off("off", "关闭"),
   Standard("standard", "标准"),
@@ -74,6 +81,9 @@ data class UserPreferences(
   val currency: DisplayCurrency = DisplayCurrency.Usd,
   val themeMode: ThemeMode = ThemeMode.System,
   val hapticsMode: HapticsMode = HapticsMode.Standard,
+  val reduceMotionMode: ReduceMotionMode = ReduceMotionMode.System,
+  /** Null is the Hub-wide cross-surface analytics filter. */
+  val deviceFilter: String? = null,
   val homeLimitAccountCount: Int = 3,
   /**
    * WorkManager's floor is 15 minutes. The widget scheduler reads this value and
@@ -99,6 +109,8 @@ class UserPreferencesStore @Inject constructor(
     currency = DisplayCurrency.fromStorage(prefs.getString(KEY_CURRENCY, DisplayCurrency.Usd.storageKey)),
     themeMode = ThemeMode.fromStorage(prefs.getString(KEY_THEME_MODE, ThemeMode.System.storageKey)),
     hapticsMode = HapticsMode.fromStorage(prefs.getString(KEY_HAPTICS, HapticsMode.Standard.storageKey)),
+    reduceMotionMode = ReduceMotionMode.fromStorage(prefs.getString(KEY_REDUCE_MOTION, ReduceMotionMode.System.storageKey)),
+    deviceFilter = prefs.getString(KEY_DEVICE_FILTER, null)?.takeIf { it.isNotBlank() },
     homeLimitAccountCount = clampHomeLimitAccountCount(prefs.getInt(KEY_HOME_LIMIT_ACCOUNT_COUNT, 3)),
     widgetRefreshMinutes = clampWidgetRefreshMinutes(prefs.getInt(KEY_WIDGET_REFRESH_MINUTES, 30)),
     widgetHideCost = prefs.getBoolean(KEY_WIDGET_HIDE_COST, false)
@@ -124,6 +136,17 @@ class UserPreferencesStore @Inject constructor(
     _preferences.value = _preferences.value.copy(hapticsMode = mode)
   }
 
+  fun setReduceMotionMode(mode: ReduceMotionMode) {
+    prefs.edit().putString(KEY_REDUCE_MOTION, mode.storageKey).apply()
+    _preferences.value = _preferences.value.copy(reduceMotionMode = mode)
+  }
+
+  fun setDeviceFilter(deviceId: String?) {
+    val next = deviceId?.takeIf { it.isNotBlank() }
+    prefs.edit().apply { if (next == null) remove(KEY_DEVICE_FILTER) else putString(KEY_DEVICE_FILTER, next) }.apply()
+    _preferences.value = _preferences.value.copy(deviceFilter = next)
+  }
+
   fun setHomeLimitAccountCount(count: Int) {
     val next = clampHomeLimitAccountCount(count)
     prefs.edit().putInt(KEY_HOME_LIMIT_ACCOUNT_COUNT, next).apply()
@@ -147,6 +170,8 @@ class UserPreferencesStore @Inject constructor(
     const val KEY_CURRENCY = "display_currency"
     const val KEY_THEME_MODE = "theme_mode"
     const val KEY_HAPTICS = "haptics_mode"
+    const val KEY_REDUCE_MOTION = "reduce_motion_mode"
+    const val KEY_DEVICE_FILTER = "analytics_device_filter"
     const val KEY_HOME_LIMIT_ACCOUNT_COUNT = "home_limit_account_count"
     const val KEY_WIDGET_REFRESH_MINUTES = "widget_refresh_minutes"
     const val KEY_WIDGET_HIDE_COST = "widget_hide_cost"
