@@ -2,3 +2,17 @@
 # HTML 与 public/ 下的固定文件名资源保持 Pages 默认（每次回源校验），发布后立即生效。
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable
+
+# 所有页面共用的安全头。都不改变站点行为：没有第三方脚本、没有内嵌框架、没有摄像头/麦克风/
+# 定位/支付的调用，外链一律 rel="noopener"。
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+
+# 刻意没有 Content-Security-Policy：Astro 把首屏 CSS 内联成 <style>，页面里还有内联的 JSON-LD
+# 与场景启动脚本，用 CSP 就得为每个内联块算哈希并随每次构建更新，写错只会静默丢掉首屏样式。
+# 站内没有由用户输入驱动的 DOM 写入，所以先上上面这些零风险头；将来若引入第三方脚本，再按
+# `script-src 'self' <来源>` 逐步收紧。
