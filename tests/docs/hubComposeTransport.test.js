@@ -7,14 +7,18 @@ const test = require('node:test');
 
 const root = path.join(__dirname, '..', '..');
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
-const loopbackBinding = '${TOKEN_MONITOR_HOST:-${JIRAN_BIND_HOST:-127.0.0.1}}';
+const publishedOnLoopback = '${JIRAN_BIND_HOST:-127.0.0.1}';
 
 for (const name of ['docker-compose.yml', 'docker-compose.external-db.yml']) {
-  test(`${name} defaults both container and published port to loopback`, () => {
+  test(`${name} publishes on loopback while the container listens on all interfaces`, () => {
     const text = read(name);
-    assert.match(text, new RegExp(`TOKEN_MONITOR_HOST: \\$\\{TOKEN_MONITOR_HOST:-\\$\\{JIRAN_BIND_HOST:-127\\.0\\.0\\.1\\}\\}`));
-    assert.ok(text.includes(`- "${loopbackBinding}:\${TOKEN_MONITOR_PORT:-\${JIRAN_PORT:-17321}}:17321"`));
-    assert.match(text, /TOKEN_MONITOR_ALLOW_INSECURE_HTTP: \$\{TOKEN_MONITOR_ALLOW_INSECURE_HTTP:-\$\{JIRAN_ALLOW_INSECURE_HTTP:-0\}\}/);
+    // Docker DNATs the published port to the container address, so a loopback
+    // listener inside the container is unreachable; the publish address is what
+    // decides exposure.
+    assert.match(text, /^\s+TOKEN_MONITOR_HOST: 0\.0\.0\.0$/m);
+    assert.ok(text.includes(`- "${publishedOnLoopback}:\${TOKEN_MONITOR_PORT:-\${JIRAN_PORT:-17321}}:17321"`));
+    assert.match(text, /^\s+TOKEN_MONITOR_ALLOW_INSECURE_HTTP: '1'$/m);
+    assert.equal(text.includes('${JIRAN_ALLOW_INSECURE_HTTP:-0}'), false);
   });
 }
 

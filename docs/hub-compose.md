@@ -26,9 +26,11 @@ Open `http://127.0.0.1:17321` on the Hub host. The default configuration binds b
 
 Remote clients need one of the following explicit profiles. Run `docker compose up -d` again after changing `.env` or an override file. Existing remote deployments that previously relied on the old all-interface default must set `JIRAN_BIND_HOST=0.0.0.0` when recreating the container.
 
+`JIRAN_BIND_HOST` is the address Docker **publishes** on, and that is the exposure boundary: it defaults to `127.0.0.1`. Inside the container the Hub always listens on `0.0.0.0`, because Docker forwards the published port to the container address — a loopback listener there would be unreachable. The `insecure_hub_transport` guard still applies when the Hub binary is run directly, but a Compose deployment sets the container-internal plaintext flag itself.
+
 ### Same-host HTTPS reverse proxy (recommended)
 
-Keep `JIRAN_BIND_HOST=127.0.0.1` and `JIRAN_ALLOW_INSECURE_HTTP=0`. Terminate public HTTPS in a reverse proxy on the same host and proxy to `http://127.0.0.1:17321`; clients use only `https://hub.example.com`. A minimal nginx location is:
+Keep `JIRAN_BIND_HOST=127.0.0.1`. Terminate public HTTPS in a reverse proxy on the same host and proxy to `http://127.0.0.1:17321`; clients use only `https://hub.example.com`. A minimal nginx location is:
 
 ```nginx
 location / {
@@ -55,11 +57,10 @@ services:
       - ./certs:/certs:ro
 ```
 
-Set the following in `.env` and recreate the container. No insecure-HTTP opt-in is needed:
+Set the following in `.env` and recreate the container:
 
 ```dotenv
 JIRAN_BIND_HOST=0.0.0.0
-JIRAN_ALLOW_INSECURE_HTTP=0
 TOKEN_MONITOR_TLS_CERT=/certs/hub.crt
 TOKEN_MONITOR_TLS_KEY=/certs/hub.key
 ```
@@ -68,14 +69,13 @@ Clients use `https://hub.example.com:17321`. Restrict the published port with th
 
 ### Trusted LAN/VPN plaintext HTTP (explicit exception)
 
-Use this only on an access-controlled trusted LAN or VPN, never on a public interface. Set both values; the bind change alone deliberately fails startup with `insecure_hub_transport`:
+Use this only on an access-controlled trusted LAN or VPN, never on a public interface. Publishing beyond loopback is the explicit decision for a Compose deployment; keep the host firewall rule in front of the port:
 
 ```dotenv
 JIRAN_BIND_HOST=0.0.0.0
-JIRAN_ALLOW_INSECURE_HTTP=1
 ```
 
-Clients use `http://<server>:17321`. Restrict the port to trusted source addresses at the host/network firewall. This is a transport exception, not an authentication bypass: `JIRAN_SECRET` remains required for a non-loopback Hub. Prefer HTTPS whenever clients include mobile devices or the network is not fully controlled by you.
+Clients use `http://<server>:17321`. Running the Hub binary directly instead of Compose additionally needs `JIRAN_ALLOW_INSECURE_HTTP=1`, or startup fails with `insecure_hub_transport`; Compose sets the container-internal equivalent itself. Restrict the port to trusted source addresses at the host/network firewall. This is a transport exception, not an authentication bypass: `JIRAN_SECRET` remains required for a non-loopback Hub. Prefer HTTPS whenever clients include mobile devices or the network is not fully controlled by you.
 
 ## Container runtime
 
