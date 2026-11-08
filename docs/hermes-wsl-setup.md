@@ -50,7 +50,7 @@ Hermes Agent 运行在 WSL 中，其会话数据存储在 `~/.hermes/state.db`�
 ### 第一步：在 Windows 部署 Docker Compose Hub
 
 1. 在 Windows 长期开机的机器上准备仓库根目录的 `.env`
-2. 设置 `JIRAN_SECRET`、MySQL 密码和 `MYSQL_ROOT_PASSWORD`
+2. 设置 `JIRAN_SECRET`、MySQL 密码和 `MYSQL_ROOT_PASSWORD`；可信 LAN 明文 HTTP 还需同时设置 `JIRAN_BIND_HOST=0.0.0.0` 和 `JIRAN_ALLOW_INSECURE_HTTP=1`（更推荐按 `docs/hub-compose.md` 配置 HTTPS）
 3. 运行 `docker compose up -d`，并用 `curl http://127.0.0.1:17321/api/health` 检查 Hub
 4. 记录 **Hub URL**（如 `http://192.168.x.x:17321`）和统一 Hub 密钥
 

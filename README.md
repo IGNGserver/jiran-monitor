@@ -153,9 +153,11 @@ docker compose up -d
 curl http://127.0.0.1:17321/api/health
 ```
 
-The dashboard is served by the Hub itself on the same port (`http://<server>:17321`) and can be
-installed as a PWA. The image is `ghcr.io/igngserver/jiran-hub`; pin a version with
-`JIRAN_VERSION` for anything you care about. Full guide: [docs/hub-compose.md](docs/hub-compose.md).
+The dashboard is served by the Hub itself on the same port and can be installed as a PWA. The
+default is loopback-only (`http://127.0.0.1:17321`); use the full guide's reverse-proxy/TLS or
+explicit trusted-LAN profile before connecting from another machine. The image is
+`ghcr.io/igngserver/jiran-hub`; pin a version with `JIRAN_VERSION` for anything you care about.
+Full guide: [docs/hub-compose.md](docs/hub-compose.md).
 
 Then, on each machine:
 

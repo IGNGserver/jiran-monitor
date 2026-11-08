@@ -25,6 +25,10 @@ On the Windows machine that will stay online, deploy the repository's root Compo
 ```bash
 cp .env.example .env
 # set JIRAN_SECRET, MYSQL_PASSWORD, and MYSQL_ROOT_PASSWORD
+# WSL is remote from the Hub: explicitly select trusted-LAN HTTP,
+# or use the HTTPS profiles in docs/hub-compose.md instead.
+# JIRAN_BIND_HOST=0.0.0.0
+# JIRAN_ALLOW_INSECURE_HTTP=1
 
 docker compose up -d
 curl http://127.0.0.1:17321/api/health
