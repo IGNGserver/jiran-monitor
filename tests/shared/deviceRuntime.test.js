@@ -83,6 +83,25 @@ test('usage transforms and progressive previews remain device-local responsibili
   runtime.stop();
 });
 
+test('graceful shutdown stops collection before flushing and closes the sink once', async () => {
+  const events = [];
+  const sink = {
+    enqueue: () => events.push('enqueue'),
+    flush: async () => { events.push('flush'); return { ok: true }; },
+    stop: () => events.push('sinkStop')
+  };
+  const { calls, records, runtime, usageOptions } = harness({ sink });
+  usageOptions.onUpdate({ updatedAt: 'usage-time', today: { totalTokens: 3 } }, 'startup');
+  const first = runtime.shutdown();
+  const second = runtime.shutdown();
+  assert.equal(first, second);
+  assert.deepEqual(calls, [['usageStop']]);
+  usageOptions.onUpdate({ updatedAt: 'late', today: { totalTokens: 99 } }, 'late');
+  assert.equal(records.length, 1);
+  assert.deepEqual(await first, { ok: true });
+  assert.deepEqual(events, ['enqueue', 'flush', 'sinkStop']);
+});
+
 test('device runtime forwards usage controls and invalidates callbacks on stop', () => {
   const { calls, records, runtime, usageOptions } = harness();
   assert.equal(runtime.tick('manual', { forceHistory: true }), 'tick');
