@@ -290,6 +290,29 @@ a { color: inherit; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+/* The hero card follows the scope tab, so the card itself has to say which window
+   its number belongs to — an unlabelled "Tokens 731亿" reads as today's usage even
+   when 累计 is selected. The label span is written by renderHero() alone (no
+   data-i18n), because applyI18n() rewrites textContent on every locale change. */
+.hero-scope {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.hero-scope:not(:empty)::after {
+  content: ' · ';
+}
+/* The footnote explains the headline (cache re-read share, archived share); it is
+   never a second headline. */
+.hero-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+.hero-note[hidden] {
+  display: none;
+}
 .hero-value {
   font-size: 28px;
   letter-spacing: -0.04em;

@@ -328,6 +328,10 @@ const els = {
   totalCost: document.getElementById('totalCost'),
   deviceCount: document.getElementById('deviceCount'),
   liveLabel: document.getElementById('liveLabel'),
+  // Static nodes, captured once: every hero card that shows a period-scoped figure
+  // carries one, and renderHero() is their only writer.
+  heroScopes: typeof document === 'undefined' ? [] : document.querySelectorAll('[data-hero-scope]'),
+  heroNotes: typeof document === 'undefined' ? [] : document.querySelectorAll('[data-hero-note]'),
   deviceFilter: document.getElementById('deviceFilter'),
   content: document.getElementById('content'),
   authGate: document.getElementById('authGate'),
@@ -576,6 +580,18 @@ function fleetTimeZone() {
 
 function periodTabs() {
   return PERIOD_TABS.filter((period) => !isPresetRangePeriod(period) || presetRangesEnabled());
+}
+
+/**
+ * The scope key the numbers on screen belong to.
+ *
+ * One source of truth for both the tab bar's highlight and the label the hero card
+ * prints next to its figure. Splitting them is how a 累计 total came to sit under a
+ * card that named no window at all: the tab bar said 累计, the card said only
+ * "Tokens", and the reader supplied "today" themselves.
+ */
+function selectedScopeKey() {
+  return state.customRange?.kind === 'custom' ? 'custom' : state.prefs.period;
 }
 
 /** Drop a persisted or stale selection that this host cannot answer. */
@@ -1003,7 +1019,7 @@ function renderChrome() {
   // Reading the chip off `customRange.kind` instead would highlight whichever range was
   // fetched last, which is the same leak `resolveScopePeriod()` closes for the figures.
   const rangeKind = state.customRange?.kind || '';
-  const selectedPeriod = rangeKind === 'custom' ? 'custom' : state.prefs.period;
+  const selectedPeriod = selectedScopeKey();
   const periodOptions = periodTabs().map((period) => [period, tr(`period.${period}`)]);
   if (rangeKind === 'custom') periodOptions.push(['custom', tr('period.custom')]);
   els.periodTabs.dataset.selection = 'period';
@@ -1025,7 +1041,11 @@ function renderChrome() {
     ? `${tr('status.dataAsOf')} ${new Date(state.dataAsOf).toLocaleTimeString(state.locale, { hour: 'numeric', minute: '2-digit' })}`
     : '';
   const deviceCountLabel = scopedDeviceCount === 1 ? tr('stats.device') : tr('stats.devices');
-  const scopeMeta = [scoped ? `${periodLabel} · ${scopedDeviceCount} ${deviceCountLabel.toLowerCase()}` : '', dataAsOf].filter(Boolean).join(' · ');
+  // The period name is not a device-filter detail. Gating it on `scoped` left the
+  // page with no statement of which window its figures describe whenever all
+  // devices were selected, which is the default.
+  const deviceScope = scoped ? `${scopedDeviceCount} ${deviceCountLabel.toLowerCase()}` : '';
+  const scopeMeta = [periodLabel, deviceScope, dataAsOf].filter(Boolean).join(' · ');
   const desc = viewDescription();
   const kicker = viewKicker();
   els.pageMeta.textContent = [scoped ? '' : kicker, desc, scopeMeta].filter(Boolean).join(' · ');
@@ -1644,6 +1664,34 @@ function renderHero() {
   const period = activePeriod();
   const stats = viewStats();
   const tokens = period.totalTokens || 0;
+  // Both period-scoped cards name their window. Without this the card read
+  // "Tokens 731亿" while 累计 was selected, and every reader supplied "today".
+  const scopeLabel = tr(`period.${selectedScopeKey()}`);
+  for (const scope of els.heroScopes || []) {
+    if (scope.textContent !== scopeLabel) scope.textContent = scopeLabel;
+  }
+  // The footnote explains the headline instead of restating it, because the headline
+  // is not what a reader assumes. Two facts do the explaining:
+  //
+  // 1. A cache re-read counts as a token here, matching tokscale and the harness that
+  //    reported it. An agentic tool re-reads its whole context on every step, so cache
+  //    reads are routinely 95%+ of a day's figure; the "new" consumption is input +
+  //    output. Without the share, a 27亿 day reads as a counting bug instead of as a
+  //    measurement definition.
+  // 2. 累计 also takes every archived session — usage whose source tool was deleted.
+  //    That share cannot be proven from disk, so it has to be named.
+  const cacheRead = Math.max(0, Math.round(Number(period.cacheReadTokens) || 0));
+  const archived = Math.max(0, Math.round(Number(period.archivedTokens) || 0));
+  const notes = [];
+  if (tokens > 0 && cacheRead > 0) {
+    notes.push(tr('stats.cacheReadShare', { percent: Math.round((cacheRead / tokens) * 1000) / 10 }));
+  }
+  if (archived > 0) notes.push(tr('stats.archived', { value: formatCompact(archived) }));
+  const heroNote = notes.join(' · ');
+  for (const note of els.heroNotes || []) {
+    if (note.textContent !== heroNote) note.textContent = heroNote;
+    if (note.hidden !== (heroNote === '')) note.hidden = heroNote === '';
+  }
   // The exact figure is always available on hover; the narrow hero card only
   // fits the compact form.
   els.totalTokens.textContent = formatCompact(tokens);

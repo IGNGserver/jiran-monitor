@@ -269,6 +269,8 @@ Example payload:
 
 The hub normalizes records before storing them. The Node hub accepts JSON ingest bodies up to 1 MiB; larger bodies return `413 payload_too_large`.
 
+`archivedTokens`, `archivedCostUsd` and `archivedClients` are optional additive fields on any period. They carry the share of that period's counters that came back from the agent's session archive rather than from a live scan — sessions whose source tool has since been deleted. All-time is the only period that takes every archived session unconditionally (today and month are still matched by calendar window), so a device that deleted a tool's data directory keeps reporting that tool's historical usage instead of silently shrinking. These fields are what make the figure reconcilable against a fresh full scan: absent or `0` means every token in the period is provable from the tools still on disk. The hub sums them like any other counter and `/api/stats/summary` carries them, so first paint can report the split instead of presenting the archive share as measured usage.
+
 Device `limits` and `limitsOnly` fields are accepted only for mixed-version
 compatibility and are discarded before persistence. Devices and agents do not
 probe or report local provider accounts. Quota data shown by `/api/stats` is

@@ -305,6 +305,18 @@ function addArchivedSession(period, session) {
   period.outputTokens += output;
   if (tokens > 0) period.clients[archived.client] = mapNumber(period.clients, archived.client) + tokens;
   if (cost > 0) period.clientCosts[archived.client] = mapNumber(period.clientCosts, archived.client) + cost;
+  // Tag what this restore added instead of leaving it indistinguishable from a live
+  // scan. 累计 is the only period that takes every archive entry unconditionally, so
+  // without this counter the headline figure cannot be reconciled against tokscale
+  // and has to be taken on trust.
+  period.archivedTokens = numberValue(period.archivedTokens) + tokens;
+  period.archivedCostUsd = numberValue(period.archivedCostUsd) + cost;
+  if (tokens > 0) {
+    period.archivedClients = period.archivedClients && typeof period.archivedClients === 'object'
+      ? period.archivedClients
+      : Object.create(null);
+    period.archivedClients[archived.client] = mapNumber(period.archivedClients, archived.client) + tokens;
+  }
 
   for (const [model, modelTokens] of Object.entries(archived.models || {})) {
     const next = Math.max(0, Math.round(numberValue(modelTokens)));
