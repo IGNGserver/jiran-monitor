@@ -509,12 +509,12 @@ test('limitCards surfaces named Codex allowances, credit counts and fetch time',
 });
 
 test('every id the dashboard can request an icon for resolves to a shipped file', async () => {
-  // clientIconPath() builds /icons/clients/<id>.svg (after ICON_ALIASES) and the
-  // <img> falls back to onerror="display:none" — except inline event handlers are
-  // blocked by the Hub's own CSP, so a missing file renders a broken-image glyph
-  // and re-requests it on every re-render (responses are cache-control: no-store).
-  // `claude-desktop` (a default client), `commandcode`, `kimi` and `zcode` were
-  // all missing this way.
+  // clientIconPath() builds /icons/clients/<id>.svg (after ICON_ALIASES). A
+  // missing file is hidden by the shared app's capture-phase error listener, but
+  // it is still a defect: the row loses its mark and the request repeats on every
+  // re-render (responses are cache-control: no-store). Inline `onerror` never
+  // worked here — the Hub's CSP blocks inline event handlers. `claude-desktop`
+  // (a default client), `commandcode`, `kimi` and `zcode` were all missing.
   const iconsDir = path.join(__dirname, '../../src/shared-ui/icons/clients');
   const shipped = new Set(
     fs.readdirSync(iconsDir).filter((name) => name.endsWith('.svg')).map((name) => name.replace(/\.svg$/, ''))

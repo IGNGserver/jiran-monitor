@@ -1109,7 +1109,7 @@ function rowHtml(row, { showIcon = false, sub } = {}) {
   // collapsing the row's leading column, so the metric columns stay aligned.
   const iconId = row.client || row.key;
   const icon = showIcon && iconId
-    ? `<img class="client-icon" src="${clientIconPath(iconId)}" alt="" onerror="this.style.display='none'" />`
+    ? `<img class="client-icon" src="${clientIconPath(iconId)}" alt="" />`
     : `<span class="swatch" style="background:${row.color}"></span>`;
   return `
     <div class="row">
@@ -1593,7 +1593,7 @@ function shareBarHtml(rows, { clientIcons = true } = {}) {
       <div class="row">
         <div class="row-main">
           ${clientIcons && (row.client || row.key)
-            ? `<img class="client-icon" src="${clientIconPath(row.client || row.key)}" alt="" onerror="this.style.display='none'" />`
+            ? `<img class="client-icon" src="${clientIconPath(row.client || row.key)}" alt="" />`
             : `<span class="swatch" style="background:${row.color}"></span>`}
           <div class="row-copy">
             <div class="row-name">${escapeHtml(row.name)}</div>
@@ -3628,6 +3628,17 @@ function bindEvents() {
     chartTip.classList.remove('hidden');
     placeChartTip(clientX, clientY);
   }
+
+  // A missing client icon must not leave a broken-image glyph in a row, and the
+  // old inline `onerror` could never do that under `script-src 'self'` — inline
+  // event handlers are blocked, so the attribute silently did nothing. `error`
+  // does not bubble, hence the capture phase on the rebuilt container.
+  els.content.addEventListener('error', (event) => {
+    const target = event.target;
+    if (target instanceof HTMLImageElement && target.classList.contains('client-icon')) {
+      target.classList.add('hidden');
+    }
+  }, true);
 
   els.content.addEventListener('pointerover', (event) => {
     const hit = event.target.closest('[data-tip]');
