@@ -3,6 +3,9 @@
 const zlib = require('node:zlib');
 const { MAX_JSON_BODY_BYTES } = require('./wireValidation');
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 15 * 1000;
+// One overall deadline for a request body. Chunked bodies have no declared
+// length, so without this a client can hold a socket with a slow trickle.
+const DEFAULT_JSON_BODY_TIMEOUT_MS = 15 * 1000;
 
 // Below this the framing overhead and the thread-pool handoff cost more than the
 // savings, and Node's own `res.write` already keeps small bodies in one packet.
@@ -327,32 +330,74 @@ function sendNotModifiedIfFresh(req, res, etag) {
   return true;
 }
 
-function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES) {
+function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES, timeoutMs = DEFAULT_JSON_BODY_TIMEOUT_MS) {
+  const bodyError = (code, message, statusCode, closeConnection = false) => Object.assign(
+    new Error(message),
+    { code, statusCode, closeConnection }
+  );
+  const declaredLength = req.headers?.['content-length'];
+  if (declaredLength !== undefined) {
+    const text = String(declaredLength).trim();
+    const bytes = /^\d+$/.test(text) ? Number(text) : NaN;
+    if (!Number.isSafeInteger(bytes)) {
+      return Promise.reject(bodyError('body_read_failed', 'Invalid Content-Length', 400, true));
+    }
+    // Reject before reading or buffering even the first chunk. The caller closes
+    // this connection rather than draining an arbitrary body to reuse the socket.
+    if (bytes > maxBytes) {
+      return Promise.reject(bodyError('payload_too_large', 'Request body too large', 413, true));
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let body = '';
     let bytes = 0;
-    let tooLarge = false;
-    req.setEncoding('utf8');
-    req.on('data', (chunk) => {
-      if (tooLarge) return;
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('aborted', onAborted);
+      req.off('error', onError);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // A late socket error must not become an uncaught EventEmitter error after
+      // the request has already been answered. The response closes this socket.
+      if (error.closeConnection) req.on('error', () => {});
+      reject(error);
+    };
+    const onData = (chunk) => {
+      if (settled) return;
       bytes += Buffer.byteLength(chunk, 'utf8');
       if (bytes > maxBytes) {
-        tooLarge = true;
         body = '';
-        const error = new Error('Request body too large');
-        error.code = 'payload_too_large';
-        reject(error);
+        fail(bodyError('payload_too_large', 'Request body too large', 413, true));
         return;
       }
       body += chunk;
-    });
-    req.on('end', () => {
-      if (tooLarge) return;
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (!body.trim()) return resolve({});
       try { resolve(JSON.parse(body)); }
-      catch (error) { reject(new Error(`Invalid JSON body: ${error.message}`)); }
-    });
-    req.on('error', reject);
+      catch (error) { reject(bodyError('invalid_json', `Invalid JSON body: ${error.message}`, 400)); }
+    };
+    const onAborted = () => fail(bodyError('body_read_failed', 'Request body was aborted', 400, true));
+    const onError = () => fail(bodyError('body_read_failed', 'Could not read request body', 400, true));
+    const timer = setTimeout(
+      () => fail(bodyError('body_timeout', 'Request body timed out', 408, true)),
+      timeoutMs
+    );
+    req.setEncoding('utf8');
+    req.on('data', onData);
+    req.once('end', onEnd);
+    req.once('aborted', onAborted);
+    req.once('error', onError);
   });
 }
 
@@ -362,6 +407,7 @@ module.exports = {
   responseTimingHeaders,
   COMPRESSION_MIN_BYTES,
   DEFAULT_HTTP_REQUEST_TIMEOUT_MS,
+  DEFAULT_JSON_BODY_TIMEOUT_MS,
   MAX_JSON_BODY_BYTES,
   corsHeaders,
   fetchBufferedWithTimeout,
