@@ -566,18 +566,24 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Generate ephemeral stack secrets
+        shell: bash
         run: |
-          node - <<'NODE' >> "$GITHUB_ENV"
+          # `::add-mask::` is a workflow command and must go to stdout; only
+          # NAME=value lines belong in $GITHUB_ENV (writing the mask into the
+          # env file fails the step with "Invalid format").
+          node - <<'NODE'
           const crypto = require('node:crypto');
-          const entries = [
+          const fs = require('node:fs');
+          const lines = [];
+          for (const [name, value] of [
             ['JIRAN_SECRET', crypto.randomBytes(32).toString('hex')],
             ['MYSQL_ROOT_PASSWORD', crypto.randomBytes(24).toString('hex')],
             ['MYSQL_PASSWORD', crypto.randomBytes(24).toString('hex')]
-          ];
-          for (const [name, value] of entries) {
+          ]) {
             console.log(`::add-mask::${value}`);
-            console.log(`${name}=${value}`);
+            lines.push(`${name}=${value}`);
           }
+          fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join('\n')}\n`);
           NODE
       - name: Start the stack from the release tag
         run: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
