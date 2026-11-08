@@ -81,9 +81,9 @@ function createRequestRouter(deps) {
   async function localRoute(path, method, options) {
     if ((path === '/stats' || path === '/stats/summary') && READ_METHODS.has(method)) return call(deps.getStats, options);
     if (/^\/devices\/[^/]+$/.test(path) && READ_METHODS.has(method) && deps.getDevice) {
-      return call(deps.getDevice, decodeURIComponent(path.slice('/devices/'.length)));
+      return call(deps.getDevice, decodeURIComponent(path.slice('/devices/'.length)), options);
     }
-    if (path === '/sessions' && READ_METHODS.has(method)) return call(deps.getSessions, options.query.get('period') || 'today');
+    if (path === '/sessions' && READ_METHODS.has(method)) return call(deps.getSessions, options.query.get('period') || 'today', options);
     if (path === '/history' && READ_METHODS.has(method)) return call(deps.getHistory, options);
     if (path === '/rates' && READ_METHODS.has(method)) return call(deps.getRates, options);
     if (path === '/capabilities' && READ_METHODS.has(method)) return call(deps.getCapabilities, options);
@@ -109,7 +109,7 @@ function createRequestRouter(deps) {
         error.code = 'invalid-range';
         throw error;
       }
-      const res = await call(deps.getCustomRange, rangeInput);
+      const res = await call(deps.getCustomRange, rangeInput, options);
       if (res && res.ok === false) {
         const error = new Error(res.message || res.error || 'Custom range request failed');
         error.code = res.error || 'range_failed';

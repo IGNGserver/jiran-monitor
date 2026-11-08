@@ -64,7 +64,12 @@ function prefsToSettingsPatch(patch = {}) {
 
 contextBridge.exposeInMainWorld('tokenMonitor', {
   // --- Shared-UI transport surface -----------------------------------------
-  request: (path, options) => ipcRenderer.invoke('transport:request', path, options),
+  request: (path, options = {}) => ipcRenderer.invoke('transport:request', path, {
+    method: options.method,
+    body: options.body,
+    requestId: options.requestId
+  }),
+  cancelRequest: (requestId) => ipcRenderer.send('transport:request:cancel', requestId),
   validateSecret: (secret) => ipcRenderer.invoke('hub:validate-secret', secret),
   connectHub: (secret) => ipcRenderer.invoke('hub:connect', secret),
   logoutHub: () => ipcRenderer.invoke('hub:logout'),

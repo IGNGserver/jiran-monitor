@@ -16,6 +16,8 @@
 // one-shot validation bridge below, but normal data requests cannot override the
 // main process's credential.
 
+let fallbackRequestId = 0;
+
 function createIpcTransport(bridge) {
   if (!bridge || typeof bridge.request !== 'function') {
     throw new Error('createIpcTransport requires the preload bridge');
@@ -25,6 +27,7 @@ function createIpcTransport(bridge) {
   // the shared UI expects (status/payload are read by the 401 and 409 paths).
   function toError(info) {
     const error = new Error(info?.message || 'Desktop request failed');
+    if (info?.name) error.name = info.name;
     if (info?.code) error.code = info.code;
     if (info?.status != null) error.status = info.status;
     if (info?.payload !== undefined) error.payload = info.payload;
@@ -32,13 +35,23 @@ function createIpcTransport(bridge) {
   }
 
   async function request(path, options = {}) {
-    const result = await bridge.request(path, {
-      method: options.method || 'GET',
-      body: options.body,
-      signal: options.signal
-    });
-    if (!result?.ok) throw toError(result?.error);
-    return result.data;
+    const signal = options.signal;
+    if (signal?.aborted) throw signal.reason || Object.assign(new Error('Desktop request cancelled'), { name: 'AbortError', code: 'aborted' });
+    const requestId = globalThis.crypto?.randomUUID?.()
+      || `desktop-${Date.now().toString(36)}-${++fallbackRequestId}`;
+    const onAbort = () => bridge.cancelRequest?.(requestId);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    try {
+      const result = await bridge.request(path, {
+        method: options.method || 'GET',
+        body: options.body,
+        requestId
+      });
+      if (!result?.ok) throw toError(result?.error);
+      return result.data;
+    } finally {
+      signal?.removeEventListener?.('abort', onAbort);
+    }
   }
 
   return {
