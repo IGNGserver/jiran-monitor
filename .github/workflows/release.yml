@@ -25,17 +25,17 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
       - name: Verify product scope and Node code
         run: npm run verify
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '17'
@@ -48,10 +48,10 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -73,7 +73,7 @@ jobs:
             echo "headless archive contains a GUI, Hub, or node_modules path" >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jiran-headless
           if-no-files-found: error
@@ -127,10 +127,10 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -273,7 +273,7 @@ jobs:
       - name: Upload unsigned Windows application
         if: steps.signpath.outputs.enabled == 'true'
         id: upload-unsigned-win-app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-windows-application
           if-no-files-found: error
@@ -337,7 +337,7 @@ jobs:
       - name: Upload unsigned Windows artifacts
         if: steps.signpath.outputs.enabled == 'true'
         id: upload-unsigned-win
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-windows-artifacts
           if-no-files-found: error
@@ -402,7 +402,7 @@ jobs:
           }
       - name: Verify updater artifact names
         run: npm run verify:release-artifact-names
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
           if-no-files-found: error
@@ -412,10 +412,10 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '17'
@@ -453,7 +453,7 @@ jobs:
             -PandroidKeyAlias="$ANDROID_KEY_ALIAS" \
             -PandroidKeyPassword="$ANDROID_KEY_PASSWORD"
           cp android/app/build/outputs/apk/release/app-release.apk "android/app/build/outputs/apk/release/Jiran-Android-${version}.apk"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jiran-android
           if-no-files-found: error
@@ -470,8 +470,9 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       release_type: ${{ steps.meta.outputs.release_type }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      revision: ${{ steps.meta.outputs.revision }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
 
@@ -493,6 +494,9 @@ jobs:
           legacy_image="ghcr.io/${owner}/token-monitor-hub"
           node scripts/verify-release-version.js --version "$version"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Name the commit actually checked out for this tag/ref rather than the
+          # workflow event's sha, so the OCI label describes the bytes built.
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           echo "release_type=${release_type}" >> "$GITHUB_OUTPUT"
           if [ "$release_type" = "release" ]; then
@@ -514,17 +518,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Resolved image=${image} version=${version}"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Hub image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
@@ -537,60 +541,117 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.url=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.revision }}
             org.opencontainers.image.licenses=MIT
 
       - name: Package compose deploy zip
         run: node scripts/package-hub-compose.js "${{ steps.meta.outputs.version }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jiran-hub-compose
           if-no-files-found: error
           path: dist-hub-compose/Jiran-Hub-Compose-*.zip
 
+  # A published release must not ship a Hub image that cannot start beside its own
+  # database. Everything below this line is only reachable after the unit suite;
+  # this job is the one place the Dockerfile, the entrypoint, the migration runner
+  # and the healthcheck actually run together.
+  compose-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
+      - name: Generate ephemeral stack secrets
+        run: |
+          node - <<'NODE' >> "$GITHUB_ENV"
+          const crypto = require('node:crypto');
+          const entries = [
+            ['JIRAN_SECRET', crypto.randomBytes(32).toString('hex')],
+            ['MYSQL_ROOT_PASSWORD', crypto.randomBytes(24).toString('hex')],
+            ['MYSQL_PASSWORD', crypto.randomBytes(24).toString('hex')]
+          ];
+          for (const [name, value] of entries) {
+            console.log(`::add-mask::${value}`);
+            console.log(`${name}=${value}`);
+          }
+          NODE
+      - name: Start the stack from the release tag
+        run: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+      - name: Wait for health and verify the auth boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          healthy=0
+          for _ in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17321/api/health || true)"
+            if [ "$code" = "200" ]; then healthy=1; break; fi
+            sleep 5
+          done
+          if [ "$healthy" -ne 1 ]; then
+            docker compose -f docker-compose.yml -f docker-compose.build.yml logs --tail 200
+            echo 'Hub never became healthy' >&2
+            exit 1
+          fi
+          anonymous="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17321/api/stats)"
+          if [ "$anonymous" != "401" ]; then
+            echo "anonymous /api/stats answered $anonymous, expected 401" >&2
+            exit 1
+          fi
+          authorized="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Jiran-Secret: $JIRAN_SECRET" http://127.0.0.1:17321/api/stats)"
+          if [ "$authorized" != "200" ]; then
+            echo "authenticated /api/stats answered $authorized, expected 200" >&2
+            exit 1
+          fi
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.build.yml down -v
+
   release:
-    needs: [build, android, headless, hub-image]
+    needs: [build, android, headless, hub-image, compose-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-windows
           path: artifacts
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-linux
           path: artifacts
       - name: Download Android artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-android
           path: artifacts
       - name: Download headless agent artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-headless
           path: artifacts
       - name: Download Hub artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-hub-compose
           path: artifacts
       - name: Download macOS arm64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-mac-arm64
           path: artifacts/jiran-mac-arm64
       - name: Download macOS x64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: jiran-mac-x64
           path: artifacts/jiran-mac-x64
@@ -628,7 +689,7 @@ jobs:
             --repository "${GITHUB_REPOSITORY_SLUG}" \
             --owner "${GITHUB_REPOSITORY_OWNER_NAME}" \
             --release-type "${RELEASE_TYPE}"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Jiran ${{ steps.ver.outputs.tag }}

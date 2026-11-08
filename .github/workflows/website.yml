@@ -31,19 +31,19 @@ jobs:
         working-directory: website
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # PRs build the pull-request head; pushes and repository_dispatch build main.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           package_json_file: website/package.json
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -59,19 +59,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SITE_URL: https://jiran.igng.net/
 
+      # The e2e suite now runs before every deploy, not only on a pull request:
+      # a push to main and a release-triggered deploy were the two paths that
+      # could ship a broken page without any browser ever loading it.
       - name: Cache Playwright browsers
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('website/pnpm-lock.yaml') }}
 
       - name: Install Chromium
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         run: pnpm exec playwright install --with-deps chromium
 
       - name: End-to-end tests
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         run: pnpm test
         env:
           ASTRO_TELEMETRY_DISABLED: '1'
@@ -89,7 +89,7 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: github.event_name != 'pull_request'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
