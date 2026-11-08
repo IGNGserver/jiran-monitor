@@ -66,3 +66,30 @@ test('fills gaps in a partially migrated profile without overwriting existing en
   assert.equal(fs.readFileSync(path.join(appData, 'Jiran', 'settings.json'), 'utf8'), '{"from":"legacy"}');
   assert.equal(fs.readFileSync(path.join(appData, 'Jiran', 'exchange-rates.json'), 'utf8'), '{"new":1}');
 });
+
+test('skips Chromium caches, session stores and stale singleton locks', (t) => {
+  const appData = tempAppData();
+  t.after(() => fs.rmSync(appData, { recursive: true, force: true }));
+  const legacy = path.join(appData, LEGACY_APP_NAME);
+  fs.mkdirSync(path.join(legacy, 'Cache'), { recursive: true });
+  fs.writeFileSync(path.join(legacy, 'Cache', 'data_0'), 'cache');
+  fs.mkdirSync(path.join(legacy, 'GPUCache'), { recursive: true });
+  fs.mkdirSync(path.join(legacy, 'Session Storage'), { recursive: true });
+  fs.writeFileSync(path.join(legacy, 'Session Storage', 'LOG'), 'session');
+  fs.writeFileSync(path.join(legacy, 'SingletonLock'), 'host-1234');
+  fs.writeFileSync(path.join(legacy, 'settings.json'), '{"theme":"dark"}');
+  fs.writeFileSync(path.join(legacy, 'exchange-rates.json'), '{"usd":7}');
+  fs.mkdirSync(path.join(legacy, 'managed-codex-homes', 'home-1'), { recursive: true });
+  fs.writeFileSync(path.join(legacy, 'managed-codex-homes', 'home-1', 'auth.json'), '{"token":"x"}');
+
+  const result = migrateLegacyUserData({ appDataDir: appData });
+  assert.equal(result.migrated, true);
+  assert.deepEqual([...result.skipped].sort(), ['Cache', 'GPUCache', 'Session Storage', 'SingletonLock']);
+  assert.deepEqual(result.copied.sort(), ['exchange-rates.json', 'managed-codex-homes', 'settings.json']);
+  // App-owned profile data still arrives; the disposable entries do not.
+  assert.ok(fs.existsSync(path.join(appData, 'Jiran', 'managed-codex-homes', 'home-1', 'auth.json')));
+  assert.equal(fs.existsSync(path.join(appData, 'Jiran', 'Cache')), false);
+  assert.equal(fs.existsSync(path.join(appData, 'Jiran', 'SingletonLock')), false);
+  // The legacy folder is untouched, cache included.
+  assert.ok(fs.existsSync(path.join(legacy, 'Cache', 'data_0')));
+});

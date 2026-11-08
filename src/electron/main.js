@@ -32,6 +32,7 @@ const {
 const { collectCustomRangeOnce, lookupModelPricing } = require('../shared/collector');
 const { createDeviceRuntime } = require('../shared/deviceRuntime');
 const { createRequestRouter } = require('./desktopRequestRouter');
+const { createRequestRegistry } = require('./requestRegistry');
 const {
   normalizeInitialRendererViewState,
   initialRendererViewStateQuery
@@ -177,6 +178,7 @@ const CSP_HEADER = [
 const HUB_MODE_VALUES = new Set(['local', 'client']);
 const LANGUAGE_VALUES = new Set(['auto', ...SUPPORTED_LOCALES]);
 const HUB_REQUEST_TIMEOUT_MS = 15 * 1000;
+const COLLECTOR_SCAN_TIMEOUT_MS = 180 * 1000;
 // Deliberate: the desktop app reaches the Hub and the rate source with the plain
 // runtime fetch, i.e. it does NOT follow HTTP(S)_PROXY. The operator decision was
 // that a workstation's proxy must not silently become the sync path; only the
@@ -209,7 +211,12 @@ app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId('com.igng.tokenmonitor');
 // 计然 / Jiran rename: Electron derives userData from app.getName(), so the profile must be
 // carried over from the legacy `Token Monitor` folder before anything reads it.
-migrateLegacyUserData({ appDataDir: app.getPath('appData'), appName: APP_NAME });
+const userDataMigration = migrateLegacyUserData({ appDataDir: app.getPath('appData'), appName: APP_NAME });
+if (userDataMigration.migrated && userDataMigration.skipped?.length) {
+  // Chromium caches and stale singleton locks are intentionally not carried over;
+  // say so once so a large legacy profile does not look half-migrated.
+  console.log(`[userdata] migrated profile from ${userDataMigration.source}; skipped ${userDataMigration.skipped.length} disposable entries`);
+}
 // Same directory-name change applies to the shared runtime state (device identity,
 // archives, tokscale cache): merge the legacy folder forward before any read/write.
 migrateLegacySharedData();
@@ -3225,7 +3232,8 @@ async function getDashboardHistory(options = {}) {
   if (deviceId) historyUrl.searchParams.set('deviceId', deviceId);
   try {
     const response = await fetchBufferedWithTimeout(fetch, historyUrl, {
-      headers: secret ? { authorization: `Bearer ${secret}` } : {}
+      headers: secret ? { authorization: `Bearer ${secret}` } : {},
+      signal: options.signal
     }, HUB_REQUEST_TIMEOUT_MS);
     if (!response.ok) {
       const error = new Error('Hub history request failed');
@@ -3469,22 +3477,23 @@ async function logoutHub() {
 // Serves the shared UI's `/api/*` calls from this device. Local data comes from
 // the running collector/runtime; Hub-owned resources are proxied with the
 // process-held secret so the renderer never sees a credential.
+const transportRequests = createRequestRegistry();
 const desktopRouter = createRequestRouter({
   getSettings: () => settingsForRenderer(),
   getStats: (options) => fetchStats(options),
-  getDevice: async (deviceId) => {
-    if (settings?.hubMode === 'client') return requestHubRoute(`/api/devices/${encodeURIComponent(deviceId)}`);
-    const stats = await fetchStats();
+  getDevice: async (deviceId, requestOptions = {}) => {
+    if (settings?.hubMode === 'client') return requestHubRoute(`/api/devices/${encodeURIComponent(deviceId)}`, { signal: requestOptions.signal });
+    const stats = await fetchStats(requestOptions);
     return { device: stats.devices?.find((device) => device.deviceId === deviceId) };
   },
-  getSessions: async (period) => {
-    if (settings?.hubMode === 'client') return requestHubRoute(`/api/sessions?period=${encodeURIComponent(period)}`);
-    const stats = await fetchStats();
+  getSessions: async (period, requestOptions = {}) => {
+    if (settings?.hubMode === 'client') return requestHubRoute(`/api/sessions?period=${encodeURIComponent(period)}`, { signal: requestOptions.signal });
+    const stats = await fetchStats(requestOptions);
     const sessions = Object.values(stats.periods?.[period]?.sessions || {});
     return { total: sessions.length, shown: sessions.length, sessions };
   },
   getHistory: (options) => getDashboardHistory(options),
-  getCustomRange: (options) => fetchCustomRangeStats(options?.body || options),
+  getCustomRange: (rangeInput, requestOptions = {}) => fetchCustomRangeStats(rangeInput, requestOptions),
   getSessionDetail: (args) => fetchSessionDetail(args),
   getCapabilities: () => localCapabilitiesForRenderer(),
   getHealth: () => {
@@ -3520,7 +3529,7 @@ function rebuildWindow() {
   });
 }
 
-async function fetchCustomRangeStats(rangeInput) {
+async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
     if (settings.hubMode === 'client' && latestHubStats?.capabilities?.usageRange === false) {
       return {
         ok: false,
@@ -3555,8 +3564,16 @@ async function fetchCustomRangeStats(rangeInput) {
       // is a full tokscale load plus parsing, which must not run on this thread.
       const rangeRunner = collectorRuntimeDeps().createUsageRuntime ? collectorProcess : null;
       const result = rangeRunner
-        ? await rangeRunner.run('collectCustomRangeOnce', [rangeArgs])
-        : await collectCustomRangeOnce(rangeArgs);
+        ? await rangeRunner.run('collectCustomRangeOnce', [rangeArgs], {
+          signal: requestOptions.signal,
+          timeoutMs: COLLECTOR_SCAN_TIMEOUT_MS
+        })
+        : await collectCustomRangeOnce({
+          ...rangeArgs,
+          signal: requestOptions.signal,
+          scanTimeoutMs: COLLECTOR_SCAN_TIMEOUT_MS,
+          coalesceKey: `collectCustomRangeOnce:${JSON.stringify(rangeArgs)}`
+        });
       return { ok: true, ...result };
     };
 
@@ -3608,7 +3625,10 @@ async function fetchCustomRangeStats(rangeInput) {
           endHour: String(range.endHour)
         });
         const url = `${hubUrl.replace(/\/$/, '')}/api/usage/range?${params}`;
-        const response = await fetchBufferedWithTimeout(fetch, url, { headers: secret ? { authorization: `Bearer ${secret}` } : {} }, HUB_REQUEST_TIMEOUT_MS);
+        const response = await fetchBufferedWithTimeout(fetch, url, {
+          headers: secret ? { authorization: `Bearer ${secret}` } : {},
+          signal: requestOptions.signal
+        }, HUB_REQUEST_TIMEOUT_MS);
         if (!response.ok) {
           const error = new Error('Hub usage-range request failed');
           error.status = response.status;
@@ -3665,6 +3685,7 @@ async function fetchCustomRangeStats(rangeInput) {
           };
         }
       } catch (error) {
+        if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || error;
         hubError = error;
         updateSyncHealth('rest', {
           state: 'error',
@@ -3683,6 +3704,7 @@ async function fetchCustomRangeStats(rangeInput) {
           };
         }
       } catch (localError) {
+        if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || localError;
         if (hubError) {
           return {
             ok: false,
@@ -3709,6 +3731,7 @@ async function fetchCustomRangeStats(rangeInput) {
     try {
       return await collectLocalCustomRange();
     } catch (error) {
+      if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || error;
       return {
         ok: false,
         error: error?.code || 'collect-failed',
@@ -4020,20 +4043,32 @@ app.whenReady().then(() => {
   // and the transport policy, and the same view code runs against local data or
   // a remote Hub without knowing which. Errors are flattened to a plain object
   // because Error instances do not survive structured clone intact.
-  ipcMain.handle('transport:request', async (_event, path, options = {}) => {
+  ipcMain.on('transport:request:cancel', (event, requestId) => {
+    transportRequests.cancel(requestId, event.sender.id);
+  });
+  ipcMain.handle('transport:request', async (event, path, options = {}) => {
+    let registration = null;
+    let onDestroyed = null;
     try {
-      const data = await desktopRouter.route(path, options);
+      registration = transportRequests.begin(options.requestId, event.sender.id);
+      onDestroyed = () => registration.cancel();
+      event.sender.once('destroyed', onDestroyed);
+      const data = await desktopRouter.route(path, { ...options, signal: registration.signal });
       return { ok: true, data };
     } catch (error) {
       return {
         ok: false,
         error: {
           message: error?.message || String(error),
+          name: error?.name || 'Error',
           code: error?.code || null,
           status: Number.isInteger(Number(error?.status)) ? Number(error.status) : null,
           payload: error?.payload ?? null
         }
       };
+    } finally {
+      if (onDestroyed) event.sender.removeListener('destroyed', onDestroyed);
+      registration?.finish();
     }
   });
   ipcMain.handle('hub:validate-secret', async (_event, secret) => {
