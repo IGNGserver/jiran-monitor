@@ -202,6 +202,41 @@ test('a stats frame forwards only its snapshot to onHealth', () => {
   assert.deepEqual(health, [{ snapshot: { source: 'local' } }]);
 });
 
+test('AbortSignal stays in the renderer and cancellation uses an opaque request id', async () => {
+  let finish;
+  const cancelled = [];
+  const b = bridge({
+    request: (path, options) => new Promise((resolve) => {
+      b.calls.push({ path, options });
+      finish = () => resolve({ ok: false, error: { name: 'AbortError', code: 'aborted', message: 'cancelled' } });
+    }),
+    cancelRequest: (id) => { cancelled.push(id); finish(); }
+  });
+  const transport = createIpcTransport(b);
+  const controller = new AbortController();
+  const pending = transport.request('/api/usage/range?from=x', { signal: controller.signal });
+  await new Promise(setImmediate);
+  const wire = b.calls.find((call) => call.path.startsWith('/api/usage/range'));
+  assert.equal(typeof wire.options.requestId, 'string');
+  assert.equal('signal' in wire.options, false);
+  assert.doesNotThrow(() => structuredClone(wire.options));
+  controller.abort();
+  await assert.rejects(pending, (error) => error.name === 'AbortError' && error.code === 'aborted');
+  assert.deepEqual(cancelled, [wire.options.requestId]);
+});
+
+test('an already-aborted request never crosses the preload bridge', async () => {
+  const b = bridge();
+  const transport = createIpcTransport(b);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    transport.request('/api/stats', { signal: controller.signal }),
+    (error) => error.name === 'AbortError'
+  );
+  assert.equal(b.calls.length, 0);
+});
+
 test('routing is hash-based because file:// has no SPA fallback', () => {
   const transport = createIpcTransport(bridge());
   assert.equal(transport.capabilities.routing, 'hash');

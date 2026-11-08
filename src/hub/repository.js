@@ -679,6 +679,20 @@ function createRepository(pool) {
     return getHubAccountCredential(accountId, executor);
   }
 
+  async function rotateHubAccountCredential(accountId, expectedEnvelope, nextEnvelope, executor = pool) {
+    // Re-encryption is a compare-and-swap: a late rotation must never replace a
+    // credential the owner edited after this envelope was read.
+    const [result] = await executor.execute(`UPDATE hub_account_credentials
+      SET credential_envelope = ?, updated_at = ?
+      WHERE account_id = ? AND credential_envelope = CAST(? AS JSON)`, [
+      json(nextEnvelope),
+      new Date(),
+      String(accountId || ''),
+      json(expectedEnvelope)
+    ]);
+    return Number(result.affectedRows || 0) > 0;
+  }
+
   async function getHubAccountSnapshot(accountId, executor = pool) {
     const [rows] = await executor.execute(
       'SELECT provider_snapshot, last_good_snapshot, updated_at FROM hub_account_limits WHERE account_id = ?',
@@ -1337,6 +1351,7 @@ function createRepository(pool) {
     replaceHubAccountCredential,
     replaceSessions,
     revokeAllHubSessions,
+    rotateHubAccountCredential,
     revokeHubSession,
     saveHubAccountSnapshot,
     saveDevice,

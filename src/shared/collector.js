@@ -16,6 +16,7 @@ const {
 } = require('./fleetTimeZone');
 const { ensureTokscaleBucketTimeZone, tokscaleSettingsPath } = require('./tokscaleSettings');
 const { appVersion } = require('./appVersion');
+const { abortError, collectorScanQueue } = require('./serialScanQueue');
 const { normalizeClientsCsv } = require('./clientTracking');
 const { tokscalePackageNamesForPlatform, tokscalePlatformKey } = require('./tokscalePlatform');
 const { customPricingPath, tokscaleCacheDirs, tokscaleClientCacheDir } = require('./tokscaleConfig');
@@ -255,7 +256,7 @@ function abandonChildStreams(child) {
   try { child?.unref?.(); } catch (_) { /* ignore */ }
 }
 
-function spawnTokscaleJson(userArgs, commandTimeoutMs) {
+function spawnTokscaleJson(userArgs, commandTimeoutMs, options = {}) {
   const { bin, prefixArgs, env } = tokscaleCommand();
   return new Promise((resolve, reject) => {
     const child = spawn(bin, [...prefixArgs, ...userArgs], { env, windowsHide: true });
@@ -266,14 +267,22 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
     const stdoutChunks = [];
     const stderrChunks = [];
     let settled = false;
-    const timeout = setTimeout(() => {
+    const signal = options.signal || null;
+    const clearAbort = () => signal?.removeEventListener('abort', onAbort);
+    const abandon = (error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
+      clearAbort();
       terminateChild(child);
       abandonChildStreams(child);
       stdoutChunks.length = 0;
       stderrChunks.length = 0;
-      reject(new Error(`tokscale timed out after ${commandTimeoutMs}ms`));
+      reject(error);
+    };
+    const onAbort = () => abandon(signal?.reason || abortError('tokscale cancelled'));
+    const timeout = setTimeout(() => {
+      abandon(new Error(`tokscale timed out after ${commandTimeoutMs}ms`));
     }, commandTimeoutMs);
     child.stdout.on('data', (chunk) => { if (!settled) stdoutChunks.push(chunk); });
     child.stderr.on('data', (chunk) => { if (!settled) stderrChunks.push(chunk); });
@@ -281,10 +290,12 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearAbort();
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
+      clearAbort();
       if (settled) return;
       settled = true;
       const stdout = Buffer.concat(stdoutChunks).toString('utf8');
@@ -294,6 +305,10 @@ function spawnTokscaleJson(userArgs, commandTimeoutMs) {
       if (code !== 0) return reject(new Error(`tokscale exited with code ${code}: ${stderr.trim() || stdout.trim()}`));
       try { resolve(parseJsonOutput(stdout)); } catch (error) { reject(error); }
     });
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    }
   });
 }
 
@@ -343,8 +358,12 @@ function tokscaleClientFilter(clients) {
   return ordered.join(',');
 }
 
-function runTokscale({ clients, flags, commandTimeoutMs }) {
-  return spawnTokscaleJson(['--json', '--client', tokscaleClientFilter(clients), '--group-by', 'client,session,model', ...flags], commandTimeoutMs);
+function runTokscale({ clients, flags, commandTimeoutMs, signal }) {
+  return spawnTokscaleJson(
+    ['--json', '--client', tokscaleClientFilter(clients), '--group-by', 'client,session,model', ...flags],
+    commandTimeoutMs,
+    { signal }
+  );
 }
 
 function runTokscaleGraph({ clients, commandTimeoutMs }) {
@@ -3531,6 +3550,7 @@ function startCollector(options) {
   const qoderSourceKey = qoderSourceFingerprintForClients(normalizedClients, {
     ...qoderSourceOptions
   });
+  const scanQueue = options.scanQueue || collectorScanQueue;
   let tickInFlight = false;
   let tickPending = false;
   let pendingForceHistory = false;
@@ -3726,7 +3746,11 @@ function startCollector(options) {
     }, historyRetryMs);
   }
 
-  async function performTick(reason, tickOptions = {}) {
+  function performTick(reason, tickOptions = {}) {
+    return scanQueue.run(() => performTickWork(reason, tickOptions));
+  }
+
+  async function performTickWork(reason, tickOptions = {}) {
     const tickStartedAt = Date.now();
     const collectedAt = collectionDate(options.now);
     const tickTimeZone = resolveTickTimeZone(options);
@@ -4467,7 +4491,16 @@ function rangeEndAsNow(options, range) {
   return Number.isFinite(endMs) && endMs > 0 ? new Date(endMs) : new Date();
 }
 
-async function collectCustomRangeOnce(options = {}) {
+function collectCustomRangeOnce(options = {}) {
+  const scanQueue = options.scanQueue || collectorScanQueue;
+  return scanQueue.run(() => collectCustomRangeOnceWork(options), {
+    signal: options.signal,
+    coalesceKey: options.coalesceKey,
+    timeoutMs: options.scanTimeoutMs
+  });
+}
+
+async function collectCustomRangeOnceWork(options = {}) {
   const range = normalizeCustomRange(options.range || options);
   if (!range.ok) {
     const error = new Error(`Invalid custom range: ${range.error}`);
@@ -4487,7 +4520,7 @@ async function collectCustomRangeOnce(options = {}) {
 
   if (tokscaleClients) {
     const flags = ['--since', range.since, '--until', range.until];
-    const json = await runTokscaleFn({ clients: tokscaleClients, flags, commandTimeoutMs });
+    const json = await runTokscaleFn({ clients: tokscaleClients, flags, commandTimeoutMs, signal: options.signal });
     period = extractUsageFromTokscale(json);
   }
 

@@ -1,15 +1,13 @@
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
 const {
   defaultDeviceId,
   loadDotEnv,
   normalizeHubUrl,
   parseArgs,
-  parseBoolean,
-  pidFilePath
+  parseBoolean
 } = require('../shared/config');
+const { claimAgentPidFile } = require('../shared/agentPidFile');
 const { appVersion } = require('../shared/appVersion');
 const { migrateLegacySharedData } = require('../shared/sharedDataMigration');
 const { usageConfigFromSource } = require('../shared/collectorConfig');
@@ -24,6 +22,7 @@ const { withSyncUploadMetadata } = require('../shared/syncUploadSink');
 const { requireSafeHubTransport } = require('../shared/hubTransport');
 const { learnFleetTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
 const { runAgent, runAgentOnce } = require('./runtime');
+const { createAgentShutdown } = require('./processLifecycle');
 
 loadDotEnv();
 // Merge the pre-rename `<appData>/Token Monitor` shared directory forward before
@@ -146,19 +145,19 @@ async function deliver(summary, context = {}) {
   console.log(`[${new Date().toISOString()}] posted ${summary.deviceId}: today=${summary.today.totalTokens} month=${summary.month.totalTokens} allTime=${summary.allTime.totalTokens}`);
 }
 
-function registerPidFile(stopRuntime) {
-  const pidPath = pidFilePath();
-  fs.mkdirSync(path.dirname(pidPath), { recursive: true });
-  fs.writeFileSync(pidPath, String(process.pid), 'utf8');
-  const cleanup = () => { try { fs.unlinkSync(pidPath); } catch (_) {} };
-  process.on('exit', cleanup);
+function registerPidFile(getRuntime) {
+  const owner = claimAgentPidFile();
+  const shutdown = createAgentShutdown({
+    getRuntime,
+    release: owner.release,
+    timeoutMs: Math.max(1000, Number(usageOptions.uploadTimeoutMs) + 1000 || 16_000),
+    logger: console
+  });
+  process.on('exit', owner.release);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    process.on(sig, () => {
-      try { stopRuntime?.(); } catch (_) {}
-      cleanup();
-      process.exit(0);
-    });
+    process.on(sig, () => { void shutdown(sig); });
   }
+  return owner;
 }
 
 async function main() {
@@ -169,7 +168,7 @@ async function main() {
   // Claim archive ownership before either a one-shot or long-running scan so
   // Electron can yield before its history read-modify-write reaches disk.
   let runtimeHandle = null;
-  if (!dryRun) registerPidFile(() => runtimeHandle?.stop());
+  if (!dryRun) registerPidFile(() => runtimeHandle);
   const runtimeOptions = {
     envelope: { deviceId, agentVersion: appVersion(), agentRuntime: 'headless-agent' },
     usageOptions,

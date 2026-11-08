@@ -21,6 +21,19 @@ test('带哈希的构建产物永久缓存', () => {
   expect(rule('/_astro/*')).toContain('Cache-Control: public, max-age=31536000, immutable');
 });
 
+test('所有页面都下发不改变行为的安全头', () => {
+  const glob = rule('/*');
+  for (const header of [
+    'X-Content-Type-Options: nosniff',
+    'Referrer-Policy: strict-origin-when-cross-origin',
+    'X-Frame-Options: DENY',
+    'Cross-Origin-Opener-Policy: same-origin',
+  ]) {
+    expect(glob).toContain(header);
+  }
+  expect(glob.some((line) => line.startsWith('Permissions-Policy:') && line.includes('camera=()'))).toBe(true);
+});
+
 for (const [path, file] of [['/', 'dist/index.html'], ['/en/', 'dist/en/index.html']]) {
   test(`${path} 的预加载都有对应的 Link 头（103 Early Hints）`, () => {
     const hrefs = [...readFileSync(file, 'utf8').matchAll(/<link rel="preload" href="([^"]+)"/g)].map((m) => m[1]);

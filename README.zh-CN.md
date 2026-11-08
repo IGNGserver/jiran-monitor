@@ -133,9 +133,10 @@ docker compose up -d
 curl http://127.0.0.1:17321/api/health
 ```
 
-网页仪表板由 Hub 自己在同一端口提供（`http://<server>:17321`），可以安装为 PWA。镜像是
-`ghcr.io/igngserver/jiran-hub`，生产环境请用 `JIRAN_VERSION` 固定版本。完整说明：
-[docs/hub-compose.md](docs/hub-compose.md)。
+网页仪表板由 Hub 自己在同一端口提供，可以安装为 PWA。默认仅绑定本机回环地址
+（`http://127.0.0.1:17321`）；其他机器连接前，请按完整指南配置反向代理/TLS，或显式启用可信
+LAN 模式。镜像是 `ghcr.io/igngserver/jiran-hub`，生产环境请用 `JIRAN_VERSION` 固定版本。
+完整说明：[docs/hub-compose.md](docs/hub-compose.md)。
 
 然后在每台机器上：
 

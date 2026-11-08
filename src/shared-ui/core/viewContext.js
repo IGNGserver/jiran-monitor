@@ -106,7 +106,7 @@ export function persistPrefs(patch) {
  * exactly one site for it.
  */
 export function toolIconHtml(id) {
-  return `<img class="client-icon" src="${clientIconPath(id)}" alt="" onerror="this.style.display='none'" />`;
+  return `<img class="client-icon" src="${clientIconPath(id)}" alt="" />`;
 }
 
 /** Navigate to another view, optionally with a sub-tab. */

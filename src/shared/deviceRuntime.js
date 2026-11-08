@@ -11,6 +11,7 @@ function createDeviceRuntime(options = {}, deps = {}) {
   const makeUsageRuntime = deps.createUsageRuntime || createUsageRuntime;
   const sink = options.sink || null;
   let active = true;
+  let shutdownPromise = null;
 
   function forwardDiagnosticEvent(event) {
     if (!active) return;
@@ -74,12 +75,28 @@ function createDeviceRuntime(options = {}, deps = {}) {
   }
   const usageRuntime = makeUsageRuntime(usageOptions, deps.usageDeps || {});
 
-  function stop(options = {}) {
+  function stopCollection(options = {}) {
     if (!active) return;
     active = false;
     deviceState.stop();
     usageRuntime?.stop?.(options);
+  }
+
+  function stop(options = {}) {
+    stopCollection(options);
     sink?.stop?.();
+  }
+
+  // Graceful process shutdown has two distinct phases: stop producing records,
+  // then drain the latest upload before closing its scheduler. The ordinary
+  // stop() path remains immediate for mode switches and once-run cleanup.
+  function shutdown() {
+    if (shutdownPromise) return shutdownPromise;
+    stopCollection();
+    shutdownPromise = Promise.resolve()
+      .then(() => sink?.flush?.())
+      .finally(() => { sink?.stop?.(); });
+    return shutdownPromise;
   }
 
   return {
@@ -93,6 +110,7 @@ function createDeviceRuntime(options = {}, deps = {}) {
     reconfigureLimits: () => null,
     refreshClient: (clientId, refreshOptions) => active ? usageRuntime.refreshClient(clientId, refreshOptions) : Promise.resolve(false),
     refreshLimits: async () => false,
+    shutdown,
     stop,
     tick: (reason, tickOptions) => active ? usageRuntime.tick(reason, tickOptions) : Promise.resolve(false)
   };

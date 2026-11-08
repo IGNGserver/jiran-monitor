@@ -3,7 +3,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { decryptCredential, encryptCredential } = require('../../src/hub/accountCrypto');
+const {
+  credentialNeedsReencryption,
+  decryptCredential,
+  encryptCredential,
+  previousCredentialKeysFromEnv
+} = require('../../src/hub/accountCrypto');
 const { createHubAccountService, providerOptions } = require('../../src/hub/accountService');
 const { MemoryRepository } = require('./memory-repository');
 
@@ -23,6 +28,69 @@ test('Hub credential envelopes round-trip and reject a different key', () => {
   assert.notEqual(envelope.ciphertext, 'keep-this-on-hub');
   assert.deepEqual(decryptCredential(envelope, 'hub-key'), { apiKey: 'keep-this-on-hub' });
   assert.throws(() => decryptCredential(envelope, 'wrong-key'));
+});
+
+test('Hub credential keyring reads a previous version and writes only the current key', () => {
+  const credential = { apiKey: 'rotate-without-relogin' };
+  const oldEnvelope = encryptCredential(credential, 'old-hub-key');
+  assert.throws(() => decryptCredential(oldEnvelope, 'new-hub-key'), (error) => (
+    error.code === 'credential_key_version_unavailable'
+  ));
+  assert.equal(credentialNeedsReencryption(oldEnvelope, 'new-hub-key'), true);
+  assert.deepEqual(decryptCredential(oldEnvelope, 'new-hub-key', ['old-hub-key']), credential);
+
+  const rotated = encryptCredential(credential, 'new-hub-key');
+  assert.equal(credentialNeedsReencryption(rotated, 'new-hub-key'), false);
+  assert.deepEqual(decryptCredential(rotated, 'new-hub-key', ['old-hub-key']), credential);
+
+  // Very early envelopes without a version still fail closed on GCM, trying the
+  // explicitly configured keyring rather than accepting unauthenticated data.
+  const unversioned = { ...oldEnvelope };
+  delete unversioned.keyVersion;
+  assert.deepEqual(decryptCredential(unversioned, 'new-hub-key', ['old-hub-key']), credential);
+
+  assert.deepEqual(previousCredentialKeysFromEnv({
+    JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS: '["new-name"]',
+    TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS: '["legacy-wins"]'
+  }), ['legacy-wins']);
+  assert.throws(() => previousCredentialKeysFromEnv({
+    JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS: 'old-key,older-key'
+  }), /JSON array/);
+});
+
+test('Hub account metadata reads lazily rotate a previous-key envelope with compare-and-swap', async () => {
+  const repository = new MemoryRepository();
+  const credential = { apiKey: 'still-secret' };
+  const oldEnvelope = encryptCredential(credential, 'old-hub-key');
+  await repository.createHubAccount({
+    id: 'rotation-account',
+    provider: 'deepseek',
+    name: 'rotation',
+    enabled: true,
+    status: 'pending',
+    createdAt: '2026-09-11T00:00:00.000Z',
+    updatedAt: '2026-09-11T00:00:00.000Z'
+  }, oldEnvelope, null);
+  const service = createHubAccountService({
+    store: repository,
+    credentialKey: 'new-hub-key',
+    previousCredentialKeys: ['old-hub-key'],
+    probe: async (provider) => probeRow(provider)
+  });
+
+  const listed = await service.listAccounts({ includeCredentialMetadata: true });
+  assert.equal(listed[0].credentialConfigured, true);
+  const rotated = await repository.getHubAccountCredential('rotation-account');
+  assert.equal(credentialNeedsReencryption(rotated, 'new-hub-key'), false);
+  assert.deepEqual(decryptCredential(rotated, 'new-hub-key'), credential);
+
+  const beforeLostRace = await repository.getHubAccountCredential('rotation-account');
+  assert.equal(await repository.rotateHubAccountCredential(
+    'rotation-account',
+    oldEnvelope,
+    encryptCredential({ apiKey: 'stale-write' }, 'new-hub-key')
+  ), false);
+  assert.deepEqual(await repository.getHubAccountCredential('rotation-account'), beforeLostRace);
 });
 
 test('Hub account service validates, encrypts, and exposes only manual account metadata', async () => {

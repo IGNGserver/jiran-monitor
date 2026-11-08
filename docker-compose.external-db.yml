@@ -20,9 +20,11 @@ services:
     restart: unless-stopped
     environment:
       TOKEN_MONITOR_PORT: 17321
+      # The container must listen on all interfaces for its published port to
+      # work; JIRAN_BIND_HOST on the publish line decides real exposure.
       TOKEN_MONITOR_HOST: 0.0.0.0
       TOKEN_MONITOR_SECRET: ${TOKEN_MONITOR_SECRET:-${JIRAN_SECRET:-}}
-      TOKEN_MONITOR_ALLOW_INSECURE_HTTP: ${TOKEN_MONITOR_ALLOW_INSECURE_HTTP:-${JIRAN_ALLOW_INSECURE_HTTP:-0}}
+      TOKEN_MONITOR_ALLOW_INSECURE_HTTP: '1'
       TOKEN_MONITOR_STALE_AFTER_MS: ${TOKEN_MONITOR_STALE_AFTER_MS:-${JIRAN_STALE_AFTER_MS:-600000}}
       TOKEN_MONITOR_FLEET_TIMEZONE: ${TOKEN_MONITOR_FLEET_TIMEZONE:-${JIRAN_FLEET_TIMEZONE:-}}
       TOKEN_MONITOR_TRUST_PROXY: ${TOKEN_MONITOR_TRUST_PROXY:-${JIRAN_TRUST_PROXY:-0}}
@@ -32,7 +34,8 @@ services:
       TOKEN_MONITOR_HUB_STATS_TTL_MS: ${TOKEN_MONITOR_HUB_STATS_TTL_MS:-${JIRAN_HUB_STATS_TTL_MS:-1000}}
       TOKEN_MONITOR_UPDATE_GITHUB_TOKEN: ${TOKEN_MONITOR_UPDATE_GITHUB_TOKEN:-${JIRAN_UPDATE_GITHUB_TOKEN:-}}
       TOKEN_MONITOR_UPDATE_CACHE_MS: ${TOKEN_MONITOR_UPDATE_CACHE_MS:-${JIRAN_UPDATE_CACHE_MS:-600000}}
-      TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-}
+      TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-${JIRAN_HUB_CREDENTIAL_KEY:-}}
+      TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS: ${TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS:-${JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS:-}}
       TOKEN_MONITOR_SESSION_IDLE_DAYS: ${TOKEN_MONITOR_SESSION_IDLE_DAYS:-${JIRAN_SESSION_IDLE_DAYS:-0}}
       AGY_OAUTH_CLIENT_SECRET: ${AGY_OAUTH_CLIENT_SECRET:-}
       # Required: mysql://user:password@host:3306/database
@@ -56,7 +59,19 @@ services:
     # volumes:
     #   - ./certs:/certs:ro
     ports:
-      - "${TOKEN_MONITOR_PORT:-${JIRAN_PORT:-17321}}:17321"
+      # Loopback by default; JIRAN_BIND_HOST=0.0.0.0 is the explicit remote
+      # (direct TLS or opted-in trusted LAN/VPN) profile.
+      - "${JIRAN_BIND_HOST:-127.0.0.1}:${TOKEN_MONITOR_PORT:-${JIRAN_PORT:-17321}}:17321"
+    # Same runtime shape as the bundled-database file: no capabilities, no
+    # writable root filesystem, no setuid escalation. `/tmp` stays writable for
+    # provider probes; mounted TLS/CA material must be readable by uid 1000.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test:
         - CMD-SHELL

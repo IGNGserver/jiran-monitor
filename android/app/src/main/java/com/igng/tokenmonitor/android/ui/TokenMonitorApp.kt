@@ -548,8 +548,8 @@ private fun AppNavHost(
         onRenameDevice = hubViewModel::renameDevice,
         onDeleteDevice = hubViewModel::deleteDevice,
         detail = hubState.deviceDetails[id],
-        detailLoading = hubState.deviceDetailLoading,
-        detailError = hubState.deviceDetailError,
+        detailLoading = hubState.deviceDetailLoading && hubState.deviceDetailStatusId == id,
+        detailError = hubState.deviceDetailError.takeIf { hubState.deviceDetailStatusId == id },
         detailSupported = hubState.authorization?.capabilities?.deviceDetail == true,
         onRetryDetail = { hubViewModel.refreshDeviceDetail(id) }
       )

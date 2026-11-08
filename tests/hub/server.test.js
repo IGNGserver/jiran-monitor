@@ -96,6 +96,24 @@ test('a non-loopback HTTP hub requires an explicit insecure transport opt-in', (
   assert.equal(allowed.bindHost, '0.0.0.0');
 });
 
+test('loopback HTTP with authentication needs no insecure transport exception', async () => {
+  const hub = createHub({
+    port: 0,
+    host: '127.0.0.1',
+    adminSecret: 'admin',
+    repository: new MemoryRepository(),
+    logger: { error() {}, warn() {} }
+  });
+  await hub.start();
+  try {
+    assert.equal(hub.server.address().address, '127.0.0.1');
+    const response = await fetch(`http://127.0.0.1:${hub.server.address().port}/api/health`);
+    assert.equal(response.status, 200);
+  } finally {
+    await hub.stop();
+  }
+});
+
 test('health keeps the documented API version', async () => {
   const { hub } = createMemoryHub();
   await hub.start();
@@ -490,6 +508,37 @@ test('oversized ingest returns 413 without storing the device', async () => {
       body: JSON.stringify({ deviceId: 'oversized', padding: 'x'.repeat(1024 * 1024) })
     });
     assert.equal(response.status, 413);
+    assert.equal(response.headers.get('connection'), 'close');
+    assert.equal((await response.json()).error, 'payload_too_large');
+    assert.equal(hub.server.headersTimeout, 15_000);
+    assert.equal(hub.server.requestTimeout, 30_000);
+    assert.equal((await hub.getStats()).devices.length, 0);
+  } finally {
+    await hub.stop();
+  }
+});
+
+test('chunked ingest overflow returns 413 and closes instead of draining unbounded input', async () => {
+  const { hub } = createMemoryHub();
+  await hub.start();
+  try {
+    const { port } = hub.server.address();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.enqueue(new Uint8Array(1024));
+        controller.close();
+      }
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/api/ingest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+      duplex: 'half'
+    });
+    assert.equal(response.status, 413);
+    assert.equal(response.headers.get('connection'), 'close');
+    assert.equal((await response.json()).error, 'payload_too_large');
     assert.equal((await hub.getStats()).devices.length, 0);
   } finally {
     await hub.stop();

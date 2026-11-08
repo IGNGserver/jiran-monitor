@@ -85,8 +85,12 @@ There is no automatic secret migration: every account must be logged in again
 manually in the Hub after upgrading. In the single-key deployment, configure
 only `JIRAN_SECRET`; the Hub uses it for authentication and derives the
 account-encryption key from it. `JIRAN_HUB_CREDENTIAL_KEY` remains an
-optional legacy override. Changing the effective encryption key requires
-re-adding the affected accounts.
+optional override. To rotate the effective key without re-adding accounts, set
+`JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS` to a JSON array containing the old key
+material (the old `JIRAN_SECRET` value when it supplied the default), then change
+the current secret/override and restart. Envelopes select their recorded key
+version; successful metadata reads and refreshes lazily re-encrypt with the
+current key. Verify every account before removing the previous-key array.
 
 Authentication uses revocable per-device sessions. The browser dashboard keeps
 an `HttpOnly` cookie; the desktop and Android clients store a `jrs_` token in
@@ -116,7 +120,8 @@ JIRAN_SECRET=                # the single Hub key; use the same value on every d
 JIRAN_DEVICE_ID=             # optional — defaults to the hostname
 JIRAN_LIMITS_ENABLED=        # legacy compatibility; device quota probing is removed
 JIRAN_LIMIT_PROVIDERS=       # legacy compatibility; Hub accounts select providers
-JIRAN_HUB_CREDENTIAL_KEY=    # optional legacy account-encryption override; normally leave empty
+JIRAN_HUB_CREDENTIAL_KEY=    # optional current account-encryption override; normally leave empty
+JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS=[] # JSON array retained temporarily during key rotation
 JIRAN_SESSION_IDLE_DAYS=0    # 0 = never expire; >0 = sliding idle expiry in days
 JIRAN_QODER_TRANSCRIPTS_DIR=    # optional direct override for the international Qoder JSONL transcripts
 JIRAN_QODER_MAIN_DB_PATH=       # optional direct override for the international Qoder main.sqlite store

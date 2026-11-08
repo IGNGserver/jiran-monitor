@@ -58,16 +58,84 @@ function globalFetch() {
   throw new Error('global fetch is not available');
 }
 
-// Reuse one env-aware agent per proxy configuration so TLS sockets can be
-// pooled across collector ticks.
-const agentCache = new Map();
+// Keep one live configuration and at most one gracefully draining predecessor.
+// Arbitrary proxy env objects (including per-tenant embedders) must not grow a
+// process-global Map forever. Per-call lookup below also revives an existing
+// fetch closure after its former dispatcher was evicted and closed.
+let currentAgent = null;
+let drainingAgent = null;
+const DEFAULT_AGENT_DRAIN_MS = 5_000;
+
+function ignoreLifecycleError() {}
+
+function destroyAgent(agent) {
+  try {
+    const result = agent?.destroy?.();
+    if (result && typeof result.then === 'function') result.catch(ignoreLifecycleError);
+  } catch (_) {
+    // Shutdown is best-effort; never mask the original request/result.
+  }
+}
+
+function drainAgent(agent, timeoutMs = DEFAULT_AGENT_DRAIN_MS) {
+  let finish;
+  const done = new Promise((resolve) => { finish = resolve; });
+  let timer = null;
+  const complete = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    finish();
+  };
+  const record = {
+    agent,
+    done,
+    destroy() {
+      destroyAgent(agent);
+      complete();
+    }
+  };
+  const delay = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) >= 0
+    ? Number(timeoutMs)
+    : DEFAULT_AGENT_DRAIN_MS;
+  // Ref'd on purpose: `resetOutboundFetchCache` awaits `done`, and an unref'd
+  // deadline can leave the event loop (and that await) with nothing to fire.
+  timer = setTimeout(record.destroy, delay);
+  try {
+    if (typeof agent?.close !== 'function') {
+      record.destroy();
+    } else {
+      Promise.resolve(agent.close()).then(complete, () => {
+        destroyAgent(agent);
+        complete();
+      });
+    }
+  } catch (_) {
+    record.destroy();
+  }
+  return record;
+}
+
+function retireAgent(record, timeoutMs) {
+  if (!record?.agent) return;
+  // A second configuration change must not leave an unbounded chain of close
+  // promises. The oldest dispatcher is destroyed; the newest may still drain.
+  if (drainingAgent) drainingAgent.destroy();
+  drainingAgent = drainAgent(record.agent, timeoutMs);
+  const retained = drainingAgent;
+  retained.done.then(() => {
+    if (drainingAgent === retained) drainingAgent = null;
+  });
+}
 
 function getProxyAgent(proxyConfig, EnvHttpProxyAgentCtor) {
   const key = JSON.stringify(proxyConfig);
-  const hit = agentCache.get(key);
-  if (hit && hit.Ctor === EnvHttpProxyAgentCtor) return hit.agent;
+  if (currentAgent && currentAgent.key === key && currentAgent.Ctor === EnvHttpProxyAgentCtor) {
+    return currentAgent.agent;
+  }
   const agent = new EnvHttpProxyAgentCtor(proxyConfig);
-  agentCache.set(key, { Ctor: EnvHttpProxyAgentCtor, agent });
+  const previous = currentAgent;
+  currentAgent = { key, Ctor: EnvHttpProxyAgentCtor, agent };
+  retireAgent(previous);
   return agent;
 }
 
@@ -91,11 +159,14 @@ function createOutboundFetch(env = process.env, deps = {}) {
   // A configured-but-invalid proxy must fail closed. Silently falling back to
   // a direct request would violate operator intent and obscure configuration
   // errors on networks where direct access is forbidden.
-  const agent = getProxyAgent(proxyConfig, EnvHttpProxyAgentCtor);
+  // Construct once eagerly so invalid configuration still throws at setup.
+  getProxyAgent(proxyConfig, EnvHttpProxyAgentCtor);
 
   return (input, init = {}) => {
     const options = init && typeof init === 'object' ? { ...init } : {};
-    if (options.dispatcher == null) options.dispatcher = agent;
+    if (options.dispatcher == null) {
+      options.dispatcher = getProxyAgent(proxyConfig, EnvHttpProxyAgentCtor);
+    }
     // undici prefers Uint8Array bodies over Node Buffer views in some paths.
     if (Buffer.isBuffer(options.body)) {
       options.body = new Uint8Array(options.body.buffer, options.body.byteOffset, options.body.byteLength);
@@ -104,9 +175,27 @@ function createOutboundFetch(env = process.env, deps = {}) {
   };
 }
 
-/** Clear cached ProxyAgents (tests / hot env proxy changes). */
-function resetOutboundFetchCache() {
-  agentCache.clear();
+/**
+ * Close the cached dispatchers with a bounded graceful-drain window. Existing
+ * fetch closures resolve a fresh agent on their next call, so shutdown/tests do
+ * not leave them permanently attached to a closed dispatcher.
+ */
+async function resetOutboundFetchCache({ drainTimeoutMs = DEFAULT_AGENT_DRAIN_MS } = {}) {
+  const numericTimeout = Number(drainTimeoutMs);
+  const timeoutMs = Number.isFinite(numericTimeout) && numericTimeout >= 0
+    ? numericTimeout
+    : DEFAULT_AGENT_DRAIN_MS;
+  const previous = currentAgent;
+  currentAgent = null;
+  retireAgent(previous, timeoutMs);
+  const draining = drainingAgent;
+  if (draining) {
+    // Apply the caller's shutdown deadline to an already-draining predecessor
+    // as well; awaiting close() itself could otherwise wait forever.
+    const timer = setTimeout(draining.destroy, timeoutMs);
+    await draining.done;
+    clearTimeout(timer);
+  }
 }
 
 module.exports = {

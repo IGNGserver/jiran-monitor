@@ -184,7 +184,9 @@ test('every archived notes file is a valid single-version block', () => {
 
 test('every listed download is uploaded by the release job', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
-  const uploadBlock = workflow.split('uses: softprops/action-gh-release@v2')[1];
+  // The Action reference is pinned to a commit SHA (with a `# v2` comment), so match
+  // the repository name rather than the mutable tag.
+  const uploadBlock = workflow.split(/uses: softprops\/action-gh-release@[0-9a-f]{40}/)[1];
   assert.ok(uploadBlock, 'the release job must publish the release');
   const globs = uploadBlock
     .split('\n')

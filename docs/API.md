@@ -27,7 +27,7 @@ The owner key is no longer stored on clients by current builds. After the first 
 - `DELETE /api/auth/session` signs out the current device; `DELETE /api/auth/sessions/:id` revokes one device; `POST /api/auth/logout-all` revokes every session, including the caller's.
 - Session tokens are stored hashed in `hub_sessions`; a database dump cannot be replayed. Revoking one device does not affect the others.
 - **Sessions do not expire by default.** This preserves unlimited retention for active use on every platform. The browser's persistent cookie is renewed on each visit and the browser itself caps its lifetime at 400 days. Set `JIRAN_SESSION_IDLE_DAYS` to a positive number to add a sliding idle expiry (an actively used device keeps extending it); `0` (the default) means never.
-- Changing `JIRAN_SECRET` changes the session fingerprint, so every old session becomes invalid. It also changes the default account-credential encryption key; set `JIRAN_HUB_CREDENTIAL_KEY` to the previous effective key before rotating if the stored provider accounts must remain readable.
+- Changing `JIRAN_SECRET` changes the session fingerprint, so every old session becomes invalid. It also changes the default account-credential encryption key. Before rotating, set `JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS` to a JSON array containing the old effective key material (the old `JIRAN_SECRET` value when it supplied the default). The Hub decrypts by the envelope's `keyVersion` and lazily re-encrypts on successful metadata reads/refreshes; remove the previous-key array only after every account is readable with the new current key.
 
 Use either:
 

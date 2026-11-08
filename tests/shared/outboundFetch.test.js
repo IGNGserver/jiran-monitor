@@ -18,8 +18,13 @@ const {
   cleanProxyUrl,
   resolveProxyConfig,
   resolveProxyUrl,
-  createOutboundFetch
+  createOutboundFetch,
+  resetOutboundFetchCache
 } = require('../../src/shared/outboundFetch');
+
+test.afterEach(async () => {
+  await resetOutboundFetchCache({ drainTimeoutMs: 0 });
+});
 
 test('cleanProxyUrl trims and strips matching quotes', () => {
   assert.equal(cleanProxyUrl('  http://127.0.0.1:7897  '), 'http://127.0.0.1:7897');
@@ -126,4 +131,77 @@ test('createOutboundFetch deps.fetch override wins over proxy wiring', async () 
   const res = await fetchFn('https://example.test/');
   assert.equal(hits, 1);
   assert.equal(res.status, 204);
+});
+
+test('proxy dispatcher cache stays single-current and revives an evicted fetch closure', async () => {
+  const agents = [];
+  const dispatchers = [];
+  class FakeAgent {
+    constructor(options) {
+      this.options = options;
+      this.closed = false;
+      agents.push(this);
+    }
+    close() {
+      this.closed = true;
+      return new Promise((resolve) => { this.resolveClose = resolve; });
+    }
+    destroy() {
+      this.destroyed = true;
+      this.resolveClose?.();
+      return Promise.resolve();
+    }
+  }
+  const undiciFetch = async (url, init) => {
+    dispatchers.push(init.dispatcher);
+    return { ok: true };
+  };
+  const fetchA = createOutboundFetch(
+    { HTTPS_PROXY: 'http://proxy-a.test:8080' },
+    { EnvHttpProxyAgent: FakeAgent, undiciFetch }
+  );
+  await fetchA('https://example.test/a1');
+  await fetchA('https://example.test/a2');
+  assert.equal(agents.length, 1);
+  const firstA = dispatchers[0];
+  assert.equal(dispatchers[1], firstA);
+
+  const fetchB = createOutboundFetch(
+    { HTTPS_PROXY: 'http://proxy-b.test:8080' },
+    { EnvHttpProxyAgent: FakeAgent, undiciFetch }
+  );
+  await fetchB('https://example.test/b');
+  assert.equal(firstA.closed, true);
+
+  // The A closure must not keep handing its closed dispatcher to undici.
+  await fetchA('https://example.test/a3');
+  const revivedA = dispatchers.at(-1);
+  assert.notEqual(revivedA, firstA);
+  assert.equal(revivedA.closed, false);
+  assert.equal(revivedA.options.httpsProxy, 'http://proxy-a.test:8080');
+  assert.equal(dispatchers[2].closed, true);
+});
+
+test('proxy dispatcher shutdown drains gracefully but destroys at the deadline', async () => {
+  let agent;
+  class StuckAgent {
+    constructor() { agent = this; }
+    close() {
+      this.closeCalled = true;
+      return new Promise(() => {});
+    }
+    destroy() {
+      this.destroyCalled = true;
+      return Promise.resolve();
+    }
+  }
+  createOutboundFetch(
+    { HTTPS_PROXY: 'http://stuck-proxy.test:8080' },
+    { EnvHttpProxyAgent: StuckAgent, undiciFetch: async () => ({ ok: true }) }
+  );
+  const started = Date.now();
+  await resetOutboundFetchCache({ drainTimeoutMs: 20 });
+  assert.equal(agent.closeCalled, true);
+  assert.equal(agent.destroyCalled, true);
+  assert.ok(Date.now() - started < 500, 'shutdown must not await an uncooperative close forever');
 });

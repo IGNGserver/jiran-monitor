@@ -42,7 +42,7 @@ const { createCatalogPricingLookup, pricingNotFound } = require('./pricing-upstr
 const { calculateUsageEventDeltas, summarizeSessions, usageCandidates } = require('./usage-events');
 const { createHubAccountService } = require('./accountService');
 const { createOAuthSessionManager } = require('./oauthService');
-const { createOutboundFetch } = require('../shared/outboundFetch');
+const { createOutboundFetch, resetOutboundFetchCache } = require('../shared/outboundFetch');
 const { createDisplayRatesCache } = require('./displayRates');
 const { UpdateCheckError, createUpdateService } = require('./updates');
 const { createFleetReadModel } = require('./fleetReadModel');
@@ -52,6 +52,10 @@ const { createUsageAnalyticsService, analyticsCsv } = require('./usage-analytics
 const { querySessions } = require('./session-query');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+// Node's defaults let a client hold a socket for minutes. JSON bodies have their
+// own 15 s read deadline; these ceilings cover every other request state.
+const HUB_HEADERS_TIMEOUT_MS = 15_000;
+const HUB_REQUEST_TIMEOUT_MS = 30_000;
 const PRICE_FIELDS = [
   'inputPricePerMillion',
   'outputPricePerMillion',
@@ -89,6 +93,16 @@ function errorMessageForApi(error) {
   return String(error?.message || 'request failed')
     .slice(0, 512)
     .replace(/cookie|token|secret|api[_ -]?key|authorization/gi, '[redacted]');
+}
+
+function sendRequestBodyError(res, error) {
+  if (!Number.isInteger(error?.statusCode) || !error?.code) return null;
+  const headers = error.closeConnection ? { connection: 'close' } : {};
+  if (error.closeConnection) res.shouldKeepAlive = false;
+  return sendJson(res, error.statusCode, {
+    error: error.code,
+    message: errorMessageForApi(error)
+  }, headers);
 }
 
 // Without a secret the hub cannot tell its own widget from any other caller, so it
@@ -1805,7 +1819,8 @@ function createHub({
       try {
         body = await readJsonBody(req);
       } catch (error) {
-        return sendJson(res, 400, { error: error.code || 'invalid_request', message: error.message });
+        return sendRequestBodyError(res, error)
+          || sendJson(res, 400, { error: error.code || 'invalid_request', message: error.message });
       }
       const candidate = String(body?.secret || '').trim();
       if (!candidate || !secretMatches(candidate, ownerSecret)) {
@@ -2052,6 +2067,8 @@ function createHub({
         audit(owner.principal, 'subscriptions.replace');
         return sendJson(res, 200, { ok: true, ...stored });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         if (error.code === 'stale_write') return sendJson(res, 409, { error: 'stale_write', ...error.current });
         if (error.code === 'bad_subscriptions') return sendJson(res, 400, { error: 'bad_request', message: error.message });
         if (error.code === 'payload_too_large') {
@@ -2124,6 +2141,8 @@ function createHub({
         await recordAccountAudit(owner.principal, 'account.add', account.id, { provider: account.provider });
         return sendJson(res, 201, { ok: true, account });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         return sendJson(res, accountErrorStatus(error), {
           error: error.code || 'account_add_failed',
           message: errorMessageForApi(error)
@@ -2140,6 +2159,8 @@ function createHub({
         await recordAccountAudit(owner.principal, 'account.refresh_all', '', { refreshed: refreshed.length });
         return sendJson(res, 200, { ok: true, refreshed: refreshed.length });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         return sendJson(res, accountErrorStatus(error), {
           error: error.code || 'account_refresh_all_failed',
           message: errorMessageForApi(error)
@@ -2157,7 +2178,8 @@ function createHub({
         const session = oauthManager.startSession(provider);
         return sendJson(res, 200, { ok: true, ...session });
       } catch (error) {
-        return sendJson(res, 400, { error: error.code || 'oauth_start_failed', message: error.message });
+        return sendRequestBodyError(res, error)
+          || sendJson(res, 400, { error: error.code || 'oauth_start_failed', message: error.message });
       }
     }
 
@@ -2200,6 +2222,8 @@ function createHub({
         await recordAccountAudit(owner.principal, 'account.add_oauth', account.id, { provider: account.provider });
         return sendJson(res, 201, { ok: true, account });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         return sendJson(res, accountErrorStatus(error), {
           error: error.code || 'oauth_exchange_failed',
           message: errorMessageForApi(error)
@@ -2233,6 +2257,8 @@ function createHub({
             .find((item) => item.id === accountId) || null;
           return sendJson(res, 200, { ok: true, account });
         } catch (error) {
+          const bodyError = sendRequestBodyError(res, error);
+          if (bodyError) return bodyError;
           return sendJson(res, accountErrorStatus(error), {
             error: error.code || 'account_credential_clear_failed',
             message: errorMessageForApi(error)
@@ -2249,6 +2275,8 @@ function createHub({
           await recordAccountAudit(owner.principal, 'account.refresh', accountId);
           return sendJson(res, 200, { ok: true, account: (await accountService.listAccounts()).find((item) => item.id === accountId) || null });
         } catch (error) {
+          const bodyError = sendRequestBodyError(res, error);
+          if (bodyError) return bodyError;
           return sendJson(res, accountErrorStatus(error), {
             error: error.code || 'account_refresh_failed',
             message: errorMessageForApi(error)
@@ -2275,6 +2303,8 @@ function createHub({
           });
           return sendJson(res, 200, { ok: true, account });
         } catch (error) {
+          const bodyError = sendRequestBodyError(res, error);
+          if (bodyError) return bodyError;
           return sendJson(res, accountErrorStatus(error), {
             error: error.code || 'account_update_failed',
             message: errorMessageForApi(error)
@@ -2291,6 +2321,8 @@ function createHub({
           await recordAccountAudit(owner.principal, 'account.delete', accountId);
           return sendJson(res, 200, { ok: true, accountId });
         } catch (error) {
+          const bodyError = sendRequestBodyError(res, error);
+          if (bodyError) return bodyError;
           return sendJson(res, accountErrorStatus(error), {
             error: error.code || 'account_delete_failed',
             message: errorMessageForApi(error)
@@ -2373,6 +2405,8 @@ function createHub({
         if (minimalResponse) return sendJson(res, 200, { ok: true, deviceId: result.deviceId, ...fleetField });
         return sendJson(res, 200, { ok: true, deviceId: result.record.deviceId, stats: result.stats, ...fleetField });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         if (error.message === 'deviceId_required') return sendJson(res, 400, { error: 'deviceId_required' });
         if (error.code === 'field_too_long' || error.code === 'too_many_entries' || error.code === 'invalid_payload') {
           return sendJson(res, 400, {
@@ -2401,7 +2435,8 @@ function createHub({
         audit(owner.principal, 'pricing.replace', model);
         return sendJson(res, 200, { ok: true, pricing });
       } catch (error) {
-        return sendJson(res, 400, { error: error.code || 'bad_request', message: error.message });
+        return sendRequestBodyError(res, error)
+          || sendJson(res, 400, { error: error.code || 'bad_request', message: error.message });
       }
     }
 
@@ -2446,6 +2481,8 @@ function createHub({
         audit(owner.principal, 'device.rename', `${previousDeviceId}->${nextDeviceId}`);
         return sendJson(res, 200, { ok: true, ...result });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         if (error.code === 'field_too_long') {
           return sendJson(res, 400, { error: error.code, message: error.message, field: error.field, maxLength: error.maxLength });
         }
@@ -2472,6 +2509,8 @@ function createHub({
         }
         return sendJson(res, 200, { ok: true, sourceDeviceId, targetDeviceId });
       } catch (error) {
+        const bodyError = sendRequestBodyError(res, error);
+        if (bodyError) return bodyError;
         if (error.code === 'device_id_required') return sendJson(res, 400, { error: 'device_id_required' });
         if (error.code === 'target_device_id_required') return sendJson(res, 400, { error: 'target_device_id_required' });
         if (error.code === 'same_device') return sendJson(res, 400, { error: 'same_device' });
@@ -2513,6 +2552,11 @@ function createHub({
   const server = tlsOptions
     ? https.createServer(tlsOptions, requestListener)
     : http.createServer(requestListener);
+  // Bound clients before they finish headers or a body instead of inheriting
+  // Node's multi-minute defaults. JSON bodies also have a 15 s read deadline;
+  // this outer ceiling covers routes and protocol states outside that reader.
+  server.headersTimeout = HUB_HEADERS_TIMEOUT_MS;
+  server.requestTimeout = HUB_REQUEST_TIMEOUT_MS;
 
   async function start() {
     // Fail before opening the listening socket when migrations have not run or
@@ -2553,6 +2597,9 @@ function createHub({
     await publisher.close();
     jsonResponses.clear();
     await accountService?.stop();
+    // Proxy dispatchers may outlive individual responses. Drain them briefly,
+    // then destroy an uncooperative agent instead of hanging process shutdown.
+    await resetOutboundFetchCache({ drainTimeoutMs: 1000 });
     for (const res of [...sseClients]) dropSseClient(res);
     sseClients.clear();
     for (const heartbeat of sseHeartbeats.values()) clearInterval(heartbeat);

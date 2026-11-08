@@ -1,7 +1,13 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { encryptCredential, decryptCredential } = require('./accountCrypto');
+const {
+  createCredentialKeyring,
+  credentialNeedsReencryption,
+  decryptCredential,
+  encryptCredential,
+  previousCredentialKeysFromEnv
+} = require('./accountCrypto');
 const { LIMIT_PROVIDER_IDS } = require('../shared/limitProviders');
 const { normalizeLimitProvider, normalizeLimitsSummary } = require('../shared/limits');
 const { HUB_MANUAL_PROVIDER_IDS } = require('../shared/limitProviderSources');
@@ -465,11 +471,15 @@ function createHubAccountService({
   onUpdate = null,
   now = Date.now,
   probeDeadlineMs = DEFAULT_PROBE_DEADLINE_MS,
-  refreshCeilingOverride = null
+  refreshCeilingOverride = null,
+  previousCredentialKeys = previousCredentialKeysFromEnv(process.env)
 } = {}) {
   if (!store || typeof store.listHubAccounts !== 'function') {
     throw new TypeError('Hub account repository methods are required');
   }
+  // Validate the complete rotation keyring at startup. Decryption selects the
+  // recorded keyVersion; all new writes use only the current key.
+  createCredentialKeyring(credentialKey, previousCredentialKeys);
   const intervalMs = Number.isFinite(Number(refreshMs)) && Number(refreshMs) > 0
     ? Number(refreshMs)
     : DEFAULT_REFRESH_MS;
@@ -682,7 +692,16 @@ function createHubAccountService({
       if (includeCredentialMetadata) {
         try {
           const envelope = await store.getHubAccountCredential(account.id);
-          const decrypted = decryptCredential(envelope, credentialKey);
+          const decrypted = decryptCredential(envelope, credentialKey, previousCredentialKeys);
+          if (credentialNeedsReencryption(envelope, credentialKey)
+            && typeof store.rotateHubAccountCredential === 'function') {
+            // Conditional rotation never overwrites a concurrent credential edit.
+            await store.rotateHubAccountCredential(
+              account.id,
+              envelope,
+              encryptCredential(decrypted, credentialKey)
+            );
+          }
           metadata = credentialMetadata(decrypted);
           credentialConfigured = credentialIsConfigured(decrypted);
         } catch (error) {
@@ -885,7 +904,7 @@ function createHubAccountService({
     if (!owned) return null;
     try {
       const credentialEnvelope = await store.getHubAccountCredential(account.id);
-      const credential = decryptCredential(credentialEnvelope, credentialKey);
+      const credential = decryptCredential(credentialEnvelope, credentialKey, previousCredentialKeys);
       if (!credentialIsConfigured(credential)) throw schedulingError('notConfigured');
       const probed = await probeAccount(account, credential);
       const row = probed.row;
@@ -893,7 +912,8 @@ function createHubAccountService({
       const committed = await runTransaction(async (executor) => {
         const owner = await refreshOwner(account, executor);
         if (!owner) return { stale: true };
-        if (JSON.stringify(storedCredential) !== JSON.stringify(credential)) {
+        if (JSON.stringify(storedCredential) !== JSON.stringify(credential)
+          || credentialNeedsReencryption(credentialEnvelope, credentialKey)) {
           await store.replaceHubAccountCredential(account.id, encryptCredential(storedCredential, credentialKey), executor);
         }
         await store.updateHubAccount(account.id, {
@@ -1102,7 +1122,7 @@ function createHubAccountService({
       let existingCredential = {};
       if (patch.credentialMode !== 'replace') {
         const envelope = await store.getHubAccountCredential(id);
-        existingCredential = decryptCredential(envelope, credentialKey) || {};
+        existingCredential = decryptCredential(envelope, credentialKey, previousCredentialKeys) || {};
       }
       const credential = patch.credentialMode === 'replace'
         ? incomingCredential

@@ -111,6 +111,7 @@ const NODE_RUNTIME_SOURCE_FILES = Object.freeze([
   'src/shared/reasonixSessions.js',
   'src/shared/sakanaLimits.js',
   'src/shared/selfSyncThrottle.js',
+  'src/shared/serialScanQueue.js',
   'src/shared/sessionFiles.js',
   'src/shared/sessionUsageArchive.js',
   'src/shared/tokscaleConfig.js',

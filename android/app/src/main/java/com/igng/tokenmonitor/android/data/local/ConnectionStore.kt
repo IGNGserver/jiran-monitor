@@ -26,6 +26,16 @@ interface ConnectionStorage {
   fun clear()
 }
 
+/**
+ * Hub connection state, kept in [EncryptedSharedPreferences].
+ *
+ * `androidx.security:security-crypto` is deprecated upstream but still the only
+ * shipped implementation with a Keystore-backed, key-rotating-free data store we
+ * can read a live file from; replacing it is an ordered migration, not a swap.
+ * `docs/design/android-credentials.md` records why, and the steps (read the legacy
+ * file once, write and verify the replacement, then drop the dependency) that must
+ * happen before this class changes shape.
+ */
 @Singleton
 class ConnectionStore @Inject constructor(@ApplicationContext context: Context) : ConnectionStorage {
   // Keystore setup and the encrypted preferences file can block on cold launch.

@@ -20,7 +20,80 @@ docker compose ps
 curl http://127.0.0.1:17321/api/health
 ```
 
-Open `http://<server>:17321` for the web dashboard (same port as the API).
+Open `http://127.0.0.1:17321` on the Hub host. The default configuration binds both the Hub and the published Docker port to loopback, so it neither exposes plaintext HTTP nor needs the insecure-transport override.
+
+## Choose a remote-access transport
+
+Remote clients need one of the following explicit profiles. Run `docker compose up -d` again after changing `.env` or an override file. Existing remote deployments that previously relied on the old all-interface default must set `JIRAN_BIND_HOST=0.0.0.0` when recreating the container.
+
+`JIRAN_BIND_HOST` is the address Docker **publishes** on, and that is the exposure boundary: it defaults to `127.0.0.1`. Inside the container the Hub always listens on `0.0.0.0`, because Docker forwards the published port to the container address — a loopback listener there would be unreachable. The `insecure_hub_transport` guard still applies when the Hub binary is run directly, but a Compose deployment sets the container-internal plaintext flag itself.
+
+### Same-host HTTPS reverse proxy (recommended)
+
+Keep `JIRAN_BIND_HOST=127.0.0.1`. Terminate public HTTPS in a reverse proxy on the same host and proxy to `http://127.0.0.1:17321`; clients use only `https://hub.example.com`. A minimal nginx location is:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:17321;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Required for the Hub's SSE stream.
+    proxy_buffering off;
+}
+```
+
+Set `JIRAN_TRUST_PROXY=1` only when this trusted proxy is the only route to the Hub and overwrites forwarded headers. Do not expose the loopback port through another firewall publish rule.
+
+### Direct Hub TLS
+
+Generate or install a certificate valid for the Hub hostname, then create `docker-compose.override.yml` beside the base file:
+
+```yaml
+services:
+  hub:
+    volumes:
+      - ./certs:/certs:ro
+```
+
+Set the following in `.env` and recreate the container:
+
+```dotenv
+JIRAN_BIND_HOST=0.0.0.0
+TOKEN_MONITOR_TLS_CERT=/certs/hub.crt
+TOKEN_MONITOR_TLS_KEY=/certs/hub.key
+```
+
+Clients use `https://hub.example.com:17321`. Restrict the published port with the host firewall to the networks that need it. The external-database Compose file uses the same bind and TLS variables and accepts the same override.
+
+### Trusted LAN/VPN plaintext HTTP (explicit exception)
+
+Use this only on an access-controlled trusted LAN or VPN, never on a public interface. Publishing beyond loopback is the explicit decision for a Compose deployment; keep the host firewall rule in front of the port:
+
+```dotenv
+JIRAN_BIND_HOST=0.0.0.0
+```
+
+Clients use `http://<server>:17321`. Running the Hub binary directly instead of Compose additionally needs `JIRAN_ALLOW_INSECURE_HTTP=1`, or startup fails with `insecure_hub_transport`; Compose sets the container-internal equivalent itself. Restrict the port to trusted source addresses at the host/network firewall. This is a transport exception, not an authentication bypass: `JIRAN_SECRET` remains required for a non-loopback Hub. Prefer HTTPS whenever clients include mobile devices or the network is not fully controlled by you.
+
+## Container runtime
+
+The Hub image runs as the unprivileged `node` user (uid 1000) and binds an unprivileged port, so both Compose files start it with `cap_drop: ALL`, `read_only: true`, a `/tmp` tmpfs and `no-new-privileges`. The process writes nothing else: configuration, accounts and credentials live in MySQL, and the web bundle is read-only.
+
+Two consequences for operator-supplied files:
+
+- Mounted TLS material must be readable by uid 1000 — `chmod 644` for certificates and `640` with the group owner set to 1000 for private keys. A `600 root:root` key fails startup with a read error rather than silently serving plaintext.
+- A provider probe may stage a temporary directory under `/tmp`, which the tmpfs provides. Do not remove the tmpfs entry; if a future integration needs a durable writable path, mount it explicitly instead of making the root filesystem writable.
+
+If a local override genuinely requires writes (for example a custom image that persists files under `/app`), override the hardening for that service alone rather than dropping it from the base files:
+
+```yaml
+services:
+  hub:
+    read_only: false
+    tmpfs: []
+```
 
 ## Versions
 

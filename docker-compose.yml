@@ -28,9 +28,16 @@ services:
         condition: service_healthy
     environment:
       TOKEN_MONITOR_PORT: 17321
+      # Inside the container the Hub must listen on all interfaces: Docker's
+      # published port is DNAT'd to the container address, so a loopback-only
+      # listener is unreachable. Exposure is decided by the host publish address
+      # below (JIRAN_BIND_HOST, loopback by default), not by this value.
       TOKEN_MONITOR_HOST: 0.0.0.0
       TOKEN_MONITOR_SECRET: ${TOKEN_MONITOR_SECRET:-${JIRAN_SECRET:-}}
-      TOKEN_MONITOR_ALLOW_INSECURE_HTTP: ${TOKEN_MONITOR_ALLOW_INSECURE_HTTP:-${JIRAN_ALLOW_INSECURE_HTTP:-0}}
+      # The container-internal hop is plaintext unless TLS paths are mounted. The
+      # `insecure_hub_transport` guard protects direct runs of the Hub binary;
+      # Compose deployments are bounded by the publish address and the firewall.
+      TOKEN_MONITOR_ALLOW_INSECURE_HTTP: '1'
       TOKEN_MONITOR_STALE_AFTER_MS: ${TOKEN_MONITOR_STALE_AFTER_MS:-${JIRAN_STALE_AFTER_MS:-600000}}
       # The one calendar every syncing device buckets its today/month windows
       # into (IANA name, e.g. Asia/Shanghai). Unset keeps each device on its own
@@ -56,9 +63,10 @@ services:
       # token is optional and never leaves the Hub.
       TOKEN_MONITOR_UPDATE_GITHUB_TOKEN: ${TOKEN_MONITOR_UPDATE_GITHUB_TOKEN:-${JIRAN_UPDATE_GITHUB_TOKEN:-}}
       TOKEN_MONITOR_UPDATE_CACHE_MS: ${TOKEN_MONITOR_UPDATE_CACHE_MS:-${JIRAN_UPDATE_CACHE_MS:-600000}}
-      # Legacy credential-encryption override and the Google OAuth client secret
-      # used by the Antigravity account adapter.
-      TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-}
+      # Current and previous credential-encryption keys support zero-downtime
+      # rotation. The previous-key value is a JSON array of key material strings.
+      TOKEN_MONITOR_HUB_CREDENTIAL_KEY: ${TOKEN_MONITOR_HUB_CREDENTIAL_KEY:-${JIRAN_HUB_CREDENTIAL_KEY:-}}
+      TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS: ${TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS:-${JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS:-}}
       # 0 keeps device sessions until revoked; >0 adds a sliding idle expiry.
       TOKEN_MONITOR_SESSION_IDLE_DAYS: ${TOKEN_MONITOR_SESSION_IDLE_DAYS:-${JIRAN_SESSION_IDLE_DAYS:-0}}
       AGY_OAUTH_CLIENT_SECRET: ${AGY_OAUTH_CLIENT_SECRET:-}
@@ -92,7 +100,22 @@ services:
     # volumes:
     #   - ./certs:/certs:ro
     ports:
-      - "${TOKEN_MONITOR_PORT:-${JIRAN_PORT:-17321}}:17321"
+      # The published address is the exposure boundary. Loopback by default; set
+      # JIRAN_BIND_HOST=0.0.0.0 only for direct TLS or an explicitly opted-in
+      # trusted-LAN/VPN deployment, and keep the host firewall in front of it.
+      - "${JIRAN_BIND_HOST:-127.0.0.1}:${TOKEN_MONITOR_PORT:-${JIRAN_PORT:-17321}}:17321"
+    # The container only reads its image and talks to MySQL over the network, so
+    # it runs without Linux capabilities, without a writable root filesystem and
+    # without setuid escalation. `/tmp` stays writable because a provider probe may
+    # stage a temporary directory there. Mounted TLS material must be readable by
+    # uid 1000 (the image's `node` user).
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
     # Give the container a real health signal. Without one a Hub that is bound to
     # loopback inside the container (no TOKEN_MONITOR_SECRET) or wedged on a stuck
     # query still reports "running", so `docker compose ps` looks healthy while

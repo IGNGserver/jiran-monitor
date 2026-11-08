@@ -48,6 +48,7 @@ function createCollectorProcess({
   entryPath = path.join(__dirname, 'collectorHost.js'),
   serviceName = 'Jiran Collector',
   log = (message) => console.log(message),
+  oneshotTimeoutMs = 180_000,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout
 } = {}) {
@@ -71,14 +72,28 @@ function createCollectorProcess({
     entry.calls.clear();
   }
 
+  function settleOneshot(id, error, value) {
+    const pending = oneshots.get(id);
+    if (!pending) return false;
+    oneshots.delete(id);
+    if (pending.timer) clearTimeoutFn(pending.timer);
+    if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+    if (error) pending.reject(error);
+    else pending.resolve(value);
+    return true;
+  }
+
+  function failOneshots(code, message) {
+    for (const id of [...oneshots.keys()]) {
+      settleOneshot(id, Object.assign(new Error(message), { code }));
+    }
+  }
+
   function onMessage(message) {
     if (!message || typeof message !== 'object') return;
     if (message.type === 'oneshotResult') {
-      const pending = oneshots.get(message.id);
-      if (!pending) return;
-      oneshots.delete(message.id);
-      if (message.ok) pending.resolve(message.value);
-      else pending.reject(reviveError(message.error));
+      if (message.ok) settleOneshot(message.id, null, message.value);
+      else settleOneshot(message.id, reviveError(message.error));
       return;
     }
     const entry = runtimes.get(message.runtimeId);
@@ -140,10 +155,7 @@ function createCollectorProcess({
         entry.started = false;
         settleCalls(entry, false);
       }
-      for (const pending of oneshots.values()) {
-        pending.reject(Object.assign(new Error('collector process exited'), { code: 'collector_process_exited' }));
-      }
-      oneshots.clear();
+      failOneshots('collector_process_exited', 'collector process exited');
       if (disposed || runtimes.size === 0) return;
       const delay = RESTART_DELAYS_MS[Math.min(restartAttempt, RESTART_DELAYS_MS.length - 1)];
       restartAttempt += 1;
@@ -208,15 +220,36 @@ function createCollectorProcess({
   }
 
   // A scan outside any runtime (e.g. a custom date range), run in the host.
-  function run(method, args = []) {
+  function run(method, args = [], options = {}) {
     if (disposed) return Promise.reject(Object.assign(new Error('collector process disposed'), { code: 'collector_process_disposed' }));
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason || new Error('collector call cancelled'));
     startChild();
     const id = nextCallId++;
     return new Promise((resolve, reject) => {
-      oneshots.set(id, { resolve, reject });
-      if (!send({ type: 'oneshot', id, method, args })) {
-        oneshots.delete(id);
-        reject(Object.assign(new Error('collector process unavailable'), { code: 'collector_process_unavailable' }));
+      const pending = { resolve, reject, timer: null, signal: options.signal || null, onAbort: null };
+      oneshots.set(id, pending);
+      const cancel = (error) => {
+        if (!oneshots.has(id)) return;
+        send({ type: 'cancelOneshot', id });
+        settleOneshot(id, error);
+      };
+      if (pending.signal) {
+        pending.onAbort = () => cancel(pending.signal.reason || Object.assign(new Error('collector call cancelled'), { name: 'AbortError', code: 'aborted' }));
+        pending.signal.addEventListener('abort', pending.onAbort, { once: true });
+      }
+      const timeoutMs = Number(options.timeoutMs ?? oneshotTimeoutMs);
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        pending.timer = setTimeoutFn(() => cancel(Object.assign(
+          new Error(`collector call timed out after ${timeoutMs}ms`),
+          { code: 'collector_call_timeout' }
+        )), timeoutMs);
+      }
+      let coalesceKey = options.coalesceKey;
+      if (!coalesceKey && method === 'collectCustomRangeOnce') {
+        try { coalesceKey = `${method}:${JSON.stringify(args)}`; } catch (_) { /* data-only calls normally always serialize */ }
+      }
+      if (!send({ type: 'oneshot', id, method, args, timeoutMs, coalesceKey })) {
+        cancel(Object.assign(new Error('collector process unavailable'), { code: 'collector_process_unavailable' }));
       }
     });
   }
@@ -229,10 +262,7 @@ function createCollectorProcess({
       send({ type: 'stop', runtimeId, options: {} });
     }
     runtimes.clear();
-    for (const pending of oneshots.values()) {
-      pending.reject(Object.assign(new Error('collector process disposed'), { code: 'collector_process_disposed' }));
-    }
-    oneshots.clear();
+    failOneshots('collector_process_disposed', 'collector process disposed');
     if (child) {
       try { child.kill(); } catch (_) {}
       child = null;

@@ -6,9 +6,9 @@ permissions:
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
+    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-compose*.yml', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
   pull_request:
-    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
+    paths: ['src/**', 'scripts/**', 'tests/**', 'android/**', 'migrations/**', 'docs/**', 'README*.md', 'AGENTS.md', 'package*.json', 'Dockerfile', 'docker-compose*.yml', 'docker-entrypoint.sh', '.dockerignore', 'product-scope.json', 'eslint.config.js', '.github/workflows/ci.yml']
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -30,8 +30,8 @@ jobs:
           - os: windows-latest
             node-version: '24'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -40,17 +40,20 @@ jobs:
       # product-scope, shared-UI boundary, renderer CSS and Android Fluent guards
       # in addition to lint and the Node test suite.
       - run: npm run verify
+      # A missing `dist/web` used to turn the web-build assertions into a silent
+      # skip, so the artifact Docker ships was never checked on `main`.
       - name: Build browser assets and validate the offline graph
-        if: github.event_name == 'pull_request'
         run: npm run build:web && node --test tests/web-build/*.test.js
       - name: Validate production web image
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
         run: |
           docker build --target runtime -t jiran-loading:ci .
           docker run --rm --entrypoint node jiran-loading:ci -e "const assert=require('node:assert/strict'); const fs=require('node:fs'); const root=require('./src/hub/static').DEFAULT_WEB_ROOT; assert.ok(root.endsWith('dist/web')); assert.ok(fs.readFileSync(root+'/index.html','utf8').includes('/assets/app-'));"
 
+  # Runs on `main` too: MySQL behaviour (ledger deltas, transfer baselines,
+  # migration integrity) is exactly what a matrix of mocked repositories cannot
+  # prove, and a pull request is not the only place it can regress.
   hub-integration:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     services:
@@ -66,8 +69,8 @@ jobs:
           --health-timeout=3s
           --health-retries=20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
@@ -107,17 +110,75 @@ jobs:
           node scripts/experiments/hub-resource-comparison/mysql-slice.js --devices=20 --sessions=40 --iterations=100 --output="$BUILD_SCRATCH_ROOT/mysql-slice.json"
           node -e "const r=require(process.env.BUILD_SCRATCH_ROOT+'/mysql-slice.json'); if(!r.success||!r.comparisonMeasured||!r.crossBackendPayloadsMatch)process.exit(1); console.log(JSON.stringify(r,null,2));"
 
+  # The unit tests cannot prove the image, the entrypoint, the migration runner or
+  # the healthcheck. This job starts the shipped Compose stack beside a real MySQL
+  # and checks the authenticated boundary from outside the container.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Generate ephemeral stack secrets
+        shell: bash
+        run: |
+          # `::add-mask::` is a workflow command and must go to stdout; only
+          # NAME=value lines belong in $GITHUB_ENV (writing the mask into the
+          # env file fails the step with "Invalid format").
+          node - <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const lines = [];
+          for (const [name, value] of [
+            ['JIRAN_SECRET', crypto.randomBytes(32).toString('hex')],
+            ['MYSQL_ROOT_PASSWORD', crypto.randomBytes(24).toString('hex')],
+            ['MYSQL_PASSWORD', crypto.randomBytes(24).toString('hex')]
+          ]) {
+            console.log(`::add-mask::${value}`);
+            lines.push(`${name}=${value}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join('\n')}\n`);
+          NODE
+      - name: Start the stack from this checkout
+        run: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+      - name: Wait for health and verify the auth boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          healthy=0
+          for _ in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17321/api/health || true)"
+            if [ "$code" = "200" ]; then healthy=1; break; fi
+            sleep 5
+          done
+          if [ "$healthy" -ne 1 ]; then
+            docker compose -f docker-compose.yml -f docker-compose.build.yml logs --tail 200
+            echo 'Hub never became healthy' >&2
+            exit 1
+          fi
+          anonymous="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:17321/api/stats)"
+          if [ "$anonymous" != "401" ]; then
+            echo "anonymous /api/stats answered $anonymous, expected 401" >&2
+            exit 1
+          fi
+          authorized="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Jiran-Secret: $JIRAN_SECRET" http://127.0.0.1:17321/api/stats)"
+          if [ "$authorized" != "200" ]; then
+            echo "authenticated /api/stats answered $authorized, expected 200" >&2
+            exit 1
+          fi
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.build.yml down -v
+
   # The Android client is a separate toolchain, so it gets its own job rather than
   # a step that can only be reached after npm ci on three OSes. This exists because
-  # the whole Fluent 2 client migration (~6.6k changed lines) shipped with no PR
-  # gate at all: `runUnitTests` only ran on a release tag, so nothing ever compiled
-  # the UI layer on a pull request.
+  # the whole Fluent 2 client migration (~6.6k changed lines) shipped with no gate
+  # at all: `runUnitTests` only ran on a release tag, so nothing ever compiled the
+  # UI layer on a pull request.
   android:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '17'
@@ -133,7 +194,7 @@ jobs:
       # The Fluent colour and component contracts are Node scripts, but they read
       # the Kotlin source, so they belong next to the client they guard as well as
       # inside `npm run verify`.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm

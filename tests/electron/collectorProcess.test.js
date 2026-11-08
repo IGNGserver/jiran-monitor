@@ -196,3 +196,23 @@ test('a custom range scan runs in the host and settles on success, failure and e
   await assert.rejects(hanging, (error) => error.code === 'collector_process_exited');
   processHandle.dispose();
 });
+
+test('one-shot deadline and caller abort both settle and notify the host', async () => {
+  const { startCollector } = fakeCollectorFactory();
+  const { fork, forks } = fakeFork(startCollector);
+  const processHandle = createCollectorProcess({ fork, log: () => {}, oneshotTimeoutMs: 10 });
+  await assert.rejects(
+    processHandle.run('collectCustomRangeOnce', [{ range: 'hang' }]),
+    (error) => error.code === 'collector_call_timeout'
+  );
+  const controller = new AbortController();
+  const cancelled = processHandle.run('collectCustomRangeOnce', [{ range: 'hang' }], { signal: controller.signal });
+  await settle(2);
+  controller.abort();
+  await assert.rejects(cancelled, (error) => error.name === 'AbortError');
+  // A late result from an abandoned invocation cannot settle a newer call.
+  const result = await processHandle.run('collectCustomRangeOnce', [{ range: 'today' }]);
+  assert.equal(result.period.totalTokens, 42);
+  assert.equal(forks.length, 1);
+  processHandle.dispose();
+});

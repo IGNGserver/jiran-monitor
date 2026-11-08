@@ -22,6 +22,8 @@ import com.igng.tokenmonitor.android.data.model.StatsDto
 import com.igng.tokenmonitor.android.data.model.UsageRangeDto
 import com.igng.tokenmonitor.android.data.repository.HubRepository
 import com.igng.tokenmonitor.android.data.repository.HubResult
+import com.igng.tokenmonitor.android.ui.core.DeviceDetailRequestCoordinator
+import com.igng.tokenmonitor.android.ui.core.HistoryRefreshCoordinator
 import com.igng.tokenmonitor.android.widget.WidgetUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -133,6 +135,8 @@ data class HubUiState(
    * split; the detail page merges this over its snapshot entry.
    */
   val deviceDetails: Map<String, DeviceDto> = emptyMap(),
+  /** The device whose latest request owns the two shared status fields below. */
+  val deviceDetailStatusId: String? = null,
   /** Set when a device detail request failed, so the page can offer a retry. */
   val deviceDetailError: String? = null,
   val deviceDetailLoading: Boolean = false,
@@ -172,6 +176,8 @@ class HubViewModel @Inject constructor(
   private var sseJob: Job? = null
   private var rangeJob: Job? = null
   private var refreshJob: Job? = null
+  private var historyJob: Job? = null
+  private var historyRetryJob: Job? = null
   // Debounced so a burst of SSE frames writes one snapshot, not one per frame.
   private var widgetPublishJob: Job? = null
   private var hasObservedForeground = false
@@ -189,8 +195,8 @@ class HubViewModel @Inject constructor(
   private var connectionGeneration = 0L
   /** Validator for the fleet history document, so a repeat read can be a 304. */
   private var historyEtag: String? = null
-  /** Last `historyRevision` seen on the stream; a change is the only reason to re-ask. */
-  private var historyRevisionSeen: String? = null
+  private val historyRefresh = HistoryRefreshCoordinator()
+  private val deviceDetailRequests = DeviceDetailRequestCoordinator()
   /** Whether a history document has been fetched at least once this session. */
   private var hasObservedHistory = false
   private var historySequence = 0L
@@ -259,33 +265,76 @@ class HubViewModel @Inject constructor(
     }
   }
 
-  fun refreshHistory() = launchRequest { generation ->
-    if (!isCurrent(generation)) return@launchRequest
-    // Conditional: the Hub answers 304 when the document has not moved, so the
-    // repeated "re-ask for history" a stream frame triggers costs headers, not a
-    // body. A Hub without the revision-based validator simply answers 200.
+  fun refreshHistory(): Job? {
+    historyRetryJob?.cancel()
+    val request = historyRefresh.startManual() ?: return historyJob
+    return startHistoryRequest(request)
+  }
+
+  private fun refreshObservedHistory() {
+    if (!hasObservedHistory) return
+    val request = historyRefresh.startAutomatic(nowMs = monotonicMs()) ?: return
+    startHistoryRequest(request)
+  }
+
+  private fun startHistoryRequest(request: HistoryRefreshCoordinator.Request): Job {
+    // Conditional: the Hub answers 304 when the document has not moved. Both a
+    // 200 and a 304 complete the requested revision; only a 200 replaces the body.
     val filter = _state.value.deviceFilter
     val identity = filter ?: ""
     val sequence = ++historySequence
-    when (val result = repository.historyIfChanged(etag = historyEtag, deviceId = filter)) {
-      is HubResult.Success -> if (isCurrent(generation) && sequence == historySequence && _state.value.deviceFilter == filter) {
-        result.value.etag?.let { historyEtag = it }
-        val document = result.value.document
-        if (document != null) {
-          hasObservedHistory = true
-          _state.value = _state.value.copy(history = document, historyIdentity = identity, historyError = null)
-          scheduleWidgetPublish()
+    var job: Job? = null
+    job = launchRequest { generation ->
+      val result = repository.historyIfChanged(etag = historyEtag, deviceId = filter)
+      val current = isCurrent(generation) && sequence == historySequence && _state.value.deviceFilter == filter
+      when (result) {
+        is HubResult.Success -> if (current) {
+          result.value.etag?.let { historyEtag = it }
+          val document = result.value.document
+          if (document != null) {
+            hasObservedHistory = true
+            _state.value = _state.value.copy(history = document, historyIdentity = identity)
+            scheduleWidgetPublish()
+          }
+          _state.value = _state.value.copy(historyError = null)
+        }
+        is HubResult.Failure -> if (current) {
+          // Not fatal to the dashboard, but the fallback (historyPreview) carries no
+          // per-client/per-model stacks and is capped at 30 days, so trends and the
+          // client model split stay degraded until this succeeds. Record it so the
+          // UI can offer a retry instead of silently showing less.
+          _state.value = _state.value.copy(historyError = result.error.message)
         }
       }
-      is HubResult.Failure -> if (isCurrent(generation) && sequence == historySequence && _state.value.deviceFilter == filter) {
-        // Not fatal to the dashboard, but the fallback (historyPreview) carries no
-        // per-client/per-model stacks and is capped at 30 days, so trends and the
-        // client model split stay degraded until this succeeds. Record it so the
-        // UI can offer a retry instead of silently showing less.
-        _state.value = _state.value.copy(historyError = result.error.message)
+      val completion = historyRefresh.complete(
+        request = request,
+        succeeded = current && result is HubResult.Success,
+        nowMs = monotonicMs()
+      )
+      if (historyJob === job) historyJob = null
+      if (current) scheduleHistoryRetry(completion)
+    }
+    historyJob = job
+    return job
+  }
+
+  private fun scheduleHistoryRetry(completion: HistoryRefreshCoordinator.Completion) {
+    val revision = completion.retryRevision ?: return
+    val generation = connectionGeneration
+    val filter = _state.value.deviceFilter
+    historyRetryJob?.cancel()
+    historyRetryJob = viewModelScope.launch {
+      if (completion.retryDelayMs > 0) delay(completion.retryDelayMs)
+      if (
+        isCurrent(generation) && _state.value.deviceFilter == filter &&
+        historyRefresh.observedRevision == revision
+      ) {
+        refreshObservedHistory()
       }
     }
   }
+
+  private fun monotonicMs(): Long = System.nanoTime() / 1_000_000L
 
   fun refreshStats() = launchRequest { generation ->
     if (!isCurrent(generation)) return@launchRequest
@@ -367,21 +416,46 @@ class HubViewModel @Inject constructor(
    * page calls on open. It is a separate cache keyed by id rather than an overwrite
    * of the fleet list: the summary's entry stays authoritative for staleness.
    */
-  fun refreshDeviceDetail(deviceId: String) = launchRequest { generation ->
-    if (deviceId.isBlank()) return@launchRequest
-    if (_state.value.authorization?.capabilities?.deviceDetail != true) return@launchRequest
-    _state.value = _state.value.copy(deviceDetailLoading = true, deviceDetailError = null)
-    when (val result = repository.device(deviceId)) {
-      is HubResult.Success -> if (isCurrent(generation)) {
-        val device = result.value.device
-        _state.value = _state.value.copy(
-          deviceDetails = if (device != null) _state.value.deviceDetails + (deviceId to device) else _state.value.deviceDetails,
-          deviceDetailLoading = false,
-          deviceDetailError = if (device == null) "设备已从当前 Hub 快照中移除。" else null
-        )
-      }
-      is HubResult.Failure -> if (isCurrent(generation)) {
-        _state.value = _state.value.copy(deviceDetailLoading = false, deviceDetailError = result.error.message)
+  fun refreshDeviceDetail(deviceId: String): Job? {
+    if (deviceId.isBlank()) return null
+    if (_state.value.authorization?.capabilities?.deviceDetail != true) return null
+    // Allocate at invocation time, not when a coroutine happens to be scheduled.
+    val request = deviceDetailRequests.begin(deviceId)
+    _state.value = _state.value.copy(
+      deviceDetailStatusId = deviceId,
+      deviceDetailLoading = true,
+      deviceDetailError = null
+    )
+    return launchRequest { generation ->
+      when (val result = repository.device(deviceId)) {
+        is HubResult.Success -> if (isCurrent(generation)) {
+          val device = result.value.device
+          if (deviceDetailRequests.shouldPublishDetail(request)) {
+            _state.value = _state.value.copy(
+              deviceDetails = if (device != null) {
+                _state.value.deviceDetails + (deviceId to device)
+              } else {
+                _state.value.deviceDetails - deviceId
+              }
+            )
+          }
+          if (deviceDetailRequests.shouldPublishStatus(request)) {
+            _state.value = _state.value.copy(
+              deviceDetailStatusId = deviceId,
+              deviceDetailLoading = false,
+              deviceDetailError = if (device == null) "设备已从当前 Hub 快照中移除。" else null
+            )
+          }
+        }
+        is HubResult.Failure -> if (
+          isCurrent(generation) && deviceDetailRequests.shouldPublishStatus(request)
+        ) {
+          _state.value = _state.value.copy(
+            deviceDetailStatusId = deviceId,
+            deviceDetailLoading = false,
+            deviceDetailError = result.error.message
+          )
+        }
       }
     }
   }
@@ -494,6 +568,14 @@ class HubViewModel @Inject constructor(
     sseJob = null
     refreshJob?.cancel()
     refreshJob = null
+    historyRetryJob?.cancel()
+    historyRetryJob = null
+    historyJob = null // cancelRequests() owns the physical request.
+    historySequence += 1
+    historyEtag = null
+    historyRefresh.reset()
+    deviceDetailRequests.reset()
+    hasObservedHistory = false
     cancelRequests()
     _state.value = HubUiState(
       isLoading = true,
@@ -519,13 +601,23 @@ class HubViewModel @Inject constructor(
     val next = deviceId?.takeIf { it.isNotBlank() }
     if (_state.value.deviceFilter == next) return
     userPreferences.setDeviceFilter(next)
+    historyRetryJob?.cancel()
+    historyRetryJob = null
+    historyJob?.cancel()
+    historyJob = null
+    historySequence += 1
     historyEtag = null
+    historyRefresh.reset()
+    deviceDetailRequests.reset()
     hasObservedHistory = false
     _state.value = _state.value.copy(
       deviceFilter = next,
       history = null,
       historyIdentity = next ?: "",
-      historyError = null
+      historyError = null,
+      deviceDetailStatusId = null,
+      deviceDetailLoading = false,
+      deviceDetailError = null
     )
     if (next != null) refreshDeviceDetail(next)
     refreshHistory()
@@ -801,9 +893,12 @@ class HubViewModel @Inject constructor(
               // that the document behind it moved. Re-ask only then — and that ask
               // is conditional, so an unchanged document costs a 304.
               val revision = stats.historyRevision
-              if (revision != null && revision != historyRevisionSeen) {
-                historyRevisionSeen = revision
-                if (hasObservedHistory) refreshHistory()
+              if (revision != null && revision != historyRefresh.observedRevision) {
+                historyRefresh.observe(revision)
+                // A newer revision supersedes an older retry delay. If a request is
+                // active, its completion schedules this revision immediately.
+                historyRetryJob?.cancel()
+                refreshObservedHistory()
               }
             }
             }

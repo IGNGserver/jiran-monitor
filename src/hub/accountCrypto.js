@@ -39,6 +39,52 @@ function requireKey(material) {
   return key;
 }
 
+function createCredentialKeyring(material, previousMaterials = []) {
+  const current = requireKey(material);
+  const entries = [{ key: current, version: keyVersion(current), current: true }];
+  const versions = new Map([[entries[0].version, current]]);
+  if (!Array.isArray(previousMaterials)) throw new TypeError('Previous Hub credential keys must be an array');
+  for (const material of previousMaterials) {
+    const key = requireKey(material);
+    const version = keyVersion(key);
+    const existing = versions.get(version);
+    if (existing) {
+      if (!existing.equals(key)) throw new Error('Hub credential key-version collision');
+      continue;
+    }
+    versions.set(version, key);
+    entries.push({ key, version, current: false });
+  }
+  return Object.freeze({
+    current: entries[0],
+    entries: Object.freeze(entries)
+  });
+}
+
+function previousCredentialKeysFromEnv(env = process.env) {
+  // Keep the established legacy-wins precedence used by Compose and the Hub.
+  const raw = String(
+    env.TOKEN_MONITOR_HUB_PREVIOUS_CREDENTIAL_KEYS
+    || env.JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS
+    || ''
+  ).trim();
+  if (!raw) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    const error = new Error('JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS must be a JSON array of previous keys');
+    error.code = 'credential_previous_keys_invalid';
+    throw error;
+  }
+  if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== 'string' || !key.trim())) {
+    const error = new Error('JIRAN_HUB_PREVIOUS_CREDENTIAL_KEYS must contain only non-empty strings');
+    error.code = 'credential_previous_keys_invalid';
+    throw error;
+  }
+  return parsed;
+}
+
 function encryptCredential(value, material) {
   const key = requireKey(material);
   const iv = crypto.randomBytes(AES_GCM_IV_BYTES);
@@ -55,13 +101,24 @@ function encryptCredential(value, material) {
   };
 }
 
-function decryptCredential(envelope, material) {
+function decryptCredential(envelope, material, previousMaterials = []) {
   if (!envelope || Number(envelope.version) !== CREDENTIAL_ENVELOPE_VERSION) {
     const error = new Error('Unsupported Hub credential envelope');
     error.code = 'credential_envelope_unsupported';
     throw error;
   }
-  const key = requireKey(material);
+  const keyring = createCredentialKeyring(material, previousMaterials);
+  const requestedVersion = String(envelope.keyVersion || '').trim();
+  let candidates = keyring.entries;
+  if (requestedVersion) {
+    const selected = keyring.entries.find((entry) => entry.version === requestedVersion);
+    if (!selected) {
+      const error = new Error('Hub credential encryption key version is not configured');
+      error.code = 'credential_key_version_unavailable';
+      throw error;
+    }
+    candidates = [selected];
+  }
   const iv = Buffer.from(String(envelope.iv || ''), 'base64');
   const tag = Buffer.from(String(envelope.tag || ''), 'base64');
   const ciphertext = Buffer.from(String(envelope.ciphertext || ''), 'base64');
@@ -70,16 +127,32 @@ function decryptCredential(envelope, material) {
     error.code = 'credential_envelope_invalid';
     throw error;
   }
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(tag);
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return JSON.parse(plaintext.toString('utf8'));
+  let lastError;
+  for (const entry of candidates) {
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', entry.key, iv);
+      decipher.setAuthTag(tag);
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      return JSON.parse(plaintext.toString('utf8'));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function credentialNeedsReencryption(envelope, material) {
+  const current = requireKey(material);
+  return String(envelope?.keyVersion || '') !== keyVersion(current);
 }
 
 module.exports = {
   CREDENTIAL_ENVELOPE_VERSION,
+  createCredentialKeyring,
+  credentialNeedsReencryption,
   decryptCredential,
   encryptCredential,
   keyFromMaterial,
-  keyVersion
+  keyVersion,
+  previousCredentialKeysFromEnv
 };

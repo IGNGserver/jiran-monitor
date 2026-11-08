@@ -119,5 +119,6 @@ export const ASSET_PATTERNS: Record<AssetKey, RegExp> = {
 
 export const HUB_SNIPPET = `cp .env.example .env
 # JIRAN_SECRET + MySQL passwords
+# Publishes to 127.0.0.1 only; see docs/hub-compose.md for TLS/LAN.
 docker compose up -d
 curl http://127.0.0.1:17321/api/health`;

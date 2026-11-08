@@ -132,7 +132,7 @@ test('mac release scripts build native Apple Silicon and Intel artifacts', () =>
 });
 
 test('release workflow pins Electron only for the Linux artifact', () => {
-  assert.equal(rootPackage.devDependencies.electron, '43.4.0');
+  assert.equal(rootPackage.devDependencies.electron, '43.8.7');
   assert.match(
     rootPackage.scripts['dist:linux'],
     /^electron-builder --config scripts\/electron-builder\.config\.js --linux --x64 --publish never$/

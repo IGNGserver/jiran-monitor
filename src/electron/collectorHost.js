@@ -28,6 +28,7 @@
 //                { type: 'oneshotResult', id, ok, value, error }
 
 const fs = require('node:fs');
+const { isProcessAlive, parseAgentPidRecord } = require('../shared/agentPidFile');
 
 const DIAGNOSTICS_INTERVAL_MS = 2000;
 
@@ -42,10 +43,9 @@ function serializeError(error) {
 function externalAgentActive(pidPaths, fsApi = fs, kill = process.kill.bind(process)) {
   for (const pidPath of pidPaths) {
     try {
-      const pid = parseInt(String(fsApi.readFileSync(pidPath, 'utf8')).trim(), 10);
-      if (!pid || pid === process.pid) continue;
-      kill(pid, 0);
-      return true;
+      const record = parseAgentPidRecord(fsApi.readFileSync(pidPath, 'utf8'));
+      if (!record || record.pid === process.pid) continue;
+      if (isProcessAlive(record.pid, kill)) return true;
     } catch (_) { /* try the next candidate */ }
   }
   return false;
@@ -56,12 +56,13 @@ function runCollectorHost(port, deps = {}) {
   // Scans that are not part of a running collector (a custom date range in local
   // mode runs its own tokscale pass) go through the same process.
   const oneshots = deps.oneshots || {
-    collectCustomRangeOnce: (...args) => require('../shared/collector').collectCustomRangeOnce(...args)
+    collectCustomRangeOnce: (args, control = {}) => require('../shared/collector').collectCustomRangeOnce({ ...args, ...control })
   };
   const pidPaths = deps.pidPaths || require('../shared/config').pidFileCandidates();
   const setIntervalFn = deps.setInterval || setInterval;
   const clearIntervalFn = deps.clearInterval || clearInterval;
   const runtimes = new Map();
+  const oneshotControllers = new Map();
 
   const post = (message) => {
     try { port.postMessage(message); } catch (_) { /* parent gone */ }
@@ -136,23 +137,33 @@ function runCollectorHost(port, deps = {}) {
     }
   }
 
-  async function oneshot(id, method, args = []) {
+  async function oneshot(id, method, args = [], control = {}) {
     const fn = Object.prototype.hasOwnProperty.call(oneshots, method) ? oneshots[method] : null;
     if (!fn) {
       post({ type: 'oneshotResult', id, ok: false, error: { message: `unknown collector call ${method}`, code: 'unknown_call' } });
       return;
     }
+    const controller = new AbortController();
+    oneshotControllers.set(id, controller);
     try {
-      post({ type: 'oneshotResult', id, ok: true, value: (await fn(...args)) ?? null });
+      const value = await fn(...args, {
+        signal: controller.signal,
+        scanTimeoutMs: control.timeoutMs,
+        coalesceKey: control.coalesceKey || String(id)
+      });
+      post({ type: 'oneshotResult', id, ok: true, value: value ?? null });
     } catch (error) {
       post({ type: 'oneshotResult', id, ok: false, error: { ...serializeError(error), name: error?.name || 'Error' } });
+    } finally {
+      if (oneshotControllers.get(id) === controller) oneshotControllers.delete(id);
     }
   }
 
   function handle(message) {
     if (!message || typeof message !== 'object') return;
     const { type, runtimeId } = message;
-    if (type === 'oneshot') { void oneshot(message.id, message.method, message.args); return; }
+    if (type === 'cancelOneshot') { oneshotControllers.get(message.id)?.abort(); return; }
+    if (type === 'oneshot') { void oneshot(message.id, message.method, message.args, message); return; }
     if (type === 'start') start(runtimeId, message.options);
     else if (type === 'stop') stop(runtimeId, message.options);
     else if (type === 'call') void call(runtimeId, message.id, message.method, message.args);

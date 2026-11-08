@@ -25,6 +25,10 @@ Agent 在数据库旁边运行 Linux 版 tokscale，再把规范化后的用量�
 ```bash
 cp .env.example .env
 # 设置 JIRAN_SECRET、MYSQL_PASSWORD 和 MYSQL_ROOT_PASSWORD
+# WSL 对 Hub 来说是远端：显式选择可信 LAN 明文 HTTP；
+# 更推荐改用 docs/hub-compose.md 中的 HTTPS 配置。
+# JIRAN_BIND_HOST=0.0.0.0
+# JIRAN_ALLOW_INSECURE_HTTP=1
 
 docker compose up -d
 curl http://127.0.0.1:17321/api/health

@@ -3,7 +3,10 @@ package com.igng.tokenmonitor.android.data.repository
 import com.igng.tokenmonitor.android.data.model.AppUpdateDto
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -111,6 +114,116 @@ class ApkDownloaderTest {
       }
     }
     assertEquals(0, server.requestCount)
+  }
+
+  @Test
+  fun rejectsMissingOrOversizeMetadataBeforeAnyNetworkRequest() {
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val destination = directory.resolve("update.apk")
+    val info = updateInfo(server.url("/apk").toString(), ByteArray(4))
+
+    for (invalid in listOf(info.copy(assetSize = null), info.copy(assetSize = ApkDownloader.MAX_APK_BYTES + 1))) {
+      assertThrows(IOException::class.java) {
+        runBlocking { downloader.download(invalid, "1.3.0", destination) { _, _ -> } }
+      }
+    }
+    assertEquals(0, server.requestCount)
+    assertFalse(directory.resolve("update.apk.part").exists())
+  }
+
+  @Test
+  fun rejectsAContentLengthThatContradictsTheUpdateIndex() {
+    val body = "demo".toByteArray()
+    server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(body)))
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val info = updateInfo(server.url("/apk").toString(), ByteArray(body.size + 1))
+
+    assertThrows(IOException::class.java) {
+      runBlocking { downloader.download(info, "1.3.0", directory.resolve("update.apk")) { _, _ -> } }
+    }
+    assertFalse(directory.resolve("update.apk.part").exists())
+  }
+
+  @Test
+  fun acceptsAChunkedResponseOnlyWhenItsActualLengthMatchesTheIndex() {
+    val body = "demo".toByteArray()
+    server.enqueue(MockResponse().setResponseCode(200).setChunkedBody(Buffer().write(body), 2))
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val destination = directory.resolve("update.apk")
+
+    val downloaded = runBlocking {
+      downloader.download(updateInfo(server.url("/apk").toString(), body), "1.3.0", destination) { _, _ -> }
+    }
+    assertArrayEquals(body, downloaded.readBytes())
+    assertFalse(directory.resolve("update.apk.part").exists())
+  }
+
+  @Test
+  fun stopsAChunkedBodyAtTheIndexedStreamingCap() {
+    val body = "more than four bytes".toByteArray()
+    server.enqueue(MockResponse().setResponseCode(200).setChunkedBody(Buffer().write(body), 3))
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val info = updateInfo(server.url("/apk").toString(), ByteArray(4))
+
+    assertThrows(IOException::class.java) {
+      runBlocking { downloader.download(info, "1.3.0", directory.resolve("update.apk")) { _, _ -> } }
+    }
+    assertFalse(directory.resolve("update.apk.part").exists())
+  }
+
+  @Test
+  fun removesPartialFilesForTruncatedFixedAndChunkedBodies() {
+    val expected = ByteArray(8)
+    val body = "demo".toByteArray()
+    server.enqueue(
+      MockResponse().setResponseCode(200).setHeader("Content-Length", expected.size).setBody(Buffer().write(body))
+    )
+    server.enqueue(MockResponse().setResponseCode(200).setChunkedBody(Buffer().write(body), 2))
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val info = updateInfo(server.url("/apk").toString(), expected)
+
+    repeat(2) {
+      assertThrows(IOException::class.java) {
+        runBlocking { downloader.download(info, "1.3.0", directory.resolve("update.apk")) { _, _ -> } }
+      }
+      assertFalse(directory.resolve("update.apk.part").exists())
+    }
+  }
+
+  @Test
+  fun overallDeadlineInterruptsASlowBodyAndRemovesThePartialFile() {
+    val body = "demo".toByteArray()
+    server.enqueue(
+      MockResponse().setResponseCode(200).setBody(Buffer().write(body)).setBodyDelay(2, TimeUnit.SECONDS)
+    )
+    val downloader = ApkDownloader(OkHttpClient(), policy, downloadTimeoutMs = 100)
+    val startedAt = System.nanoTime()
+
+    assertThrows(IOException::class.java) {
+      runBlocking {
+        downloader.download(updateInfo(server.url("/apk").toString(), body), "1.3.0", directory.resolve("update.apk")) { _, _ -> }
+      }
+    }
+    val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+    assertTrue("overall deadline did not interrupt the body read: ${elapsedMs}ms", elapsedMs < 1_500)
+    assertFalse(directory.resolve("update.apk.part").exists())
+  }
+
+  @Test
+  fun cancellationCancelsAnInFlightCallAndRemovesThePartialFile() = runBlocking {
+    val body = "demo".toByteArray()
+    server.enqueue(
+      MockResponse().setResponseCode(200).setBody(Buffer().write(body)).setBodyDelay(2, TimeUnit.SECONDS)
+    )
+    val downloader = ApkDownloader(OkHttpClient(), policy)
+    val job = launch(kotlinx.coroutines.Dispatchers.Default) {
+      downloader.download(updateInfo(server.url("/apk").toString(), body), "1.3.0", directory.resolve("update.apk")) { _, _ -> }
+    }
+
+    assertTrue("download did not reach the server", server.takeRequest(2, TimeUnit.SECONDS) != null)
+    job.cancelAndJoin()
+    assertTrue(job.isCancelled)
+    assertFalse(directory.resolve("update.apk.part").exists())
   }
 
   @Test

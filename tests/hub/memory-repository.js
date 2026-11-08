@@ -315,6 +315,14 @@ class MemoryRepository {
     return this.getHubAccountCredential(id);
   }
 
+  async rotateHubAccountCredential(accountId, expectedEnvelope, nextEnvelope) {
+    const id = String(accountId || '');
+    const current = this.hubCredentials.get(id);
+    if (!current || JSON.stringify(current) !== JSON.stringify(expectedEnvelope)) return false;
+    this.hubCredentials.set(id, clone(nextEnvelope));
+    return true;
+  }
+
   async getHubAccountSnapshot(accountId) {
     return clone(this.hubSnapshots.get(String(accountId || '')) || null);
   }

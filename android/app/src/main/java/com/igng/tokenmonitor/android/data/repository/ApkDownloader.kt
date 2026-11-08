@@ -44,8 +44,12 @@ internal object GithubDownloadUrlPolicy : DownloadUrlPolicy {
 
 internal class ApkDownloader(
   private val client: OkHttpClient = defaultClient(),
-  private val urlPolicy: DownloadUrlPolicy = GithubDownloadUrlPolicy
+  private val urlPolicy: DownloadUrlPolicy = GithubDownloadUrlPolicy,
+  private val downloadTimeoutMs: Long = DEFAULT_DOWNLOAD_TIMEOUT_MS
 ) {
+  init {
+    require(downloadTimeoutMs > 0) { "downloadTimeoutMs must be positive" }
+  }
   /**
    * Downloads [info] into [destination], hashing while writing, and returns the
    * verified file. The `.part` file is removed on failure or cancellation.
@@ -67,14 +71,18 @@ internal class ApkDownloader(
       "更新包版本不高于当前版本，已阻止安装。"
     }
 
+    val expectedBytes = info.assetSize ?: throw IOException("更新索引缺少安装包大小。")
+    if (expectedBytes <= 0 || expectedBytes > MAX_APK_BYTES) {
+      throw IOException("更新包大小无效或超过安全上限（${MAX_APK_BYTES / 1024 / 1024} MiB）。")
+    }
+
     val url = urlPolicy.requireAllowed(assetUrl)
     val parent = destination.parentFile ?: throw IOException("无法创建更新缓存目录。")
     parent.mkdirs()
     val part = File(parent, "${destination.name}.part")
     part.delete()
     parent.usableSpace.takeIf { it > 0 }?.let { usable ->
-      val expectedBytes = info.assetSize ?: 0L
-      if (expectedBytes > 0 && usable < expectedBytes + 8L * 1024 * 1024) {
+      if (usable < expectedBytes + 8L * 1024 * 1024) {
         throw IOException("可用存储空间不足，无法下载更新包。")
       }
     }
@@ -86,6 +94,9 @@ internal class ApkDownloader(
       .get()
       .build()
     val call = client.newCall(request)
+    // This is an overall per-call deadline, not a per-read idle timeout. Unlike
+    // withTimeout around blocking IO, Okio's timeout can interrupt the socket read.
+    call.timeout().timeout(downloadTimeoutMs, TimeUnit.MILLISECONDS)
     // Cancelling the coroutine must also unblock the socket read; closing only
     // the stream in the cancellation handler still leaves a thread waiting on
     // OkHttp until its read timeout.
@@ -101,7 +112,10 @@ internal class ApkDownloader(
           "更新包跳转到了非 GitHub 域名，已阻止下载。"
         }
         val body = response.body ?: throw IOException("更新包响应为空。")
-        val total = body.contentLength().takeIf { it > 0 }
+        val contentLength = body.contentLength()
+        if (contentLength >= 0 && contentLength != expectedBytes) {
+          throw IOException("更新包响应长度与索引声明不一致，已阻止下载。")
+        }
         val digest = MessageDigest.getInstance("SHA-256")
         var copied = 0L
         body.byteStream().use { input ->
@@ -112,15 +126,18 @@ internal class ApkDownloader(
               val read = input.read(buffer)
               if (read < 0) break
               if (read == 0) continue
+              if (read.toLong() > expectedBytes - copied) {
+                throw IOException("更新包超过索引声明大小或安全上限，已中止下载。")
+              }
               output.write(buffer, 0, read)
               digest.update(buffer, 0, read)
               copied += read
-              onProgress(copied, total)
+              onProgress(copied, expectedBytes)
             }
           }
         }
-        if (total != null && copied != total) {
-          throw IOException("下载不完整：应为 $total 字节，实际 $copied 字节。")
+        if (copied != expectedBytes) {
+          throw IOException("下载不完整：应为 $expectedBytes 字节，实际 $copied 字节。")
         }
         val actualSha = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
         if (!actualSha.equals(expectedSha, ignoreCase = true)) {
@@ -142,10 +159,14 @@ internal class ApkDownloader(
     }
   }
 
-  private companion object {
+  internal companion object {
+    const val MAX_APK_BYTES = 256L * 1024L * 1024L
+    const val DEFAULT_DOWNLOAD_TIMEOUT_MS = 5L * 60L * 1000L
+
     fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
       .connectTimeout(20, TimeUnit.SECONDS)
       .readTimeout(60, TimeUnit.SECONDS)
+      .callTimeout(DEFAULT_DOWNLOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
       .followRedirects(true)
       .build()
   }
