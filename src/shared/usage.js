@@ -138,6 +138,15 @@ function emptyPeriod() {
     capabilities: { tokenComponents: true },
     totalTokens: 0,
     costUsd: 0,
+    // The share of the counters below that came back from the session archive
+    // instead of a live scan — sessions whose source tool has since been deleted.
+    // 累计 keeps them on purpose (deleting a tool must not rewrite history), but a
+    // total that silently includes them cannot be reconciled against a fresh scan,
+    // so the split travels with the period and every surface has to be able to show
+    // it. Zero means "all of this is provable from disk".
+    archivedTokens: 0,
+    archivedCostUsd: 0,
+    archivedClients: {},
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     outputTokens: 0,
@@ -735,6 +744,20 @@ function normalizePeriod(input, options = {}) {
       // Never negative: a credit total is a consumption amount, and a device
       // record is untrusted input that must not be able to subtract usage.
       if (key && asNumber(value) > 0) period.clientCredits[key] = mapNumber(period.clientCredits, key) + asNumber(value);
+    }
+  }
+  // Archived usage is an additive, optional wire field: an agent that never applied
+  // the session archive omits it and normalizes to zero, and an older Hub drops it.
+  if (hasOwn(input, 'archivedTokens')) {
+    period.archivedTokens = Math.max(0, Math.round(asNumber(input.archivedTokens ?? input.archived_tokens ?? 0)));
+  }
+  if (hasOwn(input, 'archivedCostUsd')) {
+    period.archivedCostUsd = Math.max(0, asNumber(input.archivedCostUsd ?? input.archived_cost_usd ?? 0));
+  }
+  if (input.archivedClients && typeof input.archivedClients === 'object') {
+    for (const [client, value] of Object.entries(input.archivedClients)) {
+      const key = normalizeClientName(client);
+      if (key) period.archivedClients[key] = mapNumber(period.archivedClients, key) + Math.max(0, Math.round(asNumber(value)));
     }
   }
   if (input.clientMeasurements && typeof input.clientMeasurements === 'object') {
@@ -1584,6 +1607,14 @@ function addPeriodInto(target, source, options = {}) {
   target.timedTokens += source.timedTokens;
   target.timedOutputTokens += source.timedOutputTokens;
   target.timedDurationMs += source.timedDurationMs;
+  // The archived split merges additively like every other counter, which is also
+  // what lets an anchored watch tick derive it through `deltaValue`.
+  target.archivedTokens += asNumber(source.archivedTokens);
+  target.archivedCostUsd += asNumber(source.archivedCostUsd);
+  for (const [rawClient, tokens] of Object.entries(source.archivedClients || {})) {
+    const client = normalizeClientName(rawClient);
+    if (client) target.archivedClients[client] = mapNumber(target.archivedClients, client) + asNumber(tokens);
+  }
   for (const [rawClient, tokens] of Object.entries(source.clients)) {
     const client = normalizeClientName(rawClient);
     if (!client) continue;
@@ -1845,6 +1876,10 @@ function aggregateDevices(devices, staleAfterMs, nowMs = Date.now(), options = {
 const SUMMARY_PERIOD_FIELDS = [
   'totalTokens',
   'costUsd',
+  // Carried in the first-paint payload because 累计 cannot be read honestly without
+  // it: the archive share explains the gap against a fresh full scan.
+  'archivedTokens',
+  'archivedCostUsd',
   'cacheReadTokens',
   'cacheWriteTokens',
   'outputTokens',
@@ -1858,6 +1893,7 @@ const SUMMARY_PERIOD_FIELDS = [
 const SUMMARY_PERIOD_MAPS = [
   'clients',
   'clientCosts',
+  'archivedClients',
   'clientCredits',
   'clientEstimated',
   'clientMeasurements',
