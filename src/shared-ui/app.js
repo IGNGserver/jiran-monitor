@@ -425,6 +425,8 @@ const state = {
   historyLoadingDeviceId: '',
   historyError: null,
   historyErrorDeviceId: '',
+  // The revision changed while a document for the same scope is still painted.
+  historyStale: false,
   subscriptions: null,
   subscriptionsLoading: false,
   subscriptionsError: null,
@@ -518,7 +520,10 @@ const statsDetails = createDetailCache((path, options) => fetchJson(path, { ...o
 
 function viewStats() {
   const spec = detailRequest(state.stats, state.prefs);
-  const stats = withStatsDetail(state.stats || EMPTY_STATS_MODEL, spec, statsDetails.get(spec)?.data);
+  // A revision bump invalidates the cache key, not the document the user is
+  // looking at: render the previous revision of the same scope until the new
+  // one lands instead of collapsing the page to a skeleton.
+  const stats = withStatsDetail(state.stats || EMPTY_STATS_MODEL, spec, statsDetails.get(spec)?.data || statsDetails.last(spec));
   const deviceId = String(state.prefs.deviceFilter || '').trim();
   if (!deviceId) return stats;
   const device = (stats.devices || []).find((entry) => String(entry?.deviceId || '') === deviceId);
@@ -1406,7 +1411,7 @@ function findActiveElement(snapshot) {
 // Nested scroll regions that a frame must not reset. `#content` is rebuilt
 // wholesale, so a scroll the user made inside a table wrapper or a status list
 // is lost unless it is keyed and restored with the rest of the render state.
-const SCROLL_REGIONS = ['.trends-table-wrap', '.device-status-details .status-tags', '.pricing-table', '.account-list', '.table-scroll'];
+const SCROLL_REGIONS = ['.trends-table-wrap', '.device-status-details .status-tags', '.pricing-table', '.account-list', '.table-scroll', '.chart-wrap', '.page-tabs', '.settings-section-nav'];
 
 function captureScrollRegions() {
   const regions = [];
@@ -1476,12 +1481,20 @@ function captureRenderState() {
     .filter((entry) => entry.listbox?.matches?.(':popover-open') && entry.identity);
   const active = document.activeElement;
   const mainEl = document.querySelector('.main');
+  // The document scrolls on the Hub; `.main` scrolls in the desktop shell. Either
+  // is user state regardless of which element owns focus: wheel/trackpad reading
+  // leaves focus on `<body>`, and gating on `#content` made the position
+  // unrecoverable exactly when it mattered.
+  const scrolling = document.scrollingElement || null;
+  const pageScrollTop = scrolling
+    ? scrolling.scrollTop
+    : (typeof window.scrollY === 'number' ? window.scrollY : null);
   return {
     active: describeActiveElement(active),
     openDetails,
     openDropdowns: openDropdowns.map((entry) => entry.identity),
     scrollRegions: captureScrollRegions(),
-    scrollY: active && (active === els.content || els.content.contains(active)) ? window.scrollY : null,
+    scrollY: pageScrollTop,
     mainScrollTop: mainEl ? mainEl.scrollTop : null
   };
 }
@@ -1491,6 +1504,21 @@ function findByIdentity(identity) {
   if (identity.attribute === 'id') return document.getElementById(identity.value);
   return [...els.content.querySelectorAll(`[${identity.attribute}]`)]
     .find((element) => (element.getAttribute(identity.attribute) || '') === identity.value) || null;
+}
+
+/**
+ * Apply a scroll offset, then retry for a couple of frames while the page is
+ * still shorter than the offset. A rebuild that drops content first clamps the
+ * offset; the content that restores the height (history, a chart, a detail
+ * document) may land a frame later, and without the retry the position is lost.
+ */
+function restoreScrollOffset(read, write, top, attempts = 2) {
+  write(top);
+  if (attempts <= 0 || typeof requestAnimationFrame !== 'function') return;
+  // Only a clamped write needs a retry. Re-applying an offset that already landed
+  // would fight a user who starts scrolling on the next frame.
+  if (Math.abs(read() - top) <= 1) return;
+  requestAnimationFrame(() => restoreScrollOffset(read, write, top, attempts - 1));
 }
 
 function restoreRenderState(snapshot) {
@@ -1547,12 +1575,20 @@ function restoreRenderState(snapshot) {
       }
     }
   }
-  if (typeof snapshot?.scrollY === 'number' && typeof window.scrollTo === 'function') {
-    window.scrollTo({ top: snapshot.scrollY, behavior: 'auto' });
+  if (typeof snapshot?.scrollY === 'number') {
+    const scrolling = document.scrollingElement || null;
+    const read = () => (scrolling ? scrolling.scrollTop : window.scrollY);
+    const write = (top) => {
+      if (typeof window.scrollTo === 'function') window.scrollTo({ top, behavior: 'auto' });
+      else if (scrolling) scrolling.scrollTop = top;
+    };
+    restoreScrollOffset(read, write, snapshot.scrollY);
   }
   if (typeof snapshot?.mainScrollTop === 'number') {
     const mainEl = document.querySelector('.main');
-    if (mainEl) mainEl.scrollTop = snapshot.mainScrollTop;
+    if (mainEl) {
+      restoreScrollOffset(() => mainEl.scrollTop, (top) => { mainEl.scrollTop = top; }, snapshot.mainScrollTop);
+    }
   }
   restoreScrollRegions(snapshot?.scrollRegions);
   const managementDialog = els.content.querySelector('.management-drawer:not(.hidden) [role="dialog"]');
@@ -2000,6 +2036,7 @@ async function signOutFromHub() {
   state.statsRequest = null;
   state.stats = null;
   state.history = null;
+  state.historyStale = false;
   state.secret = '';
   state.session = null;
   state.sessions = null;
@@ -2168,17 +2205,30 @@ function render({ quiet = false } = {}) {
   }
   let html;
   try {
-    // Headline figures remain available while an explicitly selected detail loads.
+    // A detail document hydrates the view; it is never a reason to replace a
+    // painted page. `detailRevision` / `sessionRevision` move on every ingest, so
+    // a background frame routinely invalidates the cache key.
     if (typeof statsDetails !== 'undefined') {
       const spec = detailRequest(state.stats, state.prefs);
       if (spec && !statsDetails.get(spec)) {
         void statsDetails.load(spec).then(() => render({ quiet: true }));
       }
       if (spec && !statsDetails.get(spec)?.data) {
-        renderHero();
-        const error = statsDetails.get(spec)?.error;
-        writeContentHtml(error ? managementError(tr('error.title'), error, 'retry-dashboard') : loadingHtml(), renderState);
-        return;
+        const previous = statsDetails.last(spec);
+        // Sessions cannot be rendered from a summary (it omits the rows); a
+        // device can, because the summary already carries its periods. Either
+        // way the previous revision of the same scope keeps the page alive.
+        const renderable = Boolean(previous) || Boolean(spec.deviceId);
+        if (!renderable) {
+          renderHero();
+          // A background frame keeps whatever is painted. The skeleton and the
+          // failure card belong to a user-driven first open only.
+          if (!quiet) {
+            const error = statsDetails.get(spec)?.error;
+            writeContentHtml(error ? managementError(tr('error.title'), error, 'retry-dashboard') : loadingHtml(), renderState);
+          }
+          return;
+        }
       }
     }
     // Keep the hero update before the view render: it is useful to show the
@@ -2259,10 +2309,13 @@ async function ensureHistory({ force = false, deviceId = state.prefs.deviceFilte
   // fetch; the server still rejects revoked/expired credentials with 401.
   if (!state.secret && !state.session?.id && state.authorization?.authenticated !== true && state.health?.secretRequired) return;
   const scopedDeviceId = String(deviceId || '').trim();
-  if (!force && state.history && state.historyDeviceId === scopedDeviceId) return;
+  if (!force && !state.historyStale && state.history && state.historyDeviceId === scopedDeviceId) return;
   if (state.historyRequest && state.historyRequestDeviceId === scopedDeviceId) return state.historyRequest;
   const requestSequence = ++state.historyRequestSequence;
-  state.historyLoading = true;
+  // A document for this scope stays painted while its replacement loads; only a
+  // first load turns into the full-height placeholder the views render.
+  const hasDocument = Boolean(state.history) && state.historyDeviceId === scopedDeviceId;
+  state.historyLoading = !hasDocument;
   state.historyLoadingDeviceId = scopedDeviceId;
   state.historyError = null;
   state.historyErrorDeviceId = '';
@@ -2277,12 +2330,17 @@ async function ensureHistory({ force = false, deviceId = state.prefs.deviceFilte
       if (requestSequence === state.historyRequestSequence) {
         state.history = full;
         state.historyDeviceId = scopedDeviceId;
+        state.historyStale = false;
       }
     } catch (error) {
       if (requestSequence === state.historyRequestSequence) {
         if (error.status === 401) showAuth(true);
-        state.historyError = error;
-        state.historyErrorDeviceId = scopedDeviceId;
+        // A failed refresh keeps the previous document visible; an inline error
+        // is only honest when there is nothing else to show.
+        if (!hasDocument) {
+          state.historyError = error;
+          state.historyErrorDeviceId = scopedDeviceId;
+        }
       }
     } finally {
       if (requestSequence === state.historyRequestSequence) {
@@ -2312,7 +2370,10 @@ function applyStatsSnapshot(stats, meta = null) {
   state.loading = false;
   state.error = null;
   if (historyChanged) {
-    state.history = null;
+    // Keep the previous document painted. Clearing it collapses every history
+    // panel for a round trip, which also drops the scroll position; the new
+    // document replaces it in place when `/api/history` answers.
+    state.historyStale = true;
     if (state.prefs.view === 'overview' || state.prefs.view === 'trends') {
       void ensureHistory({ force: true }).then(() => render({ quiet: true }));
     }
@@ -2858,6 +2919,7 @@ async function tryConnect(secret, remember = true, { persist = false, silent = f
     state.statsRequest = null;
     state.stats = null;
     state.history = null;
+    state.historyStale = false;
   }
   state.secret = desktopOwnsSecret ? '' : candidateSecret;
   try {
@@ -4397,7 +4459,9 @@ function bindEvents() {
     els.refreshBtn.setAttribute('aria-busy', 'true');
     try {
       await refreshStats();
-      state.history = null;
+      // Keep the painted document: the manual refresh updates it in place
+      // instead of collapsing the page while `/api/history` answers.
+      state.historyStale = true;
       await ensureHistory();
       await Promise.all([
         loadSubscriptions({ force: true }),

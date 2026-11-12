@@ -137,3 +137,37 @@ test('old Hubs retain fleet revision invalidation for both device and session de
     ]) assert.notEqual(detailRequest(changed, prefs).key, key);
   }
 });
+
+test('a detail revision bump keeps the previous document of the same scope renderable', async () => {
+  const { detailRequest, createDetailCache } = await load();
+  const prefs = { view: 'devices', selectedDeviceId: 'a' };
+  const base = { detail: 'summary', devices: [{ deviceId: 'a', detailRevision: 'a-v1' }] };
+  const cache = createDetailCache(async (path) => {
+    const deviceId = decodeURIComponent(path.split('/').pop());
+    return { device: { deviceId, periods: { today: { totalTokens: 100 } } } };
+  });
+  const first = detailRequest(base, prefs);
+  await cache.load(first);
+  const document = { device: { deviceId: 'a', periods: { today: { totalTokens: 100 } } } };
+  assert.deepEqual(cache.last(first), document);
+
+  const bumped = { ...base, devices: [{ deviceId: 'a', detailRevision: 'a-v2' }] };
+  const next = detailRequest(bumped, prefs);
+  assert.notEqual(next.key, first.key, 'a new revision is a new cache key');
+  assert.equal(cache.last(next), cache.last(first), 'the new key still sees the previous document');
+
+  // Scope isolation: another device never hydrates this one, and only the last
+  // four scopes are retained so a fleet cannot pin every document in memory.
+  const other = { key: 'b-v1:device:b', deviceId: 'b', path: '/api/devices/b' };
+  await cache.load(other);
+  assert.equal(cache.last(other).device.deviceId, 'b');
+  assert.equal(cache.last(first).device.deviceId, 'a');
+  for (let index = 0; index < 5; index += 1) {
+    const spec = { key: `s${index}`, deviceId: `scope-${index}`, path: `/api/devices/scope-${index}` };
+    await cache.load(spec);
+  }
+  assert.equal(cache.last(first), null, 'old scopes are evicted past the bound');
+
+  cache.clear();
+  assert.equal(cache.last(next), null, 'logout drops documents with the cache');
+});
