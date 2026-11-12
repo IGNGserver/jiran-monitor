@@ -6,12 +6,15 @@
 // tick on the desktop) and used to rebuild `#content` wholesale. That closes an
 // open Fluent dropdown, snaps a half-typed value back, moves an expanded row and
 // drops focus — the user's own action, undone by a background update. These tests
-// pin the four mechanisms that stop it:
+// pin the five mechanisms that stop it:
 //
 //   1. a quiet (data-driven) render is deferred while a transient control is open;
 //   2. a quiet render that produces identical HTML does not touch the DOM at all;
-//   3. the render snapshot restores open menus, focus and nested scroll regions;
-//   4. the chrome subtrees and the animation layer are only rewritten on a change.
+//   3. the render snapshot restores open menus, focus, the page scroller and
+//      nested scroll regions;
+//   4. a document revision bump keeps the previous document painted instead of
+//      replacing the page with a skeleton;
+//   5. the chrome subtrees and the animation layer are only rewritten on a change.
 //
 // The behaviour that depends on a real DOM is asserted by reading the source; the
 // skip-write / deferral logic is exercised in a `vm` with a stub element.
@@ -26,7 +29,16 @@ const appPath = path.join(__dirname, '..', '..', 'src', 'shared-ui', 'app.js');
 const appSource = fs.readFileSync(appPath, 'utf8');
 
 /** The render/deferral slice of app.js, evaluated against a stub host. */
-function loadRender({ popoverOpen = false, block = false, hidden = false, view = 'overview' } = {}) {
+function loadRender({
+  popoverOpen = false,
+  block = false,
+  hidden = false,
+  view = 'overview',
+  statsDetails = undefined,
+  detailRequest = undefined,
+  renderDevices = () => 'devices',
+  loadingHtml = () => '<loading>'
+} = {}) {
   const source = appSource.slice(
     appSource.indexOf('const DEFERRED_RENDER_EVENTS'),
     appSource.indexOf('async function ensureHistory')
@@ -62,7 +74,12 @@ function loadRender({ popoverOpen = false, block = false, hidden = false, view =
     renderDesktopSyncStatus() {},
     escapeHtml: (value) => String(value ?? ''),
     tr: (key) => key,
-    renderHome: () => String(context.state.stats.value)
+    renderHome: () => String(context.state.stats.value),
+    renderDevices,
+    loadingHtml,
+    managementError: () => '<error>',
+    statsDetails,
+    detailRequest
   };
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -258,4 +275,67 @@ test('non-form settings groups participate in the draft mechanism', () => {
 
 test('an Escape key does not close a page overlay under an open dropdown', () => {
   assert.match(appSource, /const openPopover = els\.content\.querySelector\('fluent-dropdown fluent-listbox:popover-open'\);\s*\n\s*if \(openPopover\) return;/);
+});
+
+test('a detail revision bump keeps the painted page instead of a skeleton', () => {
+  const previous = { device: { deviceId: 'dev', periods: { today: { totalTokens: 10 } } } };
+  const handle = loadRender({
+    view: 'devices',
+    statsDetails: { get: () => ({ error: null }), load: () => Promise.resolve(), last: () => previous },
+    detailRequest: () => ({ key: 'rev-2:device:dev', deviceId: 'dev', path: '/api/devices/dev' }),
+    renderDevices: () => 'devices-body'
+  });
+  handle.context.state.stats = { detail: 'summary', devices: [{ deviceId: 'dev' }] };
+  handle.context.render({ quiet: true });
+  assert.equal(handle.writes(), 1, 'the view is rebuilt from the previous document');
+  assert.equal(handle.html(), 'devices-body');
+});
+
+test('a quiet frame never downgrades a page whose detail is not loaded yet', () => {
+  const handle = loadRender({
+    view: 'devices',
+    statsDetails: { get: () => ({ error: null }), load: () => Promise.resolve(), last: () => null },
+    detailRequest: () => ({ key: 'rev-1:sessions:today', period: 'today', path: '/api/sessions?period=today' })
+  });
+  handle.context.state.stats = { detail: 'summary', devices: [] };
+  handle.context.render({ quiet: true });
+  assert.equal(handle.writes(), 0, 'a background frame must not replace the page with a skeleton');
+
+  // A user-driven first open still gets the skeleton (and the error card) because
+  // there is nothing else to paint.
+  handle.context.render();
+  assert.equal(handle.writes(), 1);
+  assert.equal(handle.html(), '<loading>');
+});
+
+test('the page scroll is captured regardless of focus and restored after a rebuild', () => {
+  assert.match(appSource, /function restoreScrollOffset\(/);
+  assert.match(appSource, /scrollY: pageScrollTop/);
+  assert.doesNotMatch(appSource, /scrollY: active &&/, 'reading with the wheel leaves focus on <body>');
+  assert.match(appSource, /restoreScrollOffset\(read, write, snapshot\.scrollY\)/);
+  assert.match(appSource, /restoreScrollOffset\(\(\) => mainEl\.scrollTop/);
+});
+
+test('a scroll offset the rebuilt document cannot reach yet is retried', () => {
+  const source = appSource.slice(
+    appSource.indexOf('function restoreScrollOffset'),
+    appSource.indexOf('function restoreRenderState')
+  );
+  const frames = [];
+  let position = 0;
+  let limit = 300;
+  const context = { Math, requestAnimationFrame: (callback) => { frames.push(callback); } };
+  vm.createContext(context);
+  vm.runInContext(`${source}; restoreScrollOffset;`, context);
+  context.restoreScrollOffset(() => position, (top) => { position = Math.min(top, limit); }, 900);
+  assert.equal(position, 300, 'the short document clamps the first attempt');
+  limit = 1200;
+  frames.shift()();
+  assert.equal(position, 900, 'the retry lands once the content is tall enough');
+});
+
+test('a history revision change keeps the painted document', () => {
+  assert.match(appSource, /state\.historyStale = true/);
+  assert.match(appSource, /if \(!force && !state\.historyStale && state\.history && state\.historyDeviceId === scopedDeviceId\) return;/);
+  assert.doesNotMatch(appSource, /if \(historyChanged\) \{\s*state\.history = null;/, 'a refresh must not blank the charts');
 });

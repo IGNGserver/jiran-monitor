@@ -28,15 +28,41 @@ export function detailRequest(stats, prefs) {
   return null;
 }
 
+// A detail document is scoped by what it describes, not by the revision that
+// requested it: a device id or one session period. The last successful document
+// of a scope is what a revision bump keeps painting until its replacement lands.
+function detailScope(spec) {
+  if (!spec) return '';
+  if (spec.deviceId) return `device:${spec.deviceId}`;
+  if (spec.period) return `sessions:${spec.period}`;
+  return '';
+}
+
 export function createDetailCache(request) {
   const entries = new Map();
+  const lastDocuments = new Map();
   let generation = 0;
+  function remember(spec, data) {
+    const scope = detailScope(spec);
+    if (!scope || !data) return;
+    // A viewer renders one scope at a time; four covers a selection change and
+    // its previous scope without retaining a per-device document for the fleet.
+    lastDocuments.delete(scope);
+    lastDocuments.set(scope, data);
+    while (lastDocuments.size > 4) lastDocuments.delete(lastDocuments.keys().next().value);
+  }
   return {
     get(spec) { return spec ? entries.get(spec.key) : null; },
+    /**
+     * The last document successfully loaded for this spec's scope, regardless of
+     * its revision. A refresh renders this until the new revision arrives.
+     */
+    last(spec) { return spec ? lastDocuments.get(detailScope(spec)) || null : null; },
     clear() {
       generation++;
       for (const entry of entries.values()) entry.controller?.abort();
       entries.clear();
+      lastDocuments.clear();
     },
     load(spec) {
       if (!spec) return Promise.resolve();
@@ -53,7 +79,10 @@ export function createDetailCache(request) {
       entry.promise = Promise.resolve().then(() => request(spec.path, { signal: entry.controller.signal })).then((data) => {
         if (spec.deviceId && (data?.device?.deviceId !== spec.deviceId || !data.device.periods)) throw new Error('bad_device_detail');
         if (spec.period && !Array.isArray(data?.sessions)) throw new Error('bad_session_list');
-        if (generation === current) entry.data = data;
+        if (generation === current) {
+          entry.data = data;
+          remember(spec, data);
+        }
       }).catch((error) => {
         if (generation === current) entry.error = error;
       });
