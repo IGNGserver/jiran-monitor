@@ -1,19 +1,51 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_TOOLTIP = 'Jiran';
+const MACOS_TRAY_MAX_HEIGHT = 22;
+
+function retinaSiblingPath(filePath) {
+  if (!filePath || typeof filePath !== 'string') return '';
+  const parsed = path.parse(filePath);
+  if (!parsed.ext || parsed.name.endsWith('@2x')) return '';
+  return path.join(parsed.dir, `${parsed.name}@2x${parsed.ext}`);
+}
 
 function trayIcon({ iconPath, templateIconPath, platform, nativeImage }) {
-  const sourcePath = platform === 'darwin' && templateIconPath
+  const isDarwin = platform === 'darwin';
+  const sourcePath = isDarwin && templateIconPath
     ? templateIconPath
     : iconPath;
   const image = nativeImage.createFromPath(sourcePath);
+
+  if (isDarwin && templateIconPath) {
+    // Preserve @1x/@2x representations: NativeImage.resize() collapses down to
+    // a single 1x bitmap in Electron, which blurs Retina menu bar icons.
+    const scaleFactors = typeof image.getScaleFactors === 'function' ? image.getScaleFactors() : [];
+    const at2xPath = retinaSiblingPath(sourcePath);
+    if (!scaleFactors.includes(2) && at2xPath && typeof image.addRepresentation === 'function' && fs.existsSync(at2xPath)) {
+      image.addRepresentation({
+        scaleFactor: 2,
+        dataURL: `data:image/png;base64,${fs.readFileSync(at2xPath).toString('base64')}`
+      });
+    }
+    const size = typeof image.getSize === 'function' ? image.getSize() : null;
+    const result = size && size.height > 0 && size.height <= MACOS_TRAY_MAX_HEIGHT
+      ? image
+      : image.resize({ height: 20, quality: 'best' });
+    if (typeof result.setTemplateImage === 'function') {
+      result.setTemplateImage(true);
+    }
+    return result;
+  }
+
   const resized = image.resize({
-    ...(platform === 'darwin' ? { height: 20 } : { width: 20, height: 20 }),
+    ...(isDarwin ? { height: 20 } : { width: 20, height: 20 }),
     quality: 'best'
   });
-  if (platform === 'darwin' && typeof resized.setTemplateImage === 'function') {
+  if (isDarwin && typeof resized.setTemplateImage === 'function') {
     resized.setTemplateImage(true);
   }
   return resized;
@@ -138,5 +170,5 @@ module.exports = {
   buildTrayMenuTemplate,
   createApplicationTray,
   trayIcon,
-  TRAY_ICON_PATH: path.join(__dirname, '..', '..', 'assets', 'icons', 'tray-token-monitor.png')
+  TRAY_ICON_PATH: path.join(__dirname, '..', '..', 'assets', 'icons', 'tray-token-monitorTemplate.png')
 };
