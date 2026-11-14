@@ -82,6 +82,7 @@ const { mergedLocalAllTimeSessions } = require('../shared/localSessions');
 const { historyPreview, historyRevision } = require('../shared/history');
 const { readSessionDetail } = require('../shared/sessionDetail');
 const linuxAutostart = require('./linuxAutostart');
+const macosAutostart = require('./macosAutostart');
 const { classifyStreamFailure } = require('./syncConnection');
 const { composeLocalSyncStats, reattachLocalNativeView } = require('./syncDisplayStats');
 const {
@@ -789,6 +790,20 @@ function linuxAutostartOptions() {
   return { appPath: process.execPath };
 }
 
+function macosAutostartOptions() {
+  if (process.platform !== 'darwin') return {};
+  return { appPath: electronLoginItemPath() };
+}
+
+function clearLegacyMacosLoginItem() {
+  if (process.platform !== 'darwin') return;
+  try {
+    if (app.getLoginItemSettings().openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: false });
+    }
+  } catch (_) { /* best-effort cleanup of legacy SMAppService login item */ }
+}
+
 // A login-item launch carries this argument so the window stays in the tray; it is
 // deliberately separate from the retired `--started-at-login` marker, which is only
 // recognised on read for entries older builds left behind.
@@ -800,16 +815,18 @@ function hiddenLaunchRequested() {
 
 function loginItemEnabledHere() {
   if (!app.isPackaged) return false;
-  // Electron login items only cover macOS/Windows; on Linux we manage an XDG
-  // autostart entry ourselves. AppImage and native package builds use
-  // different executable-path sources.
+  // Electron login items only cover Windows; on Linux and macOS we manage our
+  // own autostart entries (XDG desktop file / LaunchAgent plist) so sign-in
+  // launches receive `--hidden`.
   if (process.platform === 'linux') return linuxAutostart.autostartSupported(linuxAutostartOptions());
+  if (process.platform === 'darwin') return macosAutostart.autostartSupported(macosAutostartOptions());
   return true;
 }
 
 function currentLoginItemState() {
   if (!loginItemEnabledHere()) return false;
   if (process.platform === 'linux') return linuxAutostart.isAutostartEnabled(linuxAutostartOptions());
+  if (process.platform === 'darwin') return macosAutostart.isAutostartEnabled(macosAutostartOptions());
   try { return Boolean(app.getLoginItemSettings().openAtLogin); }
   catch (_) { return false; }
 }
@@ -830,16 +847,20 @@ function applyLoginItem(startAtLogin) {
       hidden: Boolean(startAtLogin && settings.startHidden !== false)
     });
   }
-  // `openAsHidden` is macOS-only; Windows takes the launch argument instead. Both
-  // mean "a sign-in launch stays in the tray", which is the default the product
-  // wants, while a double-click from the icon still shows the window.
+  if (process.platform === 'darwin') {
+    clearLegacyMacosLoginItem();
+    return macosAutostart.setAutostartEnabled(Boolean(startAtLogin), {
+      ...macosAutostartOptions(),
+      hidden: Boolean(startAtLogin && settings.startHidden !== false)
+    });
+  }
+  // Windows takes the launch argument directly so a sign-in launch stays in the
+  // tray while a double-click from the icon still shows the window.
   const executablePath = electronLoginItemPath();
   app.setLoginItemSettings({
     openAtLogin: Boolean(startAtLogin),
     ...(executablePath ? { path: executablePath } : {}),
-    ...(process.platform === 'darwin'
-      ? { openAsHidden: Boolean(startAtLogin && settings.startHidden !== false) }
-      : { args: startAtLogin && settings.startHidden !== false ? [HIDDEN_LAUNCH_ARG] : [] })
+    args: startAtLogin && settings.startHidden !== false ? [HIDDEN_LAUNCH_ARG] : []
   });
   return currentLoginItemState();
 }
@@ -847,7 +868,18 @@ function applyLoginItem(startAtLogin) {
 function syncLoginItemSettingFromOs() {
   if (!settings) return;
   const actual = currentLoginItemState();
-  if (settings.startAtLogin === actual) return;
+  if (settings.startAtLogin === actual) {
+    if (process.platform === 'darwin' && settings.startAtLogin === true) {
+      const entry = macosAutostart.readAutostartEntry(macosAutostartOptions());
+      const expectedHidden = settings.startHidden !== false;
+      if (entry.hidden !== expectedHidden) {
+        applyLoginItem(true);
+      } else {
+        clearLegacyMacosLoginItem();
+      }
+    }
+    return;
+  }
   if (settings.startAtLogin === true && actual === false) {
     // A stale registration is common after a portable/installed executable is
     // moved or upgraded. Repair it against the current executable path, but do
