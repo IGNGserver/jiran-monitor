@@ -231,10 +231,6 @@ jobs:
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
         run: |
           set -euo pipefail
-          if [ -z "$MAC_CSC_LINK" ] || [ -z "$APPLE_API_KEY_ID" ]; then
-            echo "Mac code signing credentials not configured; skipping verification."
-            exit 0
-          fi
           app_path=$(find dist -maxdepth 2 -name '*.app' -print -quit)
           if [ -z "$app_path" ]; then
             echo "no .app bundle found under dist/" >&2
@@ -246,6 +242,23 @@ jobs:
             exit 1
           fi
           codesign --verify --deep --strict --verbose=2 "$app_path"
+          if [ -z "$MAC_CSC_LINK" ]; then
+            expected_id=$(node -p "require('./package.json').build.appId")
+            signature_info="$(codesign -dvv "$app_path" 2>&1)"
+            printf '%s\n' "$signature_info"
+            if ! printf '%s\n' "$signature_info" | grep -q '^Signature=adhoc$'; then
+              echo "expected ad-hoc signature when MAC_CSC_LINK is unset" >&2
+              exit 1
+            fi
+            if ! printf '%s\n' "$signature_info" | grep -qxF "Identifier=${expected_id}"; then
+              echo "expected Identifier=${expected_id} in ad-hoc signature" >&2
+              exit 1
+            fi
+          fi
+          if [ -z "$MAC_CSC_LINK" ] || [ -z "$APPLE_API_KEY_ID" ]; then
+            echo "Mac notarization credentials not configured; skipping notarization."
+            exit 0
+          fi
           spctl -a -vvv --type execute "$app_path"
           xcrun stapler validate "$app_path"
           xcrun notarytool submit "$dmg_path" \
