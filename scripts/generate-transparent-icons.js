@@ -2,7 +2,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow } = require('electron');
 
 const ROOT = path.resolve(__dirname, '..');
 const ASSETS_DIR = path.join(ROOT, 'assets');
@@ -11,17 +10,97 @@ const BUILD_ICONS_DIR = path.join(ROOT, 'build', 'icons');
 const TEMP_HTML = path.join(ROOT, 'build', 'temp_icon_render.html');
 const ANDROID_ICON_PATH = path.join(ROOT, 'src', 'hub', 'web', 'icons', 'icon-512.png');
 
+const TRAY_TEMPLATE_NAME = 'tray-token-monitorTemplate.png';
+const TRAY_TEMPLATE_2X_NAME = 'tray-token-monitorTemplate@2x.png';
+const LEGACY_TRAY_NAME = 'tray-token-monitor.png';
+const TRAY_ICON_SIZES = Object.freeze({ oneX: 20, twoX: 40 });
+
+/**
+ * Monochrome template SVG matching the Dock/app emblem geometry (split-top ring,
+ * separated bottom-left dot, and upright T joined into the bottom-right arc).
+ */
+function buildTrayTemplateSvg(size = TRAY_ICON_SIZES.oneX) {
+  // Normalized 20x20 pt grid (17pt glyph centered with 1.5pt breathing margin inside
+  // the 22pt macOS menu bar); key orthogonal edges snap cleanly on @1x and @2x.
+  const cx = 10;
+  const cy = 10;
+  const rOut = 8.5;
+  const stroke = 2.5;
+  const rIn = rOut - stroke;
+  const rMid = (rOut + rIn) / 2;
+  const gapHalf = 1.0;
+
+  const yOutTop = cy - Math.sqrt(rOut * rOut - gapHalf * gapHalf);
+  const yInTop = cy - Math.sqrt(rIn * rIn - gapHalf * gapHalf);
+
+  const tHalfBar = 4.0;
+  const tHalfStem = stroke / 2;
+  const tTop = cy - 1.5;
+  const tBot = tTop + stroke;
+  const xStemL = cx - tHalfStem;
+  const xStemR = cx + tHalfStem;
+  const yStemBotL = cy + Math.sqrt(rOut * rOut - tHalfStem * tHalfStem);
+  const yStemInnerR = cy + Math.sqrt(rIn * rIn - tHalfStem * tHalfStem);
+
+  const angleOf = (x, y) => Math.atan2(y - cy, x - cx);
+  const cwSpan = (a0, a1) => ((a1 - a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  const outLarge = cwSpan(angleOf(cx + gapHalf, yOutTop), angleOf(xStemL, yStemBotL)) > Math.PI ? 1 : 0;
+  const inLarge = cwSpan(angleOf(cx + gapHalf, yInTop), angleOf(xStemR, yStemInnerR)) > Math.PI ? 1 : 0;
+
+  const dotAngle = (144.4 * Math.PI) / 180;
+  const dotCx = cx + rMid * Math.cos(dotAngle);
+  const dotCy = cy + rMid * Math.sin(dotAngle);
+  const dotR = 1.8;
+  const cutR = 2.85;
+
+  // Intersect the concentric dot-gap circle with the outer/inner ring boundaries
+  // on the upper (9 o'clock) side so no SVG <mask> is needed.
+  const deltaOut = Math.acos((rOut * rOut + rMid * rMid - cutR * cutR) / (2 * rOut * rMid));
+  const deltaIn = Math.acos((rIn * rIn + rMid * rMid - cutR * cutR) / (2 * rIn * rMid));
+  const aOutEnd = dotAngle + deltaOut;
+  const aInEnd = dotAngle + deltaIn;
+  const xOutEnd = cx + rOut * Math.cos(aOutEnd);
+  const yOutEnd = cy + rOut * Math.sin(aOutEnd);
+  const xInEnd = cx + rIn * Math.cos(aInEnd);
+  const yInEnd = cy + rIn * Math.sin(aInEnd);
+
+  const f = (n) => n.toFixed(3);
+  const rightAndT = [
+    `M ${f(cx + gapHalf)} ${f(yOutTop)}`,
+    `A ${f(rOut)} ${f(rOut)} 0 ${outLarge} 1 ${f(xStemL)} ${f(yStemBotL)}`,
+    `L ${f(xStemL)} ${f(tBot)}`,
+    `L ${f(cx - tHalfBar)} ${f(tBot)}`,
+    `L ${f(cx - tHalfBar)} ${f(tTop)}`,
+    `L ${f(cx + tHalfBar)} ${f(tTop)}`,
+    `L ${f(cx + tHalfBar)} ${f(tBot)}`,
+    `L ${f(xStemR)} ${f(tBot)}`,
+    `L ${f(xStemR)} ${f(yStemInnerR)}`,
+    `A ${f(rIn)} ${f(rIn)} 0 ${inLarge} 0 ${f(cx + gapHalf)} ${f(yInTop)}`,
+    'Z'
+  ].join(' ');
+
+  const leftArc = [
+    `M ${f(cx - gapHalf)} ${f(yInTop)}`,
+    `L ${f(cx - gapHalf)} ${f(yOutTop)}`,
+    `A ${f(rOut)} ${f(rOut)} 0 0 0 ${f(xOutEnd)} ${f(yOutEnd)}`,
+    `A ${f(cutR)} ${f(cutR)} 0 0 1 ${f(xInEnd)} ${f(yInEnd)}`,
+    `A ${f(rIn)} ${f(rIn)} 0 0 1 ${f(cx - gapHalf)} ${f(yInTop)}`,
+    'Z'
+  ].join(' ');
+
+  // macOS template images use only the alpha channel; keep every pixel pure black.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 20 20">
+  <path d="${rightAndT}" fill="#000000" />
+  <path d="${leftArc}" fill="#000000" />
+  <circle cx="${f(dotCx)}" cy="${f(dotCy)}" r="${f(dotR)}" fill="#000000" />
+</svg>`;
+}
+
 function buildLogoSvg(size = 1024, isTray = false, androidIconDataUrl = '') {
   const scale = size / 1024;
 
   if (isTray) {
-    // Use the same T mark as the renderer title. macOS template images use only
-    // alpha, so keep every visible pixel monochrome and leave the tint to the OS.
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#000000">
-  <path d="M4 16 A 8.5 8.5 0 1 1 17.5 20" stroke-width="2.6" stroke-linecap="round" />
-  <circle cx="4" cy="16" r="1.5" fill="#000000" stroke="none" />
-  <path d="M9 9.5 h7 M12.5 9.5 v6 c0 1.8 1.2 2.8 2.8 2.8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
-</svg>`;
+    return buildTrayTemplateSvg(size);
   }
 
   // Reuse the original Android/PWA T mark as the desktop source. Keeping the
@@ -179,7 +258,29 @@ async function renderSvgToPng(win, svgContent, size) {
   return pngBuf;
 }
 
-app.whenReady().then(async () => {
+async function renderSvgWithSharp(svgContent, size) {
+  const sharp = require('sharp');
+  return sharp(Buffer.from(svgContent))
+    .resize(size, size)
+    .png()
+    .toBuffer();
+}
+
+async function generateTrayIcons(renderSvg = renderSvgWithSharp, iconsDir = ICONS_DIR) {
+  fs.mkdirSync(iconsDir, { recursive: true });
+  const oneXPng = await renderSvg(buildTrayTemplateSvg(TRAY_ICON_SIZES.oneX), TRAY_ICON_SIZES.oneX);
+  const twoXPng = await renderSvg(buildTrayTemplateSvg(TRAY_ICON_SIZES.twoX), TRAY_ICON_SIZES.twoX);
+  fs.writeFileSync(path.join(iconsDir, TRAY_TEMPLATE_NAME), oneXPng);
+  fs.writeFileSync(path.join(iconsDir, TRAY_TEMPLATE_2X_NAME), twoXPng);
+  const legacyPath = path.join(iconsDir, LEGACY_TRAY_NAME);
+  if (fs.existsSync(legacyPath)) {
+    fs.unlinkSync(legacyPath);
+  }
+}
+
+async function generateAllWithElectron() {
+  const { app, BrowserWindow } = require('electron');
+  await app.whenReady();
   try {
     fs.mkdirSync(ASSETS_DIR, { recursive: true });
     fs.mkdirSync(ICONS_DIR, { recursive: true });
@@ -210,9 +311,8 @@ app.whenReady().then(async () => {
     const mac1024Png = await renderSvgToPng(win, buildMacAppIconSvg(1024, androidIconDataUrl), 1024);
     fs.writeFileSync(path.join(ASSETS_DIR, 'icon-mac.png'), mac1024Png);
 
-    // 44x44 high-DPI tray icon matching test assertion
-    const trayPng = await renderSvgToPng(win, buildLogoSvg(44, true), 44);
-    fs.writeFileSync(path.join(ICONS_DIR, 'tray-token-monitor.png'), trayPng);
+    // macOS 1x/2x template tray icons (20x20 and 40x40)
+    await generateTrayIcons((svg, sz) => renderSvgToPng(win, svg, sz), ICONS_DIR);
 
     // Sizes for ICO container
     const sizes = [16, 24, 32, 48, 64, 128, 256];
@@ -234,11 +334,39 @@ app.whenReady().then(async () => {
     win.destroy();
     if (fs.existsSync(TEMP_HTML)) fs.unlinkSync(TEMP_HTML);
 
-    console.log('Successfully generated crisp high-DPI app icons (full-bleed + macOS grid) and tray icon!');
+    console.log('Successfully generated crisp high-DPI app icons (full-bleed + macOS grid) and tray icons!');
     app.exit(0);
   } catch (err) {
     console.error('Error generating icons:', err);
     if (fs.existsSync(TEMP_HTML)) fs.unlinkSync(TEMP_HTML);
     app.exit(1);
   }
-});
+}
+
+if (require.main === module) {
+  const trayOnly = process.argv.includes('--tray-only') || !process.versions.electron;
+  if (trayOnly) {
+    generateTrayIcons()
+      .then(() => {
+        console.log('Successfully generated 1x/2x macOS template tray icons!');
+      })
+      .catch((err) => {
+        console.error('Error generating tray icons:', err);
+        process.exit(1);
+      });
+  } else {
+    generateAllWithElectron();
+  }
+}
+
+module.exports = {
+  TRAY_ICON_SIZES,
+  TRAY_TEMPLATE_NAME,
+  TRAY_TEMPLATE_2X_NAME,
+  buildTrayTemplateSvg,
+  buildLogoSvg,
+  buildMacAppIconSvg,
+  squirclePath,
+  packIco,
+  generateTrayIcons
+};

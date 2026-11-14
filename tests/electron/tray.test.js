@@ -2,9 +2,12 @@
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
-const { createApplicationTray } = require('../../src/electron/tray');
+const { createApplicationTray, trayIcon } = require('../../src/electron/tray');
 
 class FakeTray extends EventEmitter {
   constructor(image) {
@@ -102,4 +105,72 @@ test('macOS uses the template tray icon', () => {
   });
   assert.equal(handle.tray.image.sourcePath, '/tmp/template.png');
   assert.equal(handle.tray.image.resizeOptions.height, 20);
+});
+
+test('macOS preserves pre-sized Retina @2x template icons without resizing', () => {
+  let resizeCalled = false;
+  let templateMarked = false;
+  const result = trayIcon({
+    platform: 'darwin',
+    iconPath: '/tmp/app.png',
+    templateIconPath: '/tmp/trayTemplate.png',
+    nativeImage: {
+      createFromPath: (sourcePath) => ({
+        sourcePath,
+        getSize: () => ({ width: 20, height: 20 }),
+        getScaleFactors: () => [1, 2],
+        resize() {
+          resizeCalled = true;
+          return this;
+        },
+        setTemplateImage(value) {
+          templateMarked = value;
+        }
+      })
+    }
+  });
+  assert.equal(result.sourcePath, '/tmp/trayTemplate.png');
+  assert.equal(resizeCalled, false);
+  assert.equal(templateMarked, true);
+});
+
+test('macOS attaches a sibling @2x representation when createFromPath returns only 1x', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jiran-tray-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const oneX = path.join(dir, 'trayTemplate.png');
+  const twoX = path.join(dir, 'trayTemplate@2x.png');
+  fs.writeFileSync(oneX, Buffer.from('1x'));
+  fs.writeFileSync(twoX, Buffer.from('2x'));
+
+  const reps = [];
+  let resizeCalled = false;
+  let templateMarked = false;
+  trayIcon({
+    platform: 'darwin',
+    iconPath: '/tmp/app.png',
+    templateIconPath: oneX,
+    nativeImage: {
+      createFromPath: (sourcePath) => ({
+        sourcePath,
+        getSize: () => ({ width: 20, height: 20 }),
+        getScaleFactors: () => [1],
+        addRepresentation(opts) {
+          reps.push(opts);
+        },
+        resize() {
+          resizeCalled = true;
+          return this;
+        },
+        setTemplateImage(value) {
+          templateMarked = value;
+        }
+      })
+    }
+  });
+
+  assert.equal(resizeCalled, false);
+  assert.equal(templateMarked, true);
+  assert.equal(reps.length, 1);
+  assert.equal(reps[0].scaleFactor, 2);
+  assert.equal(reps[0].dataURL, `data:image/png;base64,${Buffer.from('2x').toString('base64')}`);
 });
