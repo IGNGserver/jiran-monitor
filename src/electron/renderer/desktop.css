@@ -74,10 +74,24 @@ body.is-win32 .main {
   padding-top: calc(54px + var(--safe-top));
 }
 
-/* The topbar clears the macOS traffic lights when the inset title bar is used. */
+/* At desktop widths (> 860px) macOS traffic lights sit over the sidebar rather
+   than the main topbar; only the compact drawer layout indents the topbar. */
+body.is-mac .sidebar {
+  padding-top: calc(44px + var(--safe-top));
+}
+
 body.is-mac .topbar {
-  padding-left: 78px;
   -webkit-app-region: drag;
+}
+
+@media (max-width: 860px) {
+  body.is-mac .topbar {
+    padding-left: 78px;
+  }
+
+  body.is-mac .sidebar {
+    padding-top: calc(48px + var(--safe-top));
+  }
 }
 
 /* Interactive children must opt out of the drag region or they cannot be clicked. */
@@ -254,6 +268,7 @@ body.is-mac .period-tabs {
   min-width: 0;
   min-height: 48px;
   padding: 2px 4px;
+  cursor: pointer;
 }
 
 .desktop-setting-switch-copy {
@@ -279,7 +294,6 @@ body.is-mac .period-tabs {
 .desktop-setting-switch-row > fluent-switch {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   width: 40px;
   height: 20px;
   min-width: 40px;

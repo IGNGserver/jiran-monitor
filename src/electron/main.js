@@ -986,14 +986,18 @@ function applyWindowsTitleBarOverlay(target = mainWindow, source = settings) {
 function applyNativeTheme(target = mainWindow, source = settings) {
   const surface = resolveNativeSurface(source);
   const glass = nativeBlurEnabled(source);
+  const windowsSurface = windowsSurfaceFor({ systemGlass: glass, source });
   if (target && !target.isDestroyed?.() && typeof target.setBackgroundColor === 'function') {
-    if (!glass && !windowsSurfaceFor({ source }).nativeBackdrop) {
+    if (!glass && !windowsSurface.nativeBackdrop) {
       try { target.setBackgroundColor(surface.background); } catch (_) {}
     } else {
       try { target.setBackgroundColor('#00000000'); } catch (_) {}
     }
   }
   applyWindowsTitleBarOverlay(target, source);
+  if (windowsSurface.useLegacyAccent) {
+    applyWindowsAccentBlur(target, { dark: nativeTheme.shouldUseDarkColors });
+  }
 }
 
 function nativeBlurEnabled(source = settings) {
@@ -3153,7 +3157,6 @@ function createWindow(boundsOverride, options = {}) {
   applyNativeTheme(win);
   applyMacosNativeWindowButtons(win);
   applyWindowsChrome(win, { round: true });
-  if (windowsSurface.useLegacyAccent) applyWindowsAccentBlur(win);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };

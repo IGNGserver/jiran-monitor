@@ -1,6 +1,14 @@
 import { setupBrowserPwa } from './core/browserPwa.js';
 let browserPwaControls = null;
-import { finishFluentRender, setupFluentInteractions, syncFluentMotion, animateNavigation, animateDataUpdate, setFluentDropdownValue } from './core/fluent.js';
+import {
+  finishFluentRender,
+  setupFluentInteractions,
+  syncFluentMotion,
+  animateNavigation,
+  animateDataUpdate,
+  setFluentDropdownValue,
+  setFluentRadioGroupValue
+} from './core/fluent.js';
 import {
   capabilities,
   clearSecret,
@@ -56,7 +64,8 @@ import { renderDevices } from './views/devices.js';
 import {
   appUpdateInstallErrorText,
   appUpdateToastText,
-  readDesktopSettingsPatch
+  readDesktopSettingsPatch,
+  surfaceValueFromSettings
 } from './views/settingsDesktop.js';
 import { managementSections, normalizeManagementSection, renderSettingsPage } from './views/settings.js';
 import { submitTransfer } from './views/transfer.js';
@@ -480,6 +489,7 @@ const state = {
   managementReturnFocus: null,
   deferredInstall: null,
   formDrafts: new Map(),
+  hubSecretDraft: '',
   managementRequestSeq: {
     subscriptions: 0,
     pricing: 0,
@@ -1030,11 +1040,25 @@ function renderChrome() {
   els.periodTabs.dataset.selection = 'period';
   els.periodTabs.setAttribute('name', 'period');
   els.periodTabs.setAttribute('aria-label', tr('period.label'));
-  const periodTabsHtml = segButtons(periodOptions, selectedPeriod, 'period');
-  // Rebuild only on a real change: this list is inside the scope bar the user
-  // interacts with, and replacing it every frame moved focus off the selected tab.
-  writeHtmlIfChanged(els.periodTabs, periodTabsHtml);
-  els.periodTabs.value = selectedPeriod;
+  const periodOptionsKey = periodOptions.map(([value, label]) => `${value}\u0000${label}`).join('\u0001');
+  if (els.periodTabs.dataset.optionsKey !== periodOptionsKey) {
+    els.periodTabs.dataset.optionsKey = periodOptionsKey;
+    const periodTabsHtml = segButtons(periodOptions, selectedPeriod, 'period');
+    const focusedRadio = els.periodTabs.contains(document.activeElement)
+      ? document.activeElement?.closest?.('fluent-radio')
+      : null;
+    const focusedValue = focusedRadio?.value || '';
+    // Rebuild only when tabs or locale changed; keep DOM nodes intact on selection switches so focus never drops.
+    writeHtmlIfChanged(els.periodTabs, periodTabsHtml);
+    if (focusedValue) {
+      queueMicrotask(() => {
+        const target = [...els.periodTabs.querySelectorAll('fluent-radio')]
+          .find((radio) => radio.value === focusedValue || radio.value === selectedPeriod);
+        target?.focus?.({ preventScroll: true });
+      });
+    }
+  }
+  setFluentRadioGroupValue(els.periodTabs, selectedPeriod);
 
   els.pageTitle.textContent = tr(`nav.${state.prefs.view}`);
   const allDevices = state.stats?.devices || [];
@@ -1258,7 +1282,7 @@ function restoreFormDrafts() {
       if (control.matches('fluent-switch, fluent-checkbox')) {
         control.checked = Boolean(value.checked);
       } else if (control.matches('fluent-radio-group')) {
-        if (value.value !== undefined) control.value = value.value;
+        if (value.value !== undefined) setFluentRadioGroupValue(control, value.value);
       } else if (control.type === 'checkbox' || control.type === 'radio') {
         control.checked = Boolean(value.checked);
       } else if (control.multiple && Array.isArray(value.value)) {
@@ -1347,6 +1371,11 @@ function describeFormControl(element) {
 function describeActiveElement(element) {
   const selection = element?.control || element;
   if (!element || element === document.body || element === document.documentElement) return null;
+  const selectionSnapshot = {
+    selectionStart: typeof selection.selectionStart === 'number' ? selection.selectionStart : null,
+    selectionEnd: typeof selection.selectionEnd === 'number' ? selection.selectionEnd : null,
+    selectionDirection: selection.selectionDirection || 'none'
+  };
   // Draft forms come first: a control registered by `rememberFormDraft` may also
   // carry an identity attribute, and the form-scoped descriptor is the more
   // precise one.
@@ -1356,17 +1385,14 @@ function describeActiveElement(element) {
     return {
       kind: 'form-control',
       ...formControl,
-      selectionStart: typeof selection.selectionStart === 'number' ? selection.selectionStart : null,
-      selectionEnd: typeof selection.selectionEnd === 'number' ? selection.selectionEnd : null,
-      selectionDirection: selection.selectionDirection || 'none'
+      ...selectionSnapshot
     };
   }
-  // Standalone settings controls (the desktop groups are not draft forms) keep
-  // their identity by `id` or `name`, so a frame does not drop focus mid-edit.
-  if (element.id) return { kind: 'id', id: element.id };
-  if (element.name) return { kind: 'named', name: element.name };
+  // Standalone controls (e.g. `#desktop-hub-secret-input`) keep identity by `id` or `name` across frames.
+  if (element.id) return { kind: 'id', id: element.id, ...selectionSnapshot };
+  if (element.name) return { kind: 'named', name: element.name, ...selectionSnapshot };
   const identity = identityKeyFor(element);
-  if (identity) return { kind: 'data', attribute: identity.attribute, value: identity.value };
+  if (identity) return { kind: 'data', attribute: identity.attribute, value: identity.value, ...selectionSnapshot };
   // A menu summary is identified by the menu it opens.
   const summary = element.closest('summary');
   if (summary) {
@@ -1524,6 +1550,8 @@ function restoreScrollOffset(read, write, top, attempts = 2) {
 function restoreRenderState(snapshot) {
   finishFluentRender(els.content, state.prefs.view);
   restoreFormDrafts();
+  const remoteSecretInput = els.content.querySelector('[data-hub-secret-input]');
+  if (remoteSecretInput && state.hubSecretDraft) remoteSecretInput.value = state.hubSecretDraft;
   els.content.querySelectorAll('[data-web-settings-form]').forEach(syncWebSettingsFormState);
   // Reopen the dropdowns that were open *before* the rebuild. `showPopover()`
   // re-attaches the same listbox implementation, so the selection popover does
@@ -1565,8 +1593,7 @@ function restoreRenderState(snapshot) {
   if (active && !active.disabled) {
     active.focus({ preventScroll: true });
     const selection = active.control || active;
-    if (snapshot.active.kind === 'form-control'
-      && typeof snapshot.active.selectionStart === 'number'
+    if (typeof snapshot.active.selectionStart === 'number'
       && typeof selection.setSelectionRange === 'function') {
       try {
         selection.setSelectionRange(snapshot.active.selectionStart, snapshot.active.selectionEnd, snapshot.active.selectionDirection);
@@ -2140,6 +2167,7 @@ function hasOpenTransientInteraction() {
   // clicking elsewhere must not suppress updates for the rest of the session.
   const active = document?.activeElement;
   if (active?.closest) {
+    if (active.closest('[data-hub-secret-input]') && state.hubSecretDraft) return true;
     const scope = active.closest('[data-draft-key]');
     const key = String(scope?.dataset?.draftKey || '').trim();
     if (key && state.formDrafts?.get(key)?.dirty) return true;
@@ -2291,6 +2319,7 @@ let lastRenderedView = '';
 function writeContentHtml(html, renderState) {
   const view = state.prefs.view;
   if (html === lastRenderedHtml && view === lastRenderedView) {
+    if (typeof syncDesktopSettingsControls === 'function') syncDesktopSettingsControls();
     if (typeof renderDesktopConnectionError === 'function') renderDesktopConnectionError();
     return;
   }
@@ -3613,6 +3642,7 @@ function switchView(viewId, { updateHistory = true, replace = false, tab = '', s
   state.accountDrawerOpen = false;
   state.subscriptionDrawerOpen = false;
   state.pricingDrawerOpen = false;
+  if (validView !== 'settings') state.hubSecretDraft = '';
   const changed = state.prefs.view !== validView
     || (validView === 'usage' && state.prefs.usageTab !== usageTab)
     || (validView === 'settings' && state.prefs.managementSection !== managementSection)
@@ -4238,6 +4268,8 @@ function bindEvents() {
   });
 
   els.content.addEventListener('input', (event) => {
+    const remoteSecretInput = event.target.closest?.('[data-hub-secret-input]');
+    if (remoteSecretInput) state.hubSecretDraft = String(remoteSecretInput.value ?? '');
     rememberFormDraft(event.target);
     syncWebSettingsFormState(event.target.closest('[data-web-settings-form]'));
     const modelSearch = event.target.closest?.('[data-model-search]');
@@ -4403,7 +4435,10 @@ function bindEvents() {
     if (!control) return;
     const form = control.closest('[data-desktop-settings]');
     if (!form) return;
-    void saveDesktopSettings(readDesktopSettingsPatch(form));
+    if (control.matches('fluent-radio-group')) {
+      setFluentRadioGroupValue(control, control.value);
+    }
+    void saveDesktopSettings(readDesktopSettingsPatch(form), form);
   });
 
   els.content.addEventListener('submit', (event) => {
@@ -4650,19 +4685,92 @@ async function loadDesktopSettings() {
   }
 }
 
+function desktopSettingControlValue(name, settings = {}, info = {}) {
+  switch (name) {
+    case 'startAtLogin': return settings.startAtLogin === true;
+    case 'startHidden': return settings.startHidden !== false;
+    case 'closeToTray': return settings.closeToTray !== false;
+    case 'allowInsecureHubHttp': return settings.allowInsecureHubHttp === true;
+    case 'windowSurface': return surfaceValueFromSettings(settings, info);
+    case 'language': return settings.language || 'auto';
+    case 'theme': return settings.theme || 'system';
+    case 'currency': return settings.currency || 'USD';
+    case 'reduceMotion': return settings.reduceMotion || 'system';
+    case 'updateChannel': return settings.updateChannel === 'preview' ? 'preview' : 'stable';
+    case 'hubMode': return settings.hubMode === 'client' ? 'client' : 'local';
+    case 'hubUrl':
+    case 'deviceId': return String(settings[name] ?? '');
+    default: return undefined;
+  }
+}
+
+function isEditableTextControl(element) {
+  return Boolean(element?.matches?.('fluent-text-input, input, textarea'));
+}
+
+function clearDesktopSettingDraft(form) {
+  if (!form) return;
+  const key = draftKeyForForm(form);
+  if (!key) return;
+  const active = document?.activeElement;
+  if (active && form.contains(active) && isEditableTextControl(active)) return;
+  clearFormDraft(key);
+}
+
+/** Reconcile rendered desktop controls with `state.desktopSettings` after saves, failures, or skipped DOM writes. */
+function syncDesktopSettingsControls() {
+  if (!els.content?.querySelectorAll) return;
+  const settings = state.desktopSettings || {};
+  const info = state.desktopInfo || {};
+  const active = document?.activeElement;
+  for (const scope of els.content.querySelectorAll('[data-desktop-settings]')) {
+    const draft = state.formDrafts?.get(draftKeyForForm(scope));
+    for (const control of scope.querySelectorAll('[name]')) {
+      const name = String(control.name || '').trim();
+      if (!name) continue;
+      const expected = desktopSettingControlValue(name, settings, info);
+      if (expected === undefined) continue;
+      if (control.matches('fluent-switch, fluent-checkbox')) {
+        if (Boolean(control.checked) !== expected) control.checked = expected;
+        if ('dirtyChecked' in control) control.dirtyChecked = false;
+        control.toggleAttribute?.('checked', expected);
+      } else if (control.matches('fluent-radio-group')) {
+        setFluentRadioGroupValue(control, expected);
+      } else if (control.matches('fluent-dropdown')) {
+        if (control.listbox?.matches?.(':popover-open')) continue;
+        if (String(control.value ?? '') !== expected) setFluentDropdownValue(control, expected);
+      } else if (isEditableTextControl(control)) {
+        if (control === active && draft?.dirty) continue;
+        if (String(control.value ?? '') !== expected) control.value = expected;
+      }
+    }
+  }
+}
+
 /** Persist a desktop settings patch and refresh the cached snapshot. */
-async function saveDesktopSettings(patch) {
+async function saveDesktopSettings(patch, form = null) {
   const desktop = getTransport().desktop;
   if (!desktop) return false;
+  const previousHubMode = state.desktopSettings?.hubMode === 'client' ? 'client' : 'local';
   try {
     const next = await desktop.updateSettings(patch);
     if (next) state.desktopSettings = next;
     state.desktopConnectionError = null;
+    clearDesktopSettingDraft(form);
     syncFluentMotion(state.desktopSettings?.reduceMotion || 'system');
     adoptDesktopPrefs(next);
+    const nextHubMode = state.desktopSettings?.hubMode === 'client' ? 'client' : 'local';
+    if (nextHubMode !== previousHubMode) {
+      render({ quiet: true });
+    } else if (renderPending) {
+      renderDeferred();
+    }
+    syncDesktopSettingsControls();
     renderDesktopConnectionError();
     return true;
   } catch (error) {
+    clearDesktopSettingDraft(form);
+    syncDesktopSettingsControls();
     state.desktopConnectionError = {
       channel: 'rest',
       code: error?.code || 'sync_failed',
@@ -4741,6 +4849,7 @@ async function runDesktopAction(action, element) {
           // writer: the owner secret is exchanged and never persisted as-is.
           await saveSecret(String(input?.value || '').trim(), true);
           state.desktopSettings = await desktop.getSettings();
+          state.hubSecretDraft = '';
           if (input) input.value = '';
           render();
           showToast(tr('toast.saved'));
@@ -4753,6 +4862,9 @@ async function runDesktopAction(action, element) {
         try {
           await clearSecret();
           state.desktopSettings = await desktop.getSettings();
+          state.hubSecretDraft = '';
+          const input = element?.closest('[data-desktop-settings]')?.querySelector('[data-hub-secret-input]');
+          if (input) input.value = '';
           render();
           showToast(tr('toast.saved'));
         } catch (error) {
@@ -4850,9 +4962,11 @@ async function init() {
     desktop?.onSettingsPush?.((next) => {
       state.desktopSettings = next || {};
       syncFluentMotion(state.desktopSettings.reduceMotion || 'system');
+      adoptDesktopPrefs(next);
       // The main process pushes settings on a folder-picker or a collector tick;
       // treat it as data so it cannot close a dropdown the user has open.
       render({ quiet: true });
+      syncDesktopSettingsControls();
     });
     desktop?.onOpenSettings?.(() => switchView('settings'));
     desktop?.onOpenView?.((view) => switchView(normalizeViewId(view)));

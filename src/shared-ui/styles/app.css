@@ -762,7 +762,9 @@ html[data-theme="dark"] .heat.lvl-4 { fill: rgba(110, 168, 255, 0.92); }
 .mode-toggle { display: inline-flex; align-items: center; gap: var(--spacingHorizontalS); min-height: 36px; padding: var(--spacingVerticalXS) var(--spacingHorizontalS); border: 1px solid var(--line); border-radius: var(--borderRadiusMedium); background: var(--bg-elevated); color: var(--text); cursor: pointer; }
 .mode-toggle:hover { background: var(--colorNeutralBackground1Hover); }
 .mode-toggle:active { background: var(--colorNeutralBackground1Pressed); }
+.mode-toggle.selected,
 .mode-toggle:has(fluent-radio:checked) { border-color: var(--colorBrandStroke1); background: var(--colorBrandBackground2); color: var(--colorBrandForeground1); }
+.mode-toggle:has(fluent-radio:state(checked)) { border-color: var(--colorBrandStroke1); background: var(--colorBrandBackground2); color: var(--colorBrandForeground1); }
 .account-simple-fields {
   margin-top: 4px;
 }
@@ -1737,14 +1739,14 @@ html[data-motion="reduce"] {
   --durationUltraFast: 0ms; --durationFaster: 0ms; --durationFast: 0ms; --durationNormal: 0ms;
   --durationGentle: 0ms; --durationSlow: 0ms; --durationSlower: 0ms; --durationUltraSlow: 0ms;
 }
-html[data-motion="reduce"] fluent-spinner { visibility: hidden; }
+html[data-motion="reduce"] fluent-spinner { --duration: 0s; opacity: 0.72; }
 @media (prefers-reduced-motion: reduce) {
   html:not([data-motion="full"]) *, html:not([data-motion="full"]) *::before, html:not([data-motion="full"]) *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   html:not([data-motion="full"]) {
     --durationUltraFast: 0ms; --durationFaster: 0ms; --durationFast: 0ms; --durationNormal: 0ms;
     --durationGentle: 0ms; --durationSlow: 0ms; --durationSlower: 0ms; --durationUltraSlow: 0ms;
   }
-html:not([data-motion="full"]) fluent-spinner { visibility: hidden; }
+html:not([data-motion="full"]) fluent-spinner { --duration: 0s; opacity: 0.72; }
 }
 
 /* Fluent 2 workspace redesign: clear hierarchy, quieter surfaces, and rows
@@ -2319,7 +2321,7 @@ fluent-button.home-interactive-row::part(content) { display: flex; flex-directio
 .hero-label { text-transform: none; letter-spacing: 0; }
 .home-pill { border: 0; padding: 0 12px 0 0; background: transparent; border-radius: 0; }
 .page-commands { display: flex; align-items: center; gap: 4px; }
-fluent-text-input.field { display: block; width: 100%; min-width: 0; }
+fluent-text-input.field { display: block; width: 100%; max-width: none; min-width: 0; }
 fluent-text-input::part(label) { font-size: 14px; line-height: 20px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
 @media (pointer: coarse) { fluent-text-input::part(control) { min-height: 44px; font-size: 16px; } }
 @keyframes fluent-refresh-spin { to { transform: rotate(360deg); } }

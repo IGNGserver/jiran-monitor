@@ -60,9 +60,15 @@ test('the main window uses native controls with an inset title bar on macOS', ()
   // traffic lights sit on the app's own toolbar above the sidebar.
   assert.match(main, /applyMacosNativeWindowButtons\(win\)/);
   assert.match(main, /titleBarStyle: 'hiddenInset'/, 'macOS uses an inset title bar');
-  // The desktop shell clears the traffic lights and makes the topbar draggable.
+  // Desktop width clears traffic lights over the sidebar without indenting main topbar;
+  // compact drawer width indents the topbar and drawer sidebar below traffic lights.
   const desktopCss = read('src', 'electron', 'renderer', 'desktop.css');
-  assert.match(desktopCss, /body\.is-mac \.topbar/, 'the topbar must clear the traffic lights');
+  assert.match(desktopCss, /body\.is-mac \.sidebar\s*\{\s*padding-top:\s*calc\(44px \+ var\(--safe-top\)\)/);
+  const topbarBase = desktopCss.match(/body\.is-mac \.topbar\s*\{([^}]*)\}/);
+  assert.ok(topbarBase, 'the topbar must define macOS drag styling');
+  assert.doesNotMatch(topbarBase[1], /padding-left\s*:\s*78px/,
+    'desktop layout must not indent topbar because traffic lights sit over the sidebar');
+  assert.match(desktopCss, /@media \(max-width:\s*860px\)\s*\{[\s\S]*body\.is-mac \.topbar\s*\{\s*padding-left:\s*78px;[\s\S]*body\.is-mac \.sidebar\s*\{\s*padding-top:\s*calc\(48px \+ var\(--safe-top\)\);/);
   assert.match(desktopCss, /-webkit-app-region: drag/, 'the topbar is a drag region on macOS');
   assert.match(desktopCss, /-webkit-app-region: no-drag/, 'interactive children must opt out of dragging');
 });
