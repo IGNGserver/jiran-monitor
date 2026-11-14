@@ -69,16 +69,18 @@ test('every tracked client is accepted by bundled tokscale', () => {
   // scan — so a stale alias (a rename upstream, a version pin that predates the
   // id) breaks every client in the call, not just the aliased one. 4.19's
   // `antigravity-extension` is the current case.
-  const { TOKSCALE_CLIENT_ALIASES } = require('../../src/shared/collector');
+  const { TOKSCALE_CLIENT_ALIASES, tokscaleClientsCsv } = require('../../src/shared/collector');
+  const { LOCAL_USAGE_CLIENT_IDS } = require('../../src/shared/localUsageAdapters');
   const unsupportedAliases = Object.values(TOKSCALE_CLIENT_ALIASES).flat().filter((alias) => !supported.has(alias));
   assert.deepEqual(unsupportedAliases, []);
-  // Neither Qoder site is in the enum at all, so passing one through would fail
-  // the whole scan for every other client in the same call. That is the reason
-  // LOCAL_PARSED_CLIENTS in collector.js has to filter both ids out of the CSV,
-  // and this assertion is what fails if tokscale ever grows a Qoder entry (at
-  // which point the local adapter becomes redundant and should be revisited).
-  for (const client of ['qoder', 'qodercn']) {
-    assert.ok(!supported.has(client), `tokscale unexpectedly accepts ${client}`);
+  // tokscale 4.22 added `qoder` (scanning both Global and CN dirs under one id)
+  // and `proma`, while `qodercn` is still absent from `--client`. Filtering all
+  // local adapters out via tokscaleClientsCsv keeps Global/CN separate, preserves
+  // native Qoder billing meters/WSL markers, and prevents double-counting.
+  assert.ok(!supported.has('qodercn'), 'tokscale unexpectedly accepts qodercn');
+  const forwarded = new Set(tokscaleClientsCsv(TRACKED_CLIENTS).split(',').filter(Boolean));
+  for (const client of LOCAL_USAGE_CLIENT_IDS) {
+    assert.ok(!forwarded.has(client), `${client} must remain locally parsed, not forwarded to tokscale`);
   }
 });
 

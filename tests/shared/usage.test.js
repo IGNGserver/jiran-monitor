@@ -7,7 +7,8 @@ const {
   aggregateDevices,
   extractUsageFromTokscale,
   mergeDeviceRecord,
-  normalizeDeviceRecord
+  normalizeDeviceRecord,
+  normalizePeriod
 } = require('../../src/shared/usage');
 
 function recordWithLimits(extra = {}) {
@@ -777,19 +778,19 @@ test('extractUsageFromTokscale passes zcode input straight through (tokscale nor
     ]
   });
 
-  assert.equal(period.clients.zcode, 1050);
-  assert.equal(period.totalTokens, 1050);
+  assert.equal(period.clients.zcode, 1060);
+  assert.equal(period.totalTokens, 1060);
   assert.equal(period.cacheReadTokens, 800);
   assert.equal(period.clientCacheReads.zcode, 800);
-  assert.equal(period.clientOutputs.zcode, 50);
+  assert.equal(period.clientOutputs.zcode, 60);
 
   const session = period.sessions['zcode:sess-z1'];
-  assert.equal(session.totalTokens, 1050);
+  assert.equal(session.totalTokens, 1060);
   assert.equal(session.inputTokens, 200);
   assert.equal(session.cacheReadTokens, 800);
-  assert.equal(session.outputTokens, 50);
+  assert.equal(session.outputTokens, 60);
   assert.equal(session.reasoningTokens, 10);
-  assert.equal(session.models['glm-5.2'], 1050);
+  assert.equal(session.models['glm-5.2'], 1060);
 });
 
 test('extractUsageFromTokscale normalizes Kiro client ids', () => {
@@ -874,19 +875,19 @@ test('extractUsageFromTokscale keeps session usage grouped by client and model',
   });
 
   const codex = period.sessions['codex:rollout-1'];
-  // reasoning (2) is a subset of output (5), so it is NOT added to the total:
-  // entry 1 = 10 + 5 + 100 = 115, entry 2 = 2 + 3 = 5 → 120 (reasoning still tracked separately).
-  assert.equal(codex.totalTokens, 120);
+  // tokscale tracks reasoning disjoint from output: entry 1 = 10 + (5 + 2) + 100 = 117,
+  // entry 2 = 2 + 3 = 5 → 122 total, 10 output (including 2 reasoning).
+  assert.equal(codex.totalTokens, 122);
   assert.equal(codex.costUsd, 0.3);
   assert.equal(codex.messageCount, 4);
   assert.equal(codex.inputTokens, 12);
-  assert.equal(codex.outputTokens, 8);
+  assert.equal(codex.outputTokens, 10);
   assert.equal(codex.cacheReadTokens, 100);
   assert.equal(codex.reasoningTokens, 2);
   assert.equal(codex.lastUsedAt, '2026-05-30T04:00:00.000Z');
-  assert.equal(codex.models['gpt-5'], 115);
+  assert.equal(codex.models['gpt-5'], 117);
   assert.equal(codex.models['gpt-4o'], 5);
-  assert.equal(codex.providers.openai, 120);
+  assert.equal(codex.providers.openai, 122);
   assert.equal(period.sessions['cursor:cursor-active'].models['cursor-auto'], 3);
 });
 
@@ -1158,4 +1159,52 @@ test('aggregateDevices falls back to UTC-day compare for old agents without peri
     today: { totalTokens: 7 }
   }], 10 * 60 * 1000, Date.parse('2026-06-26T06:00:00.000Z'));
   assert.equal(kept.periods.today.totalTokens, 7);
+});
+
+test('antigravity disjoint reasoning folds into output and total without double-counting on normalize', () => {
+  const period = extractUsageFromTokscale({
+    groupBy: 'client,session,model',
+    entries: [{
+      client: 'antigravity',
+      sessionId: 'agy-sess-1',
+      model: 'claude-sonnet-4-6-thinking',
+      provider: 'google',
+      input: 1000,
+      output: 200,
+      cacheRead: 500,
+      cacheWrite: 100,
+      reasoning: 400,
+      messageCount: 2,
+      cost: 0.12
+    }]
+  });
+
+  // total = 1000 + 200 + 500 + 100 + 400 = 2200; output = 200 + 400 = 600
+  assert.equal(period.totalTokens, 2200);
+  assert.equal(period.outputTokens, 600);
+  assert.equal(period.clients.antigravity, 2200);
+  assert.equal(period.clientOutputs.antigravity, 600);
+  assert.equal(period.models['claude-sonnet-4-6-thinking'], 2200);
+  assert.equal(period.modelOutputs['claude-sonnet-4-6-thinking'], 600);
+
+  const session = period.sessions['antigravity:agy-sess-1'];
+  assert.equal(session.totalTokens, 2200);
+  assert.equal(session.outputTokens, 600);
+  assert.equal(session.reasoningTokens, 400);
+
+  // Re-normalizing wire payloads must never add reasoningTokens again.
+  const normalizedPeriod = normalizePeriod(JSON.parse(JSON.stringify(period)));
+  assert.equal(normalizedPeriod.totalTokens, 2200);
+  assert.equal(normalizedPeriod.outputTokens, 600);
+  assert.equal(normalizedPeriod.sessions['antigravity:agy-sess-1'].totalTokens, 2200);
+  assert.equal(normalizedPeriod.sessions['antigravity:agy-sess-1'].outputTokens, 600);
+
+  const normalizedRecord = normalizeDeviceRecord({
+    deviceId: 'mac',
+    today: JSON.parse(JSON.stringify(period))
+  });
+  assert.equal(normalizedRecord.periods.today.totalTokens, 2200);
+  assert.equal(normalizedRecord.periods.today.outputTokens, 600);
+  assert.equal(normalizedRecord.periods.today.sessions['antigravity:agy-sess-1'].totalTokens, 2200);
+  assert.equal(normalizedRecord.periods.today.sessions['antigravity:agy-sess-1'].outputTokens, 600);
 });

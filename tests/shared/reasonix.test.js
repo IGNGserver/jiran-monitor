@@ -150,7 +150,7 @@ test('Reasonix model prefix normalization is scoped to explicit client context',
   assert.equal(normalized.clientModels.codex['deepseek/deepseek-v3'], 3);
 });
 
-test('Reasonix reasoning is additive without changing other client semantics', () => {
+test('Disjoint reasoning is additive across tokscale clients including Reasonix', () => {
   const reasonix = extractUsageFromTokscale({ entries: [REASONIX_ROW] });
   assert.equal(reasonix.totalTokens, 140);
   assert.equal(reasonix.cacheReadTokens, 20);
@@ -166,15 +166,26 @@ test('Reasonix reasoning is additive without changing other client semantics', (
   assert.equal(reasonix.modelCosts['deepseek-chat'], 0.25);
   assert.equal(reasonix.clientModelCosts.reasonix['deepseek-chat'], 0.25);
 
-  for (const client of ['codex', 'claude']) {
-    const period = extractUsageFromTokscale({ entries: [{
-      ...REASONIX_ROW,
-      client,
-      model: client === 'codex' ? 'gpt-5' : 'claude-sonnet-4'
-    }] });
-    assert.equal(period.totalTokens, 130, `${client} reasoning must remain informational`);
-    assert.equal(period.outputTokens, 30, `${client} output-family must remain unchanged`);
-    assert.equal(period.clientOutputs[client], 30, `${client} output-family must remain unchanged`);
+  for (const client of ['codex', 'claude', 'antigravity']) {
+    const model = client === 'codex' ? 'gpt-5' : client === 'claude' ? 'claude-sonnet-4' : 'gemini-3-flash';
+    const sessionId = `${client}-sess-1`;
+    const period = extractUsageFromTokscale({
+      groupBy: 'client,session,model',
+      entries: [{
+        ...REASONIX_ROW,
+        client,
+        model,
+        sessionId
+      }]
+    });
+    assert.equal(period.totalTokens, 140, `${client} folds disjoint reasoning into totalTokens`);
+    assert.equal(period.outputTokens, 40, `${client} folds disjoint reasoning into outputTokens`);
+    assert.equal(period.clientOutputs[client], 40, `${client} clientOutputs includes disjoint reasoning`);
+    assert.equal(period.modelOutputs[model], 40, `${client} modelOutputs includes disjoint reasoning`);
+    const session = period.sessions[`${client}:${sessionId}`];
+    assert.equal(session.totalTokens, 140);
+    assert.equal(session.outputTokens, 40);
+    assert.equal(session.reasoningTokens, 10);
   }
 });
 
@@ -189,7 +200,7 @@ test('Reasonix partitions merge exactly across aggregate, client, and model tota
   assert.deepEqual(bundle.byClient.reasonix.sessions, {});
 });
 
-test('Reasonix history uses additive reasoning while existing clients stay unchanged', () => {
+test('Reasonix and standard tokscale history both add disjoint reasoning while Reasonix skips messages', () => {
   const graph = {
     contributions: [{
       date: '2026-08-07',
@@ -200,25 +211,25 @@ test('Reasonix history uses additive reasoning while existing clients stay uncha
     }]
   };
   const parsed = parseGraphResult(graph);
-  assert.equal(parsed.contributions[0].tokens, 270);
+  assert.equal(parsed.contributions[0].tokens, 280);
   assert.equal(parsed.contributions[0].perClient.reasonix.tokens, 140);
-  assert.equal(parsed.contributions[0].perClient.codex.tokens, 130);
+  assert.equal(parsed.contributions[0].perClient.codex.tokens, 140);
   assert.equal(parsed.contributions[0].perModel['deepseek-chat'].tokens, 140);
-  assert.equal(parsed.contributions[0].perModel['gpt-5'].tokens, 130);
-  assert.equal(parsed.contributions[0].outputTokens, 70);
+  assert.equal(parsed.contributions[0].perModel['gpt-5'].tokens, 140);
+  assert.equal(parsed.contributions[0].outputTokens, 80);
   assert.equal(parsed.contributions[0].perClient.reasonix.outputTokens, 40);
-  assert.equal(parsed.contributions[0].perClient.codex.outputTokens, 30);
+  assert.equal(parsed.contributions[0].perClient.codex.outputTokens, 40);
   assert.equal(parsed.contributions[0].messages, 1);
   assert.equal(parsed.contributions[0].perClient.reasonix.messages, 0);
   assert.equal(parsed.contributions[0].perClient.codex.messages, 1);
   const history = normalizeHistory(parsed, { todayKey: '2026-08-07' });
-  assert.equal(history.daily[0].tokens, 270);
+  assert.equal(history.daily[0].tokens, 280);
   assert.equal(history.daily[0].perClient.reasonix.tokens, 140);
   assert.equal(history.daily[0].perModel['deepseek-chat'].tokens, 140);
   assert.equal(history.daily[0].messages, 1);
   assert.equal(history.daily[0].perClient.reasonix.messages, 0);
   assert.equal(history.summary.messages, 1);
-  assert.equal(history.summary.totalTokens, 270);
+  assert.equal(history.summary.totalTokens, 280);
 });
 
 test('Reasonix daily history archive preserves its additive total', () => {

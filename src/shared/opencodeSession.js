@@ -118,11 +118,12 @@ function mapTokens(r) {
   const reasoning = num(r.tReasoning);
   const cacheRead = num(r.tCacheRead);
   const cacheWrite = num(r.tCacheWrite);
-  // Match how tokscale totals a session: input + output + cacheRead + cacheWrite. OpenCode's
-  // stored `tokens.total` ADDS reasoning on top of that, so trusting it over-counts vs the
-  // session card. Keep reasoning informational only — same convention as Claude/Codex.
-  const total = input + output + cacheRead + cacheWrite;
-  return { input, output, cacheRead, cacheWrite, reasoning, total };
+  // OpenCode stores `output` and `reasoning` as disjoint token counters (its
+  // `tokens.total` adds both). Match tokscale's TokenBreakdown::total() and
+  // Jiran's output-family bucket so session detail agrees with the session card.
+  const outputWithReasoning = output + reasoning;
+  const total = input + outputWithReasoning + cacheRead + cacheWrite;
+  return { input, output: outputWithReasoning, cacheRead, cacheWrite, reasoning, total };
 }
 
 function buildEvents(messages, parts) {

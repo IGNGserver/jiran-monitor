@@ -50,6 +50,7 @@ const NODE_RUNTIME_SOURCE_FILES = Object.freeze([
   'src/shared/appVersion.js',
   'src/shared/ampLimits.js',
   'src/shared/antigravityProbe.js',
+  'src/shared/antigravitySession.js',
   'src/shared/browserUserAgent.js',
   'src/shared/claudeDesktopUsage.js',
   'src/shared/clientSyncRunners.js',

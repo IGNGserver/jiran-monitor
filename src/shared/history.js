@@ -38,19 +38,18 @@ function normalizeTimeMetrics(value) {
   };
 }
 
-// Additive token components. Existing clients expose reasoning inside `output`,
-// but Reasonix emits it as a disjoint component.
-function sumTokens(breakdown, client = '') {
+// Additive token components. Tokscale's graph breakdown emits `output` and
+// `reasoning` as disjoint fields across every client.
+function sumTokens(breakdown) {
   if (!breakdown || typeof breakdown !== 'object') return 0;
   return num(breakdown.input) + num(breakdown.output)
     + num(breakdown.cacheRead) + num(breakdown.cacheWrite)
-    + (String(client).trim().toLowerCase() === REASONIX_CLIENT ? num(breakdown.reasoning) : 0);
+    + num(breakdown.reasoning);
 }
 
-function sumOutputTokens(breakdown, client = '') {
+function sumOutputTokens(breakdown) {
   if (!breakdown || typeof breakdown !== 'object') return 0;
-  return num(breakdown.output)
-    + (String(client).trim().toLowerCase() === REASONIX_CLIENT ? num(breakdown.reasoning) : 0);
+  return num(breakdown.output) + num(breakdown.reasoning);
 }
 
 function componentValues(value, totalTokens, exact) {
@@ -684,7 +683,7 @@ function deviceHistoryRevision(devices) {
 }
 
 module.exports = {
-  num, sumTokens, parseGraphResult, computeIntensities, localDayKey, dayKeyAddDays,
+  num, sumTokens, sumOutputTokens, parseGraphResult, computeIntensities, localDayKey, dayKeyAddDays,
   computeStreaks, monthlyRollup, normalizeHistory, mergeHistories,
   coerceHistory, historyPreview, historyRevision, deviceHistoryRevision
 };

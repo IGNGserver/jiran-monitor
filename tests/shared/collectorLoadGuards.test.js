@@ -4813,3 +4813,47 @@ test('the quit variant of stop() skips the watcher walk and leans on `stopped`',
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('antigravity-cli watches nearest .gemini parent before conversations/ exists without misattributing gemini events', () => {
+  const home = withTmpHome(['.gemini/tmp']);
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevGeminiHome = process.env.GEMINI_CLI_HOME;
+  try {
+    const geminiHome = path.join(home, '.gemini');
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.GEMINI_CLI_HOME = geminiHome;
+    const collector = freshCollector();
+    const clients = 'gemini,antigravity';
+    const watchPaths = collector.watchPathsForClients(clients);
+    assert.ok(watchPaths.includes(geminiHome), 'missing conversations/ must fall back to watching existing .gemini');
+    assert.ok(watchPaths.includes(path.join(geminiHome, 'tmp')), 'gemini root remains watched');
+
+    const attribution = collector.watchAttributionRootsForClients(clients);
+    assert.deepEqual(
+      collector.clientsForWatchPath(path.join(geminiHome, 'tmp', 'session-1', 'logs.json'), attribution),
+      ['gemini']
+    );
+    assert.deepEqual(
+      collector.clientsForWatchPath(path.join(geminiHome, 'antigravity-cli', 'conversations', 's1.db-wal'), attribution),
+      ['antigravity']
+    );
+
+    const ignored = collector.watchIgnoreMatcher(clients);
+    assert.equal(ignored(path.join(geminiHome, 'antigravity-cli')), false);
+    assert.equal(ignored(path.join(geminiHome, 'antigravity-cli', 'conversations')), false);
+    assert.equal(ignored(path.join(geminiHome, 'antigravity-cli', 'conversations', 's1.db-wal')), false);
+    assert.equal(ignored(path.join(geminiHome, 'tmp', 'session-1', 'logs.json')), false);
+    assert.equal(ignored(path.join(geminiHome, 'unrelated-cache', 'noise.log')), true);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    if (prevGeminiHome === undefined) delete process.env.GEMINI_CLI_HOME;
+    else process.env.GEMINI_CLI_HOME = prevGeminiHome;
+    delete require.cache[collectorPath];
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
