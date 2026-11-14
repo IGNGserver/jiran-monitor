@@ -278,3 +278,23 @@ test('the manual-check toast and install errors share the panel wording', () => 
   assert.equal(appUpdateInstallErrorText({ installErrorKind: 'channel-mismatch' }), 'desktop.settings.installErrorChannelMismatch');
   assert.equal(appUpdateInstallErrorText({}), 'desktop.settings.installErrorUnknown');
 });
+
+test('desktop switch rows use clickable labels, mode toggles carry selected state, and primary actions use primary-btn', () => {
+  const { renderDesktopSettings } = loadView({
+    desktopAppUpdate: {
+      currentVersion: '1.0.0', installedChannel: 'stable', channel: 'stable',
+      latest: { version: '1.2.1', prerelease: false }, hasUpdate: true,
+      downloaded: false, installSupported: true
+    }
+  });
+  const html = renderDesktopSettings({ hubMode: 'client' }, { platform: 'win32', loginItemSupported: true });
+  assert.match(html, /<label class="desktop-setting-switch-row" for="desktop-setting-startAtLogin">\s*<span class="desktop-setting-switch-copy">/);
+  for (const [, inner] of html.matchAll(/<label class="desktop-setting-switch-row"[^>]*>([\s\S]*?)<\/label>/g)) {
+    assert.doesNotMatch(inner, /<div/, 'switch row labels must contain only phrasing elements');
+  }
+  assert.match(html, /<label class="mode-toggle" for="hub-mode-local">/);
+  assert.match(html, /<label class="mode-toggle selected" for="hub-mode-client">/);
+  assert.match(html, /<fluent-button appearance="primary" type="button" class="primary-btn" data-desktop-action="download-install-update"/);
+  assert.match(html, /<fluent-button appearance="primary" type="button" class="primary-btn" data-desktop-action="recover-sync"/);
+  assert.match(html, /id="desktop-hub-secret-input"[^>]*data-hub-secret-input/);
+});

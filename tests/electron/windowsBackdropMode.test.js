@@ -1,7 +1,16 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
+
+const {
+  DARK_ACCENT_ARGB,
+  LIGHT_ACCENT_ARGB,
+  windowsAccentArgb,
+  applyWindowsAccentBlur
+} = require('../../src/electron/windowsBackdrop');
 
 const {
   WINDOWS_BACKDROP_ACRYLIC,
@@ -87,4 +96,29 @@ test('windowsSurfaceProfile turns off on non-Windows or disabled glass', () => {
   });
   assert.equal(disabled.kind, WINDOWS_SURFACE_NONE);
   assert.equal(disabled.nativeBackdrop, false);
+});
+
+test('Windows 10 accent tint adapts to dark and light themes', () => {
+  assert.equal(windowsAccentArgb({ dark: true }), DARK_ACCENT_ARGB);
+  assert.equal(windowsAccentArgb({ dark: false }), LIGHT_ACCENT_ARGB);
+  assert.notEqual(LIGHT_ACCENT_ARGB, DARK_ACCENT_ARGB);
+
+  const calls = [];
+  const win = {
+    isDestroyed: () => false,
+    getNativeWindowHandle: () => Buffer.alloc(8)
+  };
+  const api = {
+    apply(hwnd, argb) {
+      calls.push({ hwnd, argb });
+      return true;
+    }
+  };
+  assert.equal(applyWindowsAccentBlur(win, { platform: 'win32', dark: false, api }), true);
+  assert.equal(calls[0].argb, LIGHT_ACCENT_ARGB);
+  assert.equal(applyWindowsAccentBlur(win, { platform: 'win32', dark: true, api }), true);
+  assert.equal(calls[1].argb, DARK_ACCENT_ARGB);
+
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSource, /applyWindowsAccentBlur\(target,\s*\{\s*dark:\s*nativeTheme\.shouldUseDarkColors\s*\}\)/);
 });

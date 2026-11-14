@@ -6,7 +6,13 @@
 // SetWindowCompositionAttribute(WCA_ACCENT_POLICY) API. Keep every call lazy
 // and best-effort so an unsupported Windows build can fall back to Acrylic.
 
-const DEFAULT_ACCENT_ARGB = 0x3a232323;
+const DARK_ACCENT_ARGB = 0x3a232323;
+const LIGHT_ACCENT_ARGB = 0x48f5f5f5;
+const DEFAULT_ACCENT_ARGB = DARK_ACCENT_ARGB;
+
+function windowsAccentArgb({ dark = true } = {}) {
+  return dark ? DARK_ACCENT_ARGB : LIGHT_ACCENT_ARGB;
+}
 
 const WCA_ACCENT_POLICY = 19;
 const ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
@@ -116,14 +122,18 @@ function applyWindowsAccentBlur(win, options = {}) {
   const api = options.api || loadAccentApi();
   if (!api) return false;
   try {
-    return api.apply(hwndOf(win), options.argb ?? DEFAULT_ACCENT_ARGB) === true;
+    const argb = options.argb ?? windowsAccentArgb({ dark: options.dark ?? true });
+    return api.apply(hwndOf(win), argb) === true;
   } catch (_) {
     return false;
   }
 }
 
 module.exports = {
+  DARK_ACCENT_ARGB,
   DEFAULT_ACCENT_ARGB,
+  LIGHT_ACCENT_ARGB,
+  windowsAccentArgb,
   applyWindowsAccentBlur,
   createAccentApi
 };

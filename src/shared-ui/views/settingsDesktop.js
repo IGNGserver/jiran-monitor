@@ -175,13 +175,13 @@ function checkbox(name, labelKey, checked, { description = '', id = '' } = {}) {
   const controlId = id || `desktop-setting-${name}`;
   const labelId = `${controlId}-label`;
   const descriptionId = description ? `${controlId}-description` : '';
-  return `<div class="desktop-setting-switch-row">
-    <div class="desktop-setting-switch-copy">
+  return `<label class="desktop-setting-switch-row" for="${escapeHtml(controlId)}">
+    <span class="desktop-setting-switch-copy">
       <span class="desktop-setting-switch-label" id="${escapeHtml(labelId)}">${escapeHtml(tr(labelKey))}</span>
       ${description ? `<span class="desktop-setting-switch-description" id="${escapeHtml(descriptionId)}">${escapeHtml(description)}</span>` : ''}
-    </div>
+    </span>
     <fluent-switch id="${escapeHtml(controlId)}" name="${escapeHtml(name)}" role="switch" aria-labelledby="${escapeHtml(labelId)}"${descriptionId ? ` aria-describedby="${escapeHtml(descriptionId)}"` : ''}${checked ? ' checked' : ''}></fluent-switch>
-  </div>`;
+  </label>`;
 }
 
 function dropdownField(name, labelKey, options, value, { id = '' } = {}) {
@@ -197,7 +197,8 @@ function textField(name, labelKey, value, { id = '', placeholder = '', type = 't
 }
 
 function actionButton(action, labelKey, appearance = 'transparent', { disabled = false } = {}) {
-  return `<fluent-button appearance="${appearance}" type="button" class="ghost-btn" data-desktop-action="${escapeHtml(action)}"${disabled ? ' disabled' : ''}>${escapeHtml(tr(labelKey))}</fluent-button>`;
+  const buttonClass = appearance === 'primary' ? 'primary-btn' : 'ghost-btn';
+  return `<fluent-button appearance="${appearance}" type="button" class="${buttonClass}" data-desktop-action="${escapeHtml(action)}"${disabled ? ' disabled' : ''}>${escapeHtml(tr(labelKey))}</fluent-button>`;
 }
 
 /**
@@ -333,8 +334,8 @@ export function renderDesktopSettings(settings = {}, info = {}) {
   const hubOnly = (rows) => (hubMode === 'client' ? rows.join('') : '');
   const connectionRows = [];
   connectionRows.push(`<fluent-radio-group class="mode-toggle-group" name="hubMode" value="${hubMode}" orientation="horizontal" aria-label="${escapeHtml(tr('desktop.settings.groupSync'))}">
-      <label class="mode-toggle" for="hub-mode-local"><fluent-radio id="hub-mode-local" value="local" aria-labelledby="hub-mode-local-label"${hubMode === 'local' ? ' checked' : ''}></fluent-radio><span id="hub-mode-local-label">${escapeHtml(tr('desktop.settings.hubLocal'))}</span></label>
-      <label class="mode-toggle" for="hub-mode-client"><fluent-radio id="hub-mode-client" value="client" aria-labelledby="hub-mode-client-label"${hubMode === 'client' ? ' checked' : ''}></fluent-radio><span id="hub-mode-client-label">${escapeHtml(tr('desktop.settings.hubClient'))}</span></label>
+      <label class="mode-toggle${hubMode === 'local' ? ' selected' : ''}" for="hub-mode-local"><fluent-radio id="hub-mode-local" value="local" aria-labelledby="hub-mode-local-label"${hubMode === 'local' ? ' checked' : ''}></fluent-radio><span id="hub-mode-local-label">${escapeHtml(tr('desktop.settings.hubLocal'))}</span></label>
+      <label class="mode-toggle${hubMode === 'client' ? ' selected' : ''}" for="hub-mode-client"><fluent-radio id="hub-mode-client" value="client" aria-labelledby="hub-mode-client-label"${hubMode === 'client' ? ' checked' : ''}></fluent-radio><span id="hub-mode-client-label">${escapeHtml(tr('desktop.settings.hubClient'))}</span></label>
     </fluent-radio-group>`);
   connectionRows.push(hubOnly([
     `<div class="desktop-connection-feedback hidden" data-desktop-connection-error role="alert" aria-live="assertive">
@@ -342,11 +343,11 @@ export function renderDesktopSettings(settings = {}, info = {}) {
         <strong>${escapeHtml(tr('desktop.sync.connectionFailure'))}</strong>
         <span data-desktop-connection-message></span>
       </div>
-      <fluent-button appearance="primary" type="button" class="ghost-btn" data-desktop-action="recover-sync">${escapeHtml(tr('desktop.sync.retryConnection'))}</fluent-button>
+      <fluent-button appearance="primary" type="button" class="primary-btn" data-desktop-action="recover-sync">${escapeHtml(tr('desktop.sync.retryConnection'))}</fluent-button>
     </div>`,
     textField('hubUrl', 'desktop.settings.hubUrl', settings.hubUrl || '', { placeholder: 'http://hub-host:17321' }),
     `<div class="desktop-setting-block desktop-hub-secret" data-hub-secret>
-      <fluent-text-input class="field" type="password" data-hub-secret-input autocomplete="new-password" spellcheck="false" placeholder="${escapeHtml(settings.hubSecretConfigured ? tr('desktop.settings.hubSecretConfigured') : tr('desktop.settings.hubSecretMissing'))}">${escapeHtml(tr('settings.secret'))}</fluent-text-input>
+      <fluent-text-input id="desktop-hub-secret-input" class="field" type="password" data-hub-secret-input autocomplete="new-password" spellcheck="false" placeholder="${escapeHtml(settings.hubSecretConfigured ? tr('desktop.settings.hubSecretConfigured') : tr('desktop.settings.hubSecretMissing'))}">${escapeHtml(tr('settings.secret'))}</fluent-text-input>
       <div class="desktop-setting-row">
         <span class="row-sub">${escapeHtml(tr('desktop.settings.hubSecretHint'))}</span>
         <span class="drawer-actions">

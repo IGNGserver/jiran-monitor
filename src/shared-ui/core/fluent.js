@@ -54,6 +54,56 @@ export function animateDataUpdate() {
   pendingDataUpdate = true;
 }
 
+const pendingRadioSync = new WeakMap();
+
+export function setFluentRadioGroupValue(group, value) {
+  if (!group) return;
+  const desired = String(value ?? '');
+  const applyVisualState = () => {
+    const radios = [...group.querySelectorAll('fluent-radio')];
+    const match = radios.find((radio) => String(radio.value ?? '') === desired) || null;
+    radios.forEach((radio) => {
+      const selected = radio === match;
+      radio.checked = selected;
+      radio.toggleAttribute?.('checked', selected);
+      radio.closest?.('.choice-option, .mode-toggle')?.classList?.toggle('selected', selected);
+    });
+    if (match) {
+      group.setAttribute?.('value', desired);
+      group.initialValue = desired;
+    } else {
+      group.removeAttribute?.('value');
+      group.initialValue = '';
+    }
+    return match;
+  };
+  const match = applyVisualState();
+  const isFluentRadioGroup = 'enabledRadios' in group;
+  if (!isFluentRadioGroup || (Array.isArray(group.radios) && group.radios.length > 0)) {
+    group.value = match ? match.value : desired;
+    return;
+  }
+
+  // Fluent RadioGroup populates `this.radios` asynchronously via FAST's task
+  // queue; deferring `group.value` avoids `checkedIndex = -1` during initial render.
+  const token = (pendingRadioSync.get(group) || 0) + 1;
+  pendingRadioSync.set(group, token);
+  let attempts = 0;
+  const synchronize = () => {
+    if (pendingRadioSync.get(group) !== token || !group.isConnected) return;
+    if (Array.isArray(group.radios) && group.radios.length > 0) {
+      const currentMatch = applyVisualState();
+      group.value = currentMatch ? currentMatch.value : desired;
+      return;
+    }
+    attempts += 1;
+    if (attempts < 30 && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(synchronize);
+    }
+  };
+  queueMicrotask(synchronize);
+}
+
 export function setFluentDropdownValue(dropdown, value) {
   const desired = String(value ?? '');
   const options = [...dropdown.querySelectorAll('fluent-option')];
@@ -193,8 +243,13 @@ function settingsNavigation(root) {
       }));
     });
     nav.append(link);
-    // Retain the desktop settings boundary for delegated changes and patch reads.
-    if (section.dataset.desktopGroup) section.setAttribute('data-desktop-settings', '');
+    // Retain the desktop settings boundary and per-section draft key after reparenting.
+    if (section.dataset.desktopGroup) {
+      section.setAttribute('data-desktop-settings', '');
+      if (!section.hasAttribute('data-draft-key')) {
+        section.setAttribute('data-draft-key', `desktop-settings-${section.dataset.desktopGroup}`);
+      }
+    }
     const title = section.querySelector('h2');
     if (title) title.tabIndex = -1;
     body.append(section);

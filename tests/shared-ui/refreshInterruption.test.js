@@ -339,3 +339,61 @@ test('a history revision change keeps the painted document', () => {
   assert.match(appSource, /if \(!force && !state\.historyStale && state\.history && state\.historyDeviceId === scopedDeviceId\) return;/);
   assert.doesNotMatch(appSource, /if \(historyChanged\) \{\s*state\.history = null;/, 'a refresh must not blank the charts');
 });
+
+test('setFluentRadioGroupValue waits for slotted radios instead of clearing checkedIndex', async () => {
+  const fluentSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'shared-ui', 'core', 'fluent.js'), 'utf8');
+  const slice = fluentSource.slice(
+    fluentSource.indexOf('const pendingRadioSync'),
+    fluentSource.indexOf('export function setFluentDropdownValue')
+  ).replace(/^export /gm, '');
+  const context = { WeakMap, Array, String, queueMicrotask };
+  vm.createContext(context);
+  const setFluentRadioGroupValue = vm.runInContext(`${slice}; setFluentRadioGroupValue;`, context);
+
+  const valueWrites = [];
+  const makeRadio = (value) => ({
+    value,
+    checked: value === 'today',
+    classMap: new Set(value === 'today' ? ['selected'] : []),
+    parentOption: null,
+    toggleAttribute(attr, on) { if (on) this[attr] = true; else delete this[attr]; },
+    closest() { return this.parentOption; }
+  });
+  const optToday = { classList: { toggle: (name, on) => { optToday.selected = on; } }, selected: true };
+  const optWeek = { classList: { toggle: (name, on) => { optWeek.selected = on; } }, selected: false };
+  const radioToday = makeRadio('today'); radioToday.parentOption = optToday;
+  const radioWeek = makeRadio('week'); radioWeek.parentOption = optWeek;
+  const group = {
+    isConnected: true,
+    radios: undefined,
+    enabledRadios: [],
+    attrs: {},
+    setAttribute(k, v) { this.attrs[k] = v; },
+    removeAttribute(k) { delete this.attrs[k]; },
+    querySelectorAll: () => [radioToday, radioWeek],
+    set value(v) { valueWrites.push(v); this._value = v; },
+    get value() { return this._value ?? null; }
+  };
+
+  setFluentRadioGroupValue(group, 'week');
+  assert.deepEqual(valueWrites, [], 'value is deferred until Fluent populates group.radios');
+  assert.equal(optWeek.selected, true);
+  assert.equal(optToday.selected, false);
+  assert.equal(radioWeek.checked, true);
+  assert.equal(group.initialValue, 'week');
+
+  group.radios = [radioToday, radioWeek];
+  group.enabledRadios = group.radios;
+  await new Promise((resolve) => queueMicrotask(resolve));
+  assert.deepEqual(valueWrites, ['week']);
+});
+
+test('desktop settings sections retain draft keys, secret drafts, period-tab focus, and error reconciliation', () => {
+  const fluentSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'shared-ui', 'core', 'fluent.js'), 'utf8');
+  assert.match(fluentSource, /section\.setAttribute\('data-draft-key', `desktop-settings-\$\{section\.dataset\.desktopGroup\}`\)/);
+  assert.match(appSource, /els\.periodTabs\.dataset\.optionsKey !== periodOptionsKey/);
+  assert.match(appSource, /setFluentRadioGroupValue\(els\.periodTabs, selectedPeriod\)/);
+  assert.match(appSource, /active\.closest\('\[data-hub-secret-input\]'\) && state\.hubSecretDraft/);
+  assert.match(appSource, /if \(typeof syncDesktopSettingsControls === 'function'\) syncDesktopSettingsControls\(\);/);
+  assert.match(appSource, /desktop\?\.onSettingsPush\?\.\(\(next\) => \{[\s\S]*?adoptDesktopPrefs\(next\)/);
+});
