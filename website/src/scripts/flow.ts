@@ -1,13 +1,13 @@
 /**
- * 零外泄管线与多端拓扑实时沙盒（Interactive Zero-Egress Optical Gate Sandbox）
+ * 多端同步与本地数据边界交互演示（Interactive Sync & Local Boundary Sandbox）
  *
- * 直观呈现计然的核心架构与隐私承诺：
- * - 左侧 4 台设备产生两类粒子：
- *     1) 灰红色「原始提示词 / 代码路径」碎片 —— 抵达 34% 处的本机 12 叶机械光阑（LOCAL IRIS）时当场湮灭；
- *     2) 冰青色「Token 整数」与香槟黄铜「成本差值」 —— 无阻穿过本机光阑，汇入自建 Docker Hub :17321，
- *        再通过 stream?detail=slim 分发给右侧 4 大原生终端。
- * - 支持切换「自建 Hub 车队协同」与「桌面端仅本机离线模式」（出口流量瞬间归零）。
- * - 支持模拟「笔记本合盖休眠 >10m 置灰（Stale）」及唤醒后的「单调 baseline 差值无损续接」。
+ * 直观展示计然的数据流向与离线/多机切换：
+ * - 左侧 4 台设备产生两类数据块：
+ *     1) 红色「提示词与本地路径」方块 —— 始终止步于 34% 处的本机采集边界，留在本地磁盘；
+ *     2) 青色「Token 计数」与金色「成本差值」 —— 在多机同步模式下发往自建 Docker Hub (:17321)，
+ *        再同步至右侧桌面端、网页端与 Android 微件。
+ * - 支持切换「自建 Hub 多机同步」与「桌面端仅本机离线模式」。
+ * - 支持模拟「笔记本休眠 >10m 标为离线（Stale）」及唤醒后的增量续接。
  */
 
 interface Particle {
@@ -17,15 +17,6 @@ interface Particle {
   kind: 'prompt' | 'token' | 'cost' | 'sse';
   targetLane: number;
   alpha: number;
-}
-
-interface Spark {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  tone: 'red' | 'cyan' | 'brass';
 }
 
 export function initFlowSandbox(root: HTMLElement) {
@@ -47,7 +38,6 @@ export function initFlowSandbox(root: HTMLElement) {
 
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const particles: Particle[] = [];
-  const sparks: Spark[] = [];
 
   let width = 900;
   let height = 310;
@@ -129,22 +119,20 @@ export function initFlowSandbox(root: HTMLElement) {
   const spawn = () => {
     const activeLanes = mode === 'local' ? [0] : laptopStale ? [1, 2] : [0, 1, 2];
     const lane = activeLanes[Math.floor(Math.random() * activeLanes.length)];
-    // 原始提示词碎片（止步于光阑）
-    if (Math.random() < 0.55) {
+    if (Math.random() < 0.52) {
       particles.push({
         lane,
         x: 0.06,
-        speed: 0.17 + Math.random() * 0.06,
+        speed: 0.16 + Math.random() * 0.05,
         kind: 'prompt',
         targetLane: 0,
         alpha: 0.85,
       });
     }
-    // 洁净 Token 整数或成本差值
     particles.push({
       lane,
       x: 0.06,
-      speed: 0.22 + Math.random() * 0.07,
+      speed: 0.21 + Math.random() * 0.06,
       kind: Math.random() < 0.76 ? 'token' : 'cost',
       targetLane: Math.floor(Math.random() * 4),
       alpha: 1,
@@ -163,8 +151,8 @@ export function initFlowSandbox(root: HTMLElement) {
     const laneY = (i: number) => height * (0.2 + i * 0.2);
     const hubY = height * 0.5;
 
-    // 1. 背景微刻度网格线
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+    // 1. 背景辅助线
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
     ctx.lineWidth = 1;
     for (let i = 1; i < 6; i++) {
       const gx = (width / 6) * i;
@@ -174,22 +162,20 @@ export function initFlowSandbox(root: HTMLElement) {
       ctx.stroke();
     }
 
-    // 2. 绘制导轨路径（设备 → 本机光阑 → Hub → 四端）
+    // 2. 连线路径
     for (let i = 0; i < 4; i++) {
       const y = laneY(i);
-      const laneOffline = (i === 3) || (i === 0 && laptopStale) || (mode === 'local' && i > 0);
+      const laneOffline = i === 3 || (i === 0 && laptopStale) || (mode === 'local' && i > 0);
 
-      // 本机采集段（src → gate）
-      ctx.strokeStyle = laneOffline ? 'rgba(255,255,255,0.06)' : 'rgba(86,204,242,0.22)';
+      ctx.strokeStyle = laneOffline ? 'rgba(255,255,255,0.06)' : 'rgba(79,195,247,0.24)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(srcX, y);
       ctx.lineTo(gateX, y);
       ctx.stroke();
 
-      // 网络上报段（gate → Hub）
       ctx.strokeStyle =
-        mode === 'local' || laneOffline ? 'rgba(255,255,255,0.045)' : 'rgba(86,204,242,0.24)';
+        mode === 'local' || laneOffline ? 'rgba(255,255,255,0.045)' : 'rgba(79,195,247,0.24)';
       ctx.setLineDash(mode === 'local' || laneOffline ? [3, 4] : []);
       ctx.beginPath();
       ctx.moveTo(gateX, y);
@@ -197,13 +183,12 @@ export function initFlowSandbox(root: HTMLElement) {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // 分发段（Hub → 右侧 4 个视图端）
       const localDesktopOnly = mode === 'local' && i === 0;
       ctx.strokeStyle =
         mode === 'fleet'
-          ? 'rgba(86,204,242,0.2)'
+          ? 'rgba(79,195,247,0.2)'
           : localDesktopOnly
-            ? 'rgba(86,204,242,0.34)'
+            ? 'rgba(79,195,247,0.34)'
             : 'rgba(255,255,255,0.04)';
       ctx.beginPath();
       if (localDesktopOnly) {
@@ -216,45 +201,45 @@ export function initFlowSandbox(root: HTMLElement) {
       ctx.stroke();
     }
 
-    // 3. 绘制本机零外泄机械光阑（LOCAL PROMPT-STRIPPING IRIS）
-    ctx.strokeStyle = 'rgba(86, 204, 242, 0.55)';
+    // 3. 本机采集边界（仅提取统计数字，原始记录留盘）
+    ctx.strokeStyle = 'rgba(79, 195, 247, 0.52)';
     ctx.lineWidth = 1.2;
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
-    ctx.moveTo(gateX, 18);
+    ctx.moveTo(gateX, 20);
     ctx.lineTo(gateX, height - 18);
     ctx.stroke();
     ctx.setLineDash([]);
 
     for (let i = 0; i < 4; i++) {
       const y = laneY(i);
-      ctx.fillStyle = '#090b0f';
-      ctx.strokeStyle = 'rgba(86, 204, 242, 0.7)';
+      ctx.fillStyle = '#0e1118';
+      ctx.strokeStyle = 'rgba(79, 195, 247, 0.68)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.rect(gateX - 5, y - 7, 10, 14);
+      ctx.roundRect(gateX - 5, y - 7, 10, 14, 2);
       ctx.fill();
       ctx.stroke();
     }
 
-    ctx.fillStyle = '#56ccf2';
+    ctx.fillStyle = '#4fc3f7';
     ctx.font = '600 10px "JetBrains Mono Variable", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(zh ? '本机光阑 · 剥离提示词' : 'LOCAL IRIS · STRIP PROMPTS', gateX, 13);
+    ctx.fillText(zh ? '本机边界 · 仅传计数' : 'LOCAL BOUNDARY · COUNTS ONLY', gateX, 13);
 
-    // 4. 更新与绘制粒子
+    // 4. 更新与绘制数据块
     if (!reduced && dt > 0) {
       spawnAcc += dt;
       while (spawnAcc > 0.24) {
         spawnAcc -= 0.24;
-        if (particles.length < 75) spawn();
+        if (particles.length < 72) spawn();
       }
       if (resumeBurst > 0) {
         resumeBurst--;
         particles.push({
           lane: 0,
           x: 0.08 + Math.random() * 0.06,
-          speed: 0.31,
+          speed: 0.3,
           kind: resumeBurst % 3 === 0 ? 'cost' : 'token',
           targetLane: resumeBurst % 4,
           alpha: 1,
@@ -265,24 +250,12 @@ export function initFlowSandbox(root: HTMLElement) {
         const p = particles[i];
         p.x += p.speed * dt;
 
-        // 原始提示词抵达 0.34 光阑立即汽化拦截！
-        if (p.kind === 'prompt' && p.x >= 0.335) {
-          const py = laneY(p.lane);
-          for (let s = 0; s < 3; s++) {
-            sparks.push({
-              x: gateX - 2,
-              y: py + (Math.random() - 0.5) * 6,
-              vx: -18 - Math.random() * 24,
-              vy: (Math.random() - 0.5) * 32,
-              life: 1,
-              tone: 'red',
-            });
-          }
+        // 提示词与本地路径留在设备端，越界前淡出过滤
+        if (p.kind === 'prompt' && p.x >= 0.33) {
           particles.splice(i, 1);
           continue;
         }
 
-        // 仅本机模式下，Token 在光阑后直通 Desktop 视图，不经过 Hub
         if (mode === 'local' && p.x >= 0.91) {
           particles.splice(i, 1);
           continue;
@@ -296,17 +269,8 @@ export function initFlowSandbox(root: HTMLElement) {
           particles.splice(i, 1);
         }
       }
-
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const sp = sparks[i];
-        sp.x += sp.vx * dt;
-        sp.y += sp.vy * dt;
-        sp.life -= dt * 2.8;
-        if (sp.life <= 0) sparks.splice(i, 1);
-      }
     }
 
-    // 静态减少动态模式：绘制一组代表性粒子快照
     const drawList: Particle[] = reduced
       ? [
           { lane: 0, x: 0.21, speed: 0, kind: 'prompt', targetLane: 0, alpha: 0.85 },
@@ -335,44 +299,40 @@ export function initFlowSandbox(root: HTMLElement) {
       }
 
       if (p.kind === 'prompt') {
-        ctx.fillStyle = `rgba(239, 90, 82, ${0.72 * p.alpha})`;
+        const fade = p.x > 0.26 ? Math.max(0, 1 - (p.x - 0.26) / 0.07) : 1;
+        ctx.fillStyle = `rgba(239, 90, 82, ${0.72 * p.alpha * fade})`;
         ctx.fillRect(px - 4, py - 2, 7, 4);
       } else if (p.kind === 'cost') {
         ctx.fillStyle = '#e5a94c';
         ctx.beginPath();
-        ctx.arc(px, py, 3, 0, Math.PI * 2);
+        ctx.arc(px, py, 3.2, 0, Math.PI * 2);
         ctx.fill();
       } else {
-        ctx.fillStyle = '#56ccf2';
+        ctx.fillStyle = '#4fc3f7';
         ctx.beginPath();
-        ctx.arc(px, py, 2.8, 0, Math.PI * 2);
+        ctx.arc(px, py, 3, 0, Math.PI * 2);
         ctx.fill();
       }
     }
 
-    for (const sp of sparks) {
-      ctx.fillStyle = `rgba(239, 90, 82, ${Math.max(0, sp.life * 0.85)})`;
-      ctx.fillRect(sp.x - 1.5, sp.y - 1.5, 3, 3);
-    }
-
-    // 5. 中央自建 Hub 核心节点
+    // 5. 中央自建 Docker Hub 节点
     const hubActive = mode === 'fleet';
-    ctx.fillStyle = hubActive ? '#0e131b' : '#090b0f';
-    ctx.strokeStyle = hubActive ? '#56ccf2' : 'rgba(255,255,255,0.16)';
+    ctx.fillStyle = hubActive ? '#141923' : '#0e1118';
+    ctx.strokeStyle = hubActive ? '#4fc3f7' : 'rgba(255,255,255,0.16)';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.rect(hubX - 54, hubY - 30, 108, 60);
+    ctx.roundRect(hubX - 56, hubY - 30, 112, 60, 6);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = hubActive ? '#edf0f5' : '#5e6572';
+    ctx.fillStyle = hubActive ? '#eef1f6' : '#636c7d';
     ctx.font = '600 11px "Instrument Sans Variable", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(hubActive ? 'DOCKER HUB' : 'HUB BYPASSED', hubX, hubY - 7);
-    ctx.fillStyle = hubActive ? '#56ccf2' : '#5e6572';
+    ctx.fillText(hubActive ? 'DOCKER HUB' : 'LOCAL ONLY', hubX, hubY - 7);
+    ctx.fillStyle = hubActive ? '#4fc3f7' : '#636c7d';
     ctx.font = '500 9.5px "JetBrains Mono Variable", monospace';
-    ctx.fillText(hubActive ? ':17321 · MySQL 8' : 'LOCAL-ONLY MODE', hubX, hubY + 10);
-    ctx.fillStyle = hubActive ? '#e5a94c' : '#5e6572';
+    ctx.fillText(hubActive ? ':17321 · MySQL 8' : 'NO SYNC TRAFFIC', hubX, hubY + 10);
+    ctx.fillStyle = hubActive ? '#e5a94c' : '#636c7d';
     ctx.fillText('AES-256-GCM', hubX, hubY + 23);
   }
 

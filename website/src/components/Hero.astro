@@ -3,6 +3,7 @@ import { CONTENT, type Lang } from '../i18n/content';
 import { REPO_URL } from '../data/product';
 import type { ReleaseInfo } from '../data/release';
 import DownloadLabel from './DownloadLabel.astro';
+import ModelStage from './ModelStage.astro';
 
 interface Props {
   lang: Lang;
@@ -14,104 +15,104 @@ const t = CONTENT[lang].hero;
 
 <section class="hero" id="top" data-hero aria-labelledby="hero-title">
   <div class="wrap hero__content">
-    <div class="hero__copy">
-      <div class="hero__kicker">
-        <span class="eyebrow">{t.eyebrow}</span>
-        <span class="hero__badge mono">{t.badge}</span>
+    <div class="hero__main">
+      <div class="hero__copy">
+        <div class="hero__kicker">
+          <span class="eyebrow">{t.eyebrow}</span>
+          <span class="hero__badge mono">{t.badge}</span>
+        </div>
+
+        <h1 class="hero__title" id="hero-title">
+          <span class="hero__brand">{t.name}</span>
+          <span class="hero__motto">{t.motto}</span>
+        </h1>
+
+        <p class="hero__lead">{t.lead}</p>
+
+        <div class="hero__ctas">
+          <a class="btn btn--primary" href="#install" data-dl-primary>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 2v8.8m0 0L4.6 7.4M8 10.8l3.4-3.4M2.8 13.8h10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>{t.ctaPrimary}</span>
+            <DownloadLabel release={release} />
+          </a>
+          <a class="btn btn--ghost" href="#workbench">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.8" y="2.5" width="12.4" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.35" />
+              <path d="M5.2 2.5v11M7.6 6.2h4.2M7.6 9.2h2.8" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
+            </svg>
+            <span>{t.ctaWorkbench}</span>
+          </a>
+        </div>
+
+        <p class="hero__links mono">
+          <a href="#features">{t.ctaFeatures}</a>
+          <span aria-hidden="true">·</span>
+          <a href="#install">{t.ctaAll}</a>
+          <span aria-hidden="true">·</span>
+          <a href={REPO_URL} rel="noopener">{t.ctaGithub} ↗</a>
+        </p>
       </div>
 
-      <h1 class="hero__title" id="hero-title">
-        <span class="hero__brand">{t.name}</span>
-        <span class="hero__motto">{t.motto}</span>
-      </h1>
+      <div class="hero__visual">
+        <ModelStage
+          id="hero"
+          aspect="hero"
+          priority
+          alt={t.stageAlt}
+          caption={t.stageCaption}
+        />
 
-      <p class="hero__lead">{t.lead}</p>
-
-      <div class="hero__ctas">
-        <a class="btn btn--primary" href="#install" data-dl-primary>
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 2v8.8m0 0L4.6 7.4M8 10.8l3.4-3.4M2.8 13.8h10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{t.ctaPrimary}</span>
-          <DownloadLabel release={release} />
-        </a>
-        <a class="btn btn--ghost" href="#workbench">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1.8" y="2.5" width="12.4" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.35" />
-            <path d="M5.2 2.5v11M7.6 6.2h4.2M7.6 9.2h2.8" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
-          </svg>
-          <span>{t.ctaWorkbench}</span>
-        </a>
-      </div>
-
-      <p class="hero__links mono">
-        <a href="#install">{t.ctaAll}</a>
-        <span aria-hidden="true">/</span>
-        <a href="#anatomy">JR-01 {lang === 'zh' ? '五层机芯解构' : '5-Layer Anatomy'} ↓</a>
-        <span aria-hidden="true">/</span>
-        <a href={REPO_URL} rel="noopener">{t.ctaGithub} ↗</a>
-      </p>
-
-      <!-- JR-01 实时双信号计量读数表头（冰青 Token 脉冲 × 香槟黄铜成本/Credits） -->
-      <div class="hero__ledger" aria-label={t.readoutTitle}>
-        <div class="hero__ledger-bar mono">
-          <span class="hero__ledger-dot" aria-hidden="true"></span>
-          <span>{t.readoutTitle}</span>
-          <span class="reg" aria-hidden="true"></span>
-        </div>
-        <div class="hero__ledger-grid">
-          <div class="hero__ledger-cell">
-            <span class="hero__ledger-k mono">{t.readoutTokLabel}</span>
-            <strong class="hero__ledger-v hero__ledger-v--cyan mono" data-counter-n>0</strong>
+        <!-- 汇总账本示例条（Token 数量 / 花费 / 紧迫窗口 / 独立积分） -->
+        <div class="hero__ledger" aria-label={t.readoutTitle}>
+          <div class="hero__ledger-bar mono">
+            <span class="hero__ledger-dot" aria-hidden="true"></span>
+            <span>{t.readoutTitle}</span>
           </div>
-          <div class="hero__ledger-cell">
-            <span class="hero__ledger-k mono">{t.readoutCostLabel}</span>
-            <strong class="hero__ledger-v hero__ledger-v--brass mono" data-hero-cost>$47.82</strong>
-          </div>
-          <div class="hero__ledger-cell">
-            <span class="hero__ledger-k mono">{t.readoutQuotaLabel}</span>
-            <strong class="hero__ledger-v hero__ledger-v--cyan mono">38% · 1h42m</strong>
-          </div>
-          <div class="hero__ledger-cell">
-            <span class="hero__ledger-k mono">{t.readoutCreditsLabel}</span>
-            <strong class="hero__ledger-v hero__ledger-v--brass mono">120 Credits</strong>
-          </div>
-        </div>
-        <div class="hero__mix-bar" aria-hidden="true">
-          <span style="width: 21%" class="hero__mix-seg hero__mix-seg--in"></span>
-          <span style="width: 9%" class="hero__mix-seg hero__mix-seg--out"></span>
-          <span style="width: 58%" class="hero__mix-seg hero__mix-seg--cr"></span>
-          <span style="width: 12%" class="hero__mix-seg hero__mix-seg--cw"></span>
-        </div>
-        <p class="hero__ledger-foot mono">{t.readoutMix}</p>
-      </div>
-    </div>
-
-    <!-- 底部 1px 无缝游丝事实矩阵（59 / 52 / 26 / 0） -->
-    <div class="hero__bottom">
-      <dl class="hero__stats">
-        {t.stats.map((s, idx) => (
-          <div class="hero__stat">
-            <div class="hero__stat-head mono">
-              <span>0{idx + 1}</span>
-              <span class="reg" aria-hidden="true"></span>
+          <div class="hero__ledger-grid">
+            <div class="hero__ledger-cell">
+              <span class="hero__ledger-k mono">{t.readoutTokLabel}</span>
+              <strong class="hero__ledger-v hero__ledger-v--cyan mono" data-counter-n>0</strong>
             </div>
-            <dt class="hero__stat-k">{s.k}</dt>
-            <dd class="hero__stat-dd">
-              <span class:list={['hero__stat-n mono', idx === 2 && 'hero__stat-n--brass', idx === 3 && 'hero__stat-n--pure']}>
-                {s.n}
-              </span>
-              <span class="hero__stat-sub">{s.sub}</span>
-            </dd>
+            <div class="hero__ledger-cell">
+              <span class="hero__ledger-k mono">{t.readoutCostLabel}</span>
+              <strong class="hero__ledger-v hero__ledger-v--brass mono" data-hero-cost>$47.82</strong>
+            </div>
+            <div class="hero__ledger-cell">
+              <span class="hero__ledger-k mono">{t.readoutQuotaLabel}</span>
+              <strong class="hero__ledger-v hero__ledger-v--cyan mono">38% · 1h42m</strong>
+            </div>
+            <div class="hero__ledger-cell">
+              <span class="hero__ledger-k mono">{t.readoutCreditsLabel}</span>
+              <strong class="hero__ledger-v hero__ledger-v--brass mono">120 Credits</strong>
+            </div>
           </div>
-        ))}
-      </dl>
-
-      <div class="hero__rail mono" aria-hidden="true">
-        <span>{t.hudLeft}</span>
-        <span>{t.hudRight}</span>
+          <div class="hero__mix-bar" aria-hidden="true">
+            <span style="width: 21%" class="hero__mix-seg hero__mix-seg--in"></span>
+            <span style="width: 9%" class="hero__mix-seg hero__mix-seg--out"></span>
+            <span style="width: 58%" class="hero__mix-seg hero__mix-seg--cr"></span>
+            <span style="width: 12%" class="hero__mix-seg hero__mix-seg--cw"></span>
+          </div>
+          <p class="hero__ledger-foot mono">{t.readoutMix}</p>
+        </div>
       </div>
     </div>
+
+    <!-- 底部核心产品数据矩阵（59 / 52 / 26 / 0） -->
+    <dl class="hero__stats">
+      {t.stats.map((s, idx) => (
+        <div class="hero__stat">
+          <dt class="hero__stat-k">{s.k}</dt>
+          <dd class="hero__stat-dd">
+            <span class:list={['hero__stat-n mono', idx === 2 && 'hero__stat-n--brass', idx === 3 && 'hero__stat-n--pure']}>
+              {s.n}
+            </span>
+            <span class="hero__stat-sub">{s.sub}</span>
+          </dd>
+        </div>
+      ))}
+    </dl>
   </div>
 </section>
 
@@ -119,22 +120,33 @@ const t = CONTENT[lang].hero;
   .hero {
     position: relative;
     z-index: 2;
-    min-height: max(760px, 100svh);
-    display: flex;
-    align-items: stretch;
+    background:
+      radial-gradient(60% 50% at 75% 28%, rgb(79 195 247 / 0.06) 0%, transparent 70%),
+      var(--void);
   }
 
   .hero__content {
-    padding-top: calc(var(--nav-h) + clamp(32px, 5vh, 64px));
-    padding-bottom: clamp(32px, 4.5vh, 52px);
+    padding-top: calc(var(--nav-h) + clamp(28px, 4.5vh, 56px));
+    padding-bottom: clamp(44px, 6vh, 72px);
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    gap: clamp(32px, 5vh, 56px);
+    gap: clamp(32px, 4.5vh, 52px);
+  }
+
+  .hero__main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.06fr);
+    gap: clamp(28px, 4vw, 56px);
+    align-items: center;
+  }
+
+  @media (max-width: 980px) {
+    .hero__main {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   .hero__copy {
-    max-width: 620px;
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -144,61 +156,60 @@ const t = CONTENT[lang].hero;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 10px 16px;
+    gap: 10px 14px;
   }
 
   .hero__badge {
-    font-size: 0.68rem;
-    letter-spacing: 0.06em;
-    padding: 3px 8px;
-    border-radius: 2px;
+    font-size: 0.7rem;
+    padding: 3px 9px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line-2);
-    background: rgb(9 11 15 / 0.78);
+    background: var(--ink-1);
     color: var(--fg-dim);
   }
 
   .hero__title {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
 
   .hero__brand {
     font-family: var(--f-display);
-    font-weight: 250;
-    font-size: clamp(3.1rem, 6.6vw, 5.2rem);
-    line-height: 0.96;
-    letter-spacing: -0.045em;
+    font-weight: 640;
+    font-size: clamp(2.8rem, 5.4vw, 4.4rem);
+    line-height: 1.02;
+    letter-spacing: -0.04em;
     color: var(--fg);
   }
 
   :lang(zh) .hero__brand {
-    font-weight: 300;
-    letter-spacing: 0.02em;
-    line-height: 1.04;
+    font-weight: 620;
+    letter-spacing: 0.01em;
+    line-height: 1.08;
   }
 
   .hero__motto {
     font-family: var(--f-display);
-    font-weight: 320;
-    font-size: clamp(1.32rem, 2.35vw, 1.98rem);
-    line-height: 1.28;
+    font-weight: 540;
+    font-size: clamp(1.26rem, 2.05vw, 1.76rem);
+    line-height: 1.34;
     letter-spacing: -0.02em;
     color: var(--fg);
     text-wrap: balance;
   }
 
   :lang(zh) .hero__motto {
-    font-weight: 340;
+    font-weight: 520;
     letter-spacing: 0;
-    line-height: 1.36;
+    line-height: 1.42;
   }
 
   .hero__lead {
-    font-size: clamp(0.92rem, 1.06vw, 1.02rem);
-    line-height: 1.72;
+    font-size: clamp(0.92rem, 1.04vw, 1rem);
+    line-height: 1.74;
     color: var(--fg-dim);
-    max-width: 55ch;
+    max-width: 56ch;
   }
 
   .hero__ctas {
@@ -220,7 +231,7 @@ const t = CONTENT[lang].hero;
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    font-size: 0.74rem;
+    font-size: 0.76rem;
     color: var(--fg-dim);
   }
 
@@ -235,41 +246,42 @@ const t = CONTENT[lang].hero;
     border-bottom-color: var(--cyan);
   }
 
-  /* 实时双轨读数仪 */
+  .hero__visual {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  /* 汇总读数示例条 */
   .hero__ledger {
-    margin-top: 4px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--line-2);
-    background: rgb(9 11 15 / 0.84);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: var(--ink-1);
+    overflow: hidden;
   }
 
   .hero__ledger-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 12px;
+    padding: 7px 13px;
     border-bottom: 1px solid var(--line);
-    font-size: 0.64rem;
-    letter-spacing: 0.14em;
-    color: var(--fg-faint);
-  }
-
-  .hero__ledger-bar .reg {
-    margin-left: auto;
+    font-size: 0.68rem;
+    color: var(--fg-dim);
   }
 
   .hero__ledger-dot {
     width: 6px;
     height: 6px;
-    border-radius: 1px;
+    border-radius: 50%;
     background: var(--cyan);
-    box-shadow: 0 0 8px var(--cyan);
+    box-shadow: 0 0 8px rgb(79 195 247 / 0.65);
   }
 
   .hero__ledger-grid {
     display: grid;
-    grid-template-columns: 1.35fr 1fr 1fr 1fr;
+    grid-template-columns: 1.32fr 1fr 1fr 1fr;
     background: var(--line);
     gap: 1px;
   }
@@ -281,7 +293,7 @@ const t = CONTENT[lang].hero;
   }
 
   .hero__ledger-cell {
-    background: rgb(9 11 15 / 0.94);
+    background: var(--ink-1);
     padding: 10px 12px;
     display: flex;
     flex-direction: column;
@@ -290,8 +302,7 @@ const t = CONTENT[lang].hero;
   }
 
   .hero__ledger-k {
-    font-size: 0.6rem;
-    letter-spacing: 0.08em;
+    font-size: 0.65rem;
     color: var(--fg-faint);
     white-space: nowrap;
     overflow: hidden;
@@ -299,8 +310,8 @@ const t = CONTENT[lang].hero;
   }
 
   .hero__ledger-v {
-    font-size: 0.96rem;
-    font-weight: 560;
+    font-size: 0.94rem;
+    font-weight: 580;
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
@@ -320,31 +331,23 @@ const t = CONTENT[lang].hero;
     border-top: 1px solid var(--line);
   }
 
-  .hero__mix-seg--in { background: #56ccf2; }
-  .hero__mix-seg--out { background: #edf0f5; }
-  .hero__mix-seg--cr { background: rgb(86 204 242 / 0.42); }
+  .hero__mix-seg--in { background: #4fc3f7; }
+  .hero__mix-seg--out { background: #eef1f6; }
+  .hero__mix-seg--cr { background: rgb(79 195 247 / 0.42); }
   .hero__mix-seg--cw { background: #e5a94c; }
 
   .hero__ledger-foot {
-    padding: 6px 12px;
-    font-size: 0.65rem;
+    padding: 6px 13px;
+    font-size: 0.68rem;
     color: var(--fg-dim);
     border-top: 1px solid var(--line);
   }
 
-  /* 底部 1px 游丝四格事实矩阵 */
-  .hero__bottom {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
+  /* 底部四格产品数据卡片 */
   .hero__stats {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    background: var(--line-2);
-    border: 1px solid var(--line-2);
-    gap: 1px;
+    gap: 12px;
   }
 
   @media (max-width: 960px) {
@@ -360,23 +363,13 @@ const t = CONTENT[lang].hero;
   }
 
   .hero__stat {
-    padding: 15px 18px;
-    background: rgb(7 9 13 / 0.88);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    padding: 16px 18px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--line-2);
+    background: var(--ink-1);
     display: flex;
     flex-direction: column;
     gap: 5px;
-  }
-
-  .hero__stat-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.62rem;
-    letter-spacing: 0.14em;
-    color: var(--fg-faint);
-    order: 0;
   }
 
   .hero__stat-dd {
@@ -385,9 +378,9 @@ const t = CONTENT[lang].hero;
 
   .hero__stat-n {
     order: 1;
-    font-size: clamp(1.85rem, 2.8vw, 2.5rem);
-    font-weight: 300;
-    line-height: 1.04;
+    font-size: clamp(1.8rem, 2.6vw, 2.35rem);
+    font-weight: 580;
+    line-height: 1.06;
     letter-spacing: -0.03em;
     color: var(--cyan);
   }
@@ -402,26 +395,16 @@ const t = CONTENT[lang].hero;
 
   .hero__stat-k {
     order: 2;
-    font-size: 0.82rem;
-    font-weight: 560;
+    font-size: 0.86rem;
+    font-weight: 580;
     color: var(--fg);
   }
 
   .hero__stat-sub {
     order: 3;
-    font-size: 0.73rem;
-    line-height: 1.48;
+    font-size: 0.76rem;
+    line-height: 1.5;
     color: var(--fg-dim);
-  }
-
-  .hero__rail {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 6px 20px;
-    font-size: 0.65rem;
-    letter-spacing: 0.12em;
-    color: var(--fg-faint);
   }
 </style>
 

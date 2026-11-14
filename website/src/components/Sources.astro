@@ -16,7 +16,7 @@ const filters = [
 ] as const;
 ---
 
-<section class="section" id="sources" data-idx={t.numeral} aria-labelledby="src-title">
+<section class="section section--alt" id="sources" aria-labelledby="src-title">
   <div class="wrap">
     <header class="sec-head reveal">
       <div class="sec-head__left">
@@ -114,8 +114,10 @@ const filters = [
     display: inline-flex;
     flex-wrap: wrap;
     background: var(--line);
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line-2);
     gap: 1px;
+    overflow: hidden;
   }
 
   .src-filter {
@@ -149,7 +151,7 @@ const filters = [
     width: 100%;
     height: 36px;
     padding: 0 12px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line-2);
     background: var(--ink-1);
     color: var(--fg);
@@ -204,13 +206,15 @@ const filters = [
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
     background: var(--line);
+    border-radius: var(--radius-lg);
     border: 1px solid var(--line-2);
     gap: 1px;
+    overflow: hidden;
   }
 
   .src-item {
     padding: 11px 14px;
-    background: var(--void);
+    background: var(--ink-1);
     display: flex;
     align-items: center;
     justify-content: space-between;

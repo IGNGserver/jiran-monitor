@@ -1,47 +1,50 @@
 @import '@fontsource-variable/instrument-sans/index.css';
 @import '@fontsource-variable/jetbrains-mono/index.css';
 
-/* ── 计然 Jiran · JR-01 精密计量光学设计系统 ─────────────────────────────── */
+/* ── 计然 Jiran · 产品优先深色设计系统 ───────────────────────────────────── */
 :root {
   color-scheme: dark;
 
-  /* 无彩色黑曜石暗室底板（零海军蓝底色污染） */
-  --void: #050608;
-  --bg: #050608;
-  --ink-1: #090b0f;
-  --ink-2: #0e1117;
-  --ink-3: #151922;
+  /* 沉稳石墨深色底板（与 design/palette.json 真源同步） */
+  --void: #090b10;
+  --bg: #090b10;
+  --ink-1: #0e1118;
+  --ink-2: #141923;
+  --ink-3: #1b2230;
 
-  /* 铂银油墨层级 */
-  --fg: #edf0f5;
-  --fg-dim: #9aa1ae;
-  --fg-faint: #5e6572;
+  /* 文字层级 */
+  --fg: #eef1f6;
+  --fg-dim: #9ba3b2;
+  --fg-faint: #636c7d;
 
-  /* 1px 建筑游丝分割线 */
+  /* 1px 清晰边框层级 */
   --line: rgb(255 255 255 / 0.08);
-  --line-2: rgb(255 255 255 / 0.16);
-  --line-3: rgb(255 255 255 / 0.28);
+  --line-2: rgb(255 255 255 / 0.14);
+  --line-3: rgb(255 255 255 / 0.24);
 
-  /* 双信号色彩纪律：
-   *  --cyan  仅代表 Token 计量脉冲、5 维分光与配额余量弧
-   *  --brass 仅代表真实货币成本（USD/CNY）与独立原生 Credits 账本
-   *  --danger 仅用于 <20% 临界配额告警 */
-  --cyan: #56ccf2;
-  --cyan-soft: rgb(86 204 242 / 0.14);
+  /* 双语义高亮：
+   *  --cyan  Token 词元数量、构成比例与配额窗口
+   *  --brass 真实货币花费（USD/CNY）与独立原生 Credits
+   *  --danger <20% 紧迫配额提醒 */
+  --cyan: #4fc3f7;
+  --cyan-soft: rgb(79 195 247 / 0.13);
   --brass: #e5a94c;
-  --brass-soft: rgb(229 169 76 / 0.14);
+  --brass-soft: rgb(229 169 76 / 0.13);
   --danger: #ef5a52;
+
+  /* 圆角与尺度 */
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --nav-h: 62px;
+  --wrap: min(1320px, calc(100vw - clamp(32px, 6vw, 104px)));
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* 字体栈 */
   --f-sans: 'Instrument Sans Variable', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei UI', system-ui, sans-serif;
   --f-display: 'Instrument Sans Variable', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
   --f-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-
-  /* 尺度与缓动 */
-  --nav-h: 60px;
-  --wrap: min(1340px, calc(100vw - clamp(32px, 6vw, 108px)));
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 *,
@@ -59,7 +62,7 @@ html {
   color: var(--fg);
   font-family: var(--f-sans);
   font-size: 16px;
-  line-height: 1.62;
+  line-height: 1.64;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -81,7 +84,7 @@ body {
 }
 
 ::selection {
-  background: rgb(86 204 242 / 0.24);
+  background: rgb(79 195 247 / 0.24);
   color: #ffffff;
 }
 
@@ -136,7 +139,7 @@ select {
   left: 16px;
   z-index: 220;
   padding: 8px 16px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--fg);
   color: var(--void);
   font-family: var(--f-mono);
@@ -172,35 +175,39 @@ select {
   font-feature-settings: 'tnum' 1, 'zero' 1;
 }
 
-/* 章节眉标：28px 游丝横线 + 等宽大写索引 */
+/* 章节眉标 */
 .eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   font-family: var(--f-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--fg-dim);
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  color: var(--cyan);
 }
 .eyebrow::before {
   content: '';
-  width: 28px;
-  height: 1px;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
   background: var(--cyan);
   flex-shrink: 0;
+}
+.eyebrow--brass {
+  color: var(--brass);
 }
 .eyebrow--brass::before {
   background: var(--brass);
 }
 
-/* 建筑感超细标题层级（250–320 字重） */
+/* 清晰克制的章节标题层级 */
 .sec-head {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
-  gap: clamp(20px, 4vw, 64px);
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  gap: clamp(20px, 4vw, 56px);
   align-items: end;
-  padding-bottom: clamp(28px, 4vw, 48px);
+  padding-bottom: clamp(24px, 3.5vw, 40px);
   border-bottom: 1px solid var(--line);
   margin-bottom: clamp(28px, 4vw, 48px);
 }
@@ -214,89 +221,45 @@ select {
 .sec-head__left {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .sec-title {
   font-family: var(--f-display);
-  font-weight: 280;
-  font-size: clamp(1.95rem, 3.6vw, 3.25rem);
-  line-height: 1.12;
-  letter-spacing: -0.03em;
+  font-weight: 580;
+  font-size: clamp(1.75rem, 3.1vw, 2.65rem);
+  line-height: 1.22;
+  letter-spacing: -0.025em;
   color: var(--fg);
   text-wrap: balance;
 }
 :lang(zh) .sec-title {
-  font-weight: 300;
+  font-weight: 580;
   letter-spacing: -0.01em;
-  line-height: 1.2;
+  line-height: 1.28;
 }
 
 .sec-lead {
-  font-size: clamp(0.94rem, 1.08vw, 1.04rem);
+  font-size: clamp(0.93rem, 1.05vw, 1.02rem);
   line-height: 1.72;
   color: var(--fg-dim);
   max-width: 54ch;
 }
 
-/* 章节容器与巨型镂空描边编号水印 */
+/* 章节容器 */
 .section {
   position: relative;
   z-index: 2;
-  padding-block: clamp(88px, 11vw, 152px);
+  padding-block: clamp(76px, 9.5vw, 128px);
   border-top: 1px solid var(--line);
   background: var(--void);
 }
 
-.section--veil {
-  background: linear-gradient(
-    180deg,
-    rgb(5 6 8 / 0.94) 0%,
-    rgb(5 6 8 / 0.82) 48%,
-    rgb(5 6 8 / 0.96) 100%
-  );
+.section--alt {
+  background: linear-gradient(180deg, #0b0e15 0%, var(--void) 100%);
 }
 
-.section[data-idx]::before {
-  content: attr(data-idx);
-  position: absolute;
-  top: clamp(28px, 4.5vw, 56px);
-  right: max(18px, calc((100vw - 1340px) / 2));
-  font-family: var(--f-sans);
-  font-weight: 200;
-  font-size: clamp(4.2rem, 9.5vw, 8.6rem);
-  line-height: 0.84;
-  letter-spacing: -0.05em;
-  color: transparent;
-  -webkit-text-stroke: 1px rgb(255 255 255 / 0.065);
-  pointer-events: none;
-  user-select: none;
-}
-
-/* 光学对位十字准星（+） */
-.reg {
-  position: relative;
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  flex-shrink: 0;
-}
-.reg::before,
-.reg::after {
-  content: '';
-  position: absolute;
-  background: var(--fg-faint);
-}
-.reg::before {
-  inset: 4px 0 auto;
-  height: 1px;
-}
-.reg::after {
-  inset: 0 auto 0 4px;
-  width: 1px;
-}
-
-/* ── 2px 精密建筑按钮（杜绝廉价蓝紫渐变圆药丸） ─────────────────────────── */
+/* ── 按钮原语 ────────────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -304,13 +267,13 @@ select {
   gap: 10px;
   min-height: 44px;
   padding: 0 20px;
-  border-radius: 2px;
+  border-radius: var(--radius-md);
   font-size: 0.88rem;
-  font-weight: 550;
+  font-weight: 560;
   line-height: 1.2;
   text-decoration: none;
   border: 1px solid var(--line-2);
-  background: rgb(14 17 23 / 0.86);
+  background: var(--ink-2);
   color: var(--fg);
   cursor: pointer;
   transition:
@@ -331,7 +294,6 @@ select {
   flex-shrink: 0;
 }
 
-/* 主按钮：实心铂银白（高对比光学快门感） */
 .btn--primary {
   background: var(--fg);
   color: var(--void);
@@ -345,7 +307,7 @@ select {
 }
 
 .btn--ghost {
-  background: rgb(9 11 15 / 0.72);
+  background: var(--ink-1);
   border-color: var(--line-2);
   color: var(--fg);
 }

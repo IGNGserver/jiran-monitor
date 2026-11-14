@@ -9,17 +9,13 @@ const en = CONTENT.en.notFound;
 <Base lang="zh" title="404 · 计然 Jiran" noindex>
   <main id="main" class="nf">
     <div class="nf__box">
-      <div class="nf__bar mono">
-        <span>JR-01 // TELEMETRY_LEDGER</span>
-        <span class="reg" aria-hidden="true"></span>
-      </div>
       <div class="nf__body-wrap">
-        <Mark size={52} />
-        <p class="nf__code mono">404 // NOT_INDEXED</p>
+        <Mark size={48} />
+        <p class="nf__code mono">404</p>
         <h1>{zh.title}</h1>
         <p lang="en" class="nf__en">{en.title}</p>
         <p class="nf__body">{zh.body} <span lang="en">{en.body}</span></p>
-        <p class="nf__links mono">
+        <p class="nf__links">
           <a class="btn btn--primary" href="/">{zh.back}</a>
           <a class="btn btn--ghost" href="/en/" lang="en">{en.back}</a>
         </p>
@@ -38,19 +34,10 @@ const en = CONTENT.en.notFound;
     background: var(--void);
   }
   .nf__box {
-    width: min(560px, 100%);
+    width: min(520px, 100%);
+    border-radius: var(--radius-lg);
     border: 1px solid var(--line-2);
     background: var(--ink-1);
-  }
-  .nf__bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--line);
-    font-size: 0.68rem;
-    letter-spacing: 0.14em;
-    color: var(--fg-faint);
   }
   .nf__body-wrap {
     padding: clamp(32px, 5vw, 48px) 28px;
@@ -58,26 +45,27 @@ const en = CONTENT.en.notFound;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    gap: 14px;
+    gap: 12px;
   }
   .nf__code {
-    font-size: clamp(1.8rem, 5vw, 2.8rem);
-    font-weight: 300;
+    font-size: clamp(2rem, 5vw, 2.8rem);
+    font-weight: 560;
     color: var(--cyan);
     letter-spacing: -0.02em;
-    line-height: 1.1;
+    line-height: 1.05;
   }
   h1 {
     font-family: var(--f-display);
-    font-weight: 300;
-    font-size: clamp(1.38rem, 3vw, 1.95rem);
+    font-weight: 580;
+    font-size: clamp(1.38rem, 2.8vw, 1.85rem);
   }
   .nf__en {
-    font-size: 0.98rem;
+    font-size: 0.96rem;
     color: var(--fg-dim);
   }
   .nf__body {
-    font-size: 0.9rem;
+    font-size: 0.88rem;
+    line-height: 1.65;
     color: var(--fg-faint);
     max-width: 44ch;
   }

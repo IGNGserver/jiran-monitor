@@ -4,12 +4,12 @@
 
 ## 是什么
 
-计然 / Jiran 的产品官网：通过参数化五层光学计量机芯（`JR-01`）、1:1 真实产品交互工作台与零外泄拓扑沙盒展示核心能力、提供全平台下载入口与自建 Hub 指引，并作为搜索引擎与开发者的可信事实入口。站点源码位于产品仓库的 `website/`：
+计然 / Jiran 的产品展示官网：以直白清晰的产品语言介绍本地 Token 统计、模型成本对比、26 家订阅与 API 配额监控及自建 Docker Compose Hub 跨设备同步，按章节依次搭配四组「Token 词元」主题三维模型、1:1 真实 Fluent 2 交互体验工作台与全平台下载入口。站点源码位于产品仓库的 `website/`：
 
 | 事项 | 归属 |
 | --- | --- |
 | 产品功能、版本、发布资产、产品文档 | 产品仓库 `IGNGserver/jiran-monitor`（`website/` 之外） |
-| 页面、三维舞台与 Blender 母版、交互工作台、静态资源、SEO、站点文案 | `IGNGserver/jiran-monitor/website/` |
+| 页面、四组词元三维模型与静帧资产、在线体验工作台、SEO、站点文案 | `IGNGserver/jiran-monitor/website/` |
 
 ## 当前状态
 
@@ -22,17 +22,17 @@
 
 | 事项 | 结论 |
 | --- | --- |
-| 技术栈 | Astro 7 静态输出 + TypeScript；全局空间舞台（Blender 5.2 Cycles 静帧 + `gltfpack` meshopt GLB + Three.js WebGL2，空闲按需懒加载）；pnpm；可变字体自托管 |
-| 叙事结构 | 全局 `<Stage />` 贯穿首尾 + 六幕紧凑叙事：首屏（`#top`）、五层爆炸剖面与计量五律（`#anatomy`）、1:1 Fluent 2 实机交互工作台（`#workbench`）、零外泄光学门拓扑沙盒与四端规格（`#architecture`）、59 支持源游丝台账（`#sources`）、54° 冠冕回归下载与等距 Hub 堆栈（`#install`） |
+| 技术栈 | Astro 7 静态输出 + TypeScript；四组局部按需加载的「Token 词元」主题三维模型（`gltfpack` meshopt GLB + 单一共享 Three.js WebGL2 渲染器 + AVIF/WebP 响应式静帧）；pnpm；可变字体自托管 |
+| 章节顺序 | 首屏（`#top` + `hero.glb`）→ 核心功能概览（`#features` + `mix.glb` / `quota.glb`）→ 1:1 Fluent 2 在线体验工作台（`#workbench`）→ 多端同步与隐私边界（`#architecture` + `hub.glb` + 交互沙盒）→ 59 款支持工具矩阵（`#sources`）→ 全平台下载与 Docker Hub 快速启动（`#install`） |
 | 语言 | 简体中文为默认（`/`），英文 `/en/`；两份文案在 `src/i18n/content.ts`，`tests/facts.spec.ts` 强制结构 1:1 对齐；`hreflang` 互指 |
-| 视觉方向 | **光学计量暗室（Precision Optical Metrology）**：无彩色黑曜石底板（`#050608`）、铂银油墨（`#edf0f5`）、1px 建筑游丝分割，严守冰青（`#56ccf2`，Token 与配额）与香槟黄铜（`#e5a94c`，货币成本与独立 Credits）双信号色彩纪律。详见 `design/DESIGN.md` |
+| 视觉方向 | 沉稳石墨深色底板（`#090b10`）、清晰可读的无衬线标题层级、冰青（`#4fc3f7`，Token 与配额）与暖金（`#e5a94c`，货币花费与独立 Credits）双语义配色。详见 `design/DESIGN.md` |
 | 下载入口 | 构建时读取最新非 prerelease 正式版烘焙直链；浏览器端在 `load` 后空闲时向 GitHub 刷新一次；失败退回烘焙值或 Releases 页 |
 | Linux 安装 | 直接下载 GitHub Releases 的 `.deb` / AppImage；不再维护 APT 仓库 |
 | 隐私 | 无统计脚本、无 Cookie、无第三方字体 CDN；唯一外部请求是读取 GitHub Releases 最新正式版标签 |
 
 ## 内容原则
 
-- 只陈述产品仓库当前支持的事实，不编造路线图；支持矩阵与计数以 `README.md` / `docs/supported-tools.md` 为准；
+- 以介绍产品本身为核心，文案直白诚实，只陈述产品仓库当前支持的事实，不编造路线图或虚构硬件术语；支持矩阵与计数以 `README.md` / `docs/supported-tools.md` 为准；
 - 下载链接只由仓库常量与校验过的安全段构造，不在站点仓库托管二进制安装包；
 - 品牌名遵循产品规范：`zh` 显示「计然」，`en` 显示「Jiran」；
-- 交互工作台明确标注模拟车队数据，且严格遵守产品自身的五条计量诚实准则。
+- 在线体验工作台明确标注示例数据，并遵守产品自身的统计口径与无感刷新约定。

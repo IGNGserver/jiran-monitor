@@ -8,7 +8,8 @@
     "preview": "astro preview",
     "check": "astro check",
     "test": "playwright test",
-    "model": "node design/tools/model.mjs",
+    "models": "node design/tools/build-models.mjs",
+    "stills": "node design/tools/stills.mjs",
     "media": "node design/tools/media.mjs"
   },
   "dependencies": {

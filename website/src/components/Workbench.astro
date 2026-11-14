@@ -9,7 +9,7 @@ const t = CONTENT[lang].workbench;
 const zh = lang === 'zh';
 ---
 
-<section class="section workbench-sec" id="workbench" data-idx={t.numeral} aria-labelledby="workbench-title">
+<section class="section section--alt workbench-sec" id="workbench" aria-labelledby="workbench-title">
   <div class="wrap">
     <header class="sec-head reveal">
       <div class="sec-head__left">
@@ -127,9 +127,11 @@ const zh = lang === 'zh';
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     background: var(--line);
+    border-radius: var(--radius-md);
     border: 1px solid var(--line-2);
     gap: 1px;
     margin-bottom: 16px;
+    overflow: hidden;
   }
 
   @media (max-width: 980px) {
@@ -194,7 +196,7 @@ const zh = lang === 'zh';
     --wb-warn: #e5a94c;
     --wb-bad: #ef5a52;
 
-    border-radius: 2px;
+    border-radius: var(--radius-lg);
     border: 1px solid var(--line-2);
     background: var(--wb-bg);
     color: var(--wb-text);
@@ -270,7 +272,7 @@ const zh = lang === 'zh';
 
   .wb-ctrl-btn {
     padding: 3px 9px;
-    border-radius: 2px;
+    border-radius: var(--radius-lg);
     border: 1px solid var(--line-2);
     background: var(--ink-2);
     color: var(--fg);
