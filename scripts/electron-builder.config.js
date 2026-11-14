@@ -7,6 +7,7 @@ const packageJson = require('../package.json');
 const { resolveElectronVersionOverride } = require('./electron-builder-version');
 const { prepareLinuxPackageMetadata } = require('./prepare-linux-package-metadata');
 const { releaseNotesPath } = require('./generate-release-notes');
+const { adHocSignMacApp } = require('./macos-adhoc-sign');
 
 // electron-builder downloads the framework selected by this top-level option.
 // The release workflow sets the override only for the Linux artifact, so macOS
@@ -79,6 +80,12 @@ function pruneChromiumLocales(context) {
 
 config.afterPack = async (context) => {
   pruneChromiumLocales(context);
+  // Ensure unsigned macOS builds still carry an embedded ad-hoc signature and
+  // bundle identifier before .dmg/.zip packaging; macOS Local Network Privacy
+  // and Apple Silicon Gatekeeper reject completely unsigned binaries.
+  adHocSignMacApp(context, {
+    defaultProductName: packageJson.build?.productName || packageJson.productName || 'Jiran'
+  });
 };
 
 module.exports = config;
