@@ -20,4 +20,14 @@ test('startup does not erase a requested autostart state on one failed read-back
   assert.match(body, /settings\.startAtLogin === true && actual === false/);
   assert.match(body, /applyLoginItem\(true\)/);
   assert.match(body, /keeping the requested state/);
+  assert.match(body, /macosAutostart\.readAutostartEntry/);
+});
+
+test('macOS login items use a LaunchAgent plist with --hidden instead of openAsHidden', () => {
+  const applyStart = main.indexOf('function applyLoginItem(startAtLogin)');
+  const applyEnd = main.indexOf('\n}', applyStart);
+  const applyBody = main.slice(applyStart, applyEnd);
+  assert.match(applyBody, /macosAutostart\.setAutostartEnabled/);
+  assert.match(applyBody, /clearLegacyMacosLoginItem\(\)/);
+  assert.doesNotMatch(applyBody, /openAsHidden/);
 });
