@@ -1,41 +1,215 @@
 ---
-import SectionHead from './SectionHead.astro';
 import { CONTENT, type Lang } from '../i18n/content';
+import { DOCS } from '../data/product';
 
-interface Props { lang: Lang }
+interface Props {
+  lang: Lang;
+}
 const { lang } = Astro.props;
 const t = CONTENT[lang].flow;
+const zh = lang === 'zh';
 ---
 
-<section class="section section--glow" id="architecture" aria-labelledby="arch-title">
+<section class="section" id="architecture" data-idx={t.numeral} aria-labelledby="flow-title">
   <div class="wrap">
-    <SectionHead id="arch-title" index={t.index} title={t.title} lead={t.lead} />
+    <header class="sec-head reveal">
+      <div class="sec-head__left">
+        <span class="eyebrow">{t.index}</span>
+        <h2 class="sec-title" id="flow-title">{t.title}</h2>
+      </div>
+      <p class="sec-lead">{t.lead}</p>
+    </header>
 
-    <!-- 三阶数据流拓扑 -->
-    <ol class="arch-pipeline reveal">
-      {t.stages.map((st, idx) => (
-        <li class="arch-stage glass-card">
-          <div class="arch-stage__top">
-            <span class="arch-stage__step mono">{st.step}</span>
-            {idx < t.stages.length - 1 && (
-              <span class="arch-stage__arrow mono" aria-hidden="true">───▶</span>
+    <!-- 交互式零外泄光学门与多端拓扑沙盒 -->
+    <div
+      class="flow-box reveal"
+      data-flow
+      data-lang={lang}
+    >
+      <div class="flow-box__bar">
+        <div class="flow-box__title mono">
+          <span class="flow-box__dot"></span>
+          <span>{t.simTitle}</span>
+        </div>
+
+        <div class="flow-box__controls">
+          <div class="flow-modes mono" role="group" aria-label={zh ? '同步拓扑模式' : 'Topology mode'}>
+            <button type="button" class="flow-mode is-active" data-flow-mode="fleet" aria-pressed="true">
+              {t.modeFleet}
+            </button>
+            <button type="button" class="flow-mode" data-flow-mode="local" aria-pressed="false">
+              {t.modeLocal}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            class="flow-stale-btn mono"
+            data-flow-stale
+            data-label-sleep={t.staleBtn}
+            data-label-wake={t.wakeBtn}
+          >
+            {t.staleBtn}
+          </button>
+        </div>
+      </div>
+
+      <div class="flow-stage">
+        <!-- 左栏：4 台采集源设备 -->
+        <ul class="flow-nodes flow-nodes--src mono" aria-label={zh ? '采集设备端' : 'Producer devices'}>
+          <li>
+            <span class="flow-node__name">MacBook-Pro-M4</span>
+            <span class="flow-node__meta" data-flow-mac-state data-state="live">LIVE · 1.5s</span>
+          </li>
+          <li>
+            <span class="flow-node__name">Win11 + \\wsl$</span>
+            <span class="flow-node__meta" data-state="live">utilityProcess</span>
+          </li>
+          <li>
+            <span class="flow-node__name">Ubuntu-GPU-Node</span>
+            <span class="flow-node__meta" data-state="live">Headless CLI</span>
+          </li>
+          <li>
+            <span class="flow-node__name">ThinkPad-Arch</span>
+            <span class="flow-node__meta" data-state="stale">STALE &gt;10m</span>
+          </li>
+        </ul>
+
+        <!-- 中央高分率动态粒子画布 -->
+        <div class="flow-canvas-wrap">
+          <canvas class="flow-canvas" data-flow-canvas aria-label={t.gateNote}></canvas>
+        </div>
+
+        <!-- 右栏：4 大原生呈现端 -->
+        <ul class="flow-nodes flow-nodes--dst mono" aria-label={zh ? '四端呈现界面' : 'Viewer surfaces'}>
+          <li>
+            <span class="flow-node__name">Desktop App</span>
+            <span class="flow-node__meta">IPC / Slim SSE</span>
+          </li>
+          <li>
+            <span class="flow-node__name">Hub Web PWA</span>
+            <span class="flow-node__meta">HttpOnly Cookie</span>
+          </li>
+          <li>
+            <span class="flow-node__name">Android + 5 Widgets</span>
+            <span class="flow-node__meta">Bearer jrs_</span>
+          </li>
+          <li>
+            <span class="flow-node__name">CSV / Model Audit</span>
+            <span class="flow-node__meta">models.dev + FX</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="flow-box__foot mono">
+        <p
+          class="flow-status"
+          data-flow-status
+          data-msg-normal={t.gateNote}
+          data-msg-local={t.localBypassNote}
+          data-msg-stale={t.staleActiveNote}
+        >
+          {t.gateNote}
+        </p>
+        <span class="flow-egress" data-flow-egress>2.4 KB/s → 127.0.0.1:17321</span>
+      </div>
+    </div>
+
+    <!-- 零外泄双栏对照账本（合并原 Privacy 章节，零冗余卡片） -->
+    <div class="priv-ledger reveal">
+      <div class="priv-col priv-col--stay">
+        <div class="priv-col__head">
+          <span class="eyebrow">{t.staySub}</span>
+          <h3>{t.stayTitle}</h3>
+        </div>
+        <dl class="priv-list">
+          {t.stay.map((item, idx) => (
+            <div class="priv-row">
+              <dt>
+                <span class="mono priv-row__idx">0{idx + 1}</span>
+                <strong>{item.k}</strong>
+              </dt>
+              <dd>{item.d}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+
+      <div class="priv-col priv-col--hub">
+        <div class="priv-col__head">
+          <span class="eyebrow eyebrow--brass">{t.hubSub}</span>
+          <h3>{t.hubTitle}</h3>
+        </div>
+        <dl class="priv-list">
+          {t.hub.map((item, idx) => (
+            <div class="priv-row">
+              <dt>
+                <span class="mono priv-row__idx priv-row__idx--brass">0{idx + 1}</span>
+                <strong>{item.k}</strong>
+              </dt>
+              <dd>{item.d}</dd>
+            </div>
+          ))}
+        </dl>
+        <div class="priv-foot">
+          <p>{t.siteFoot}</p>
+          <a class="mono priv-doc" href={DOCS.privacy} rel="noopener">{t.docLink}</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- 四大原生终端线框规格矩阵 -->
+    <div class="surf-grid reveal">
+      {t.surfaces.map((s) => (
+        <article class="surf-card">
+          <div class="surf-card__top mono">
+            <span>{s.badge}</span>
+            <span class="reg" aria-hidden="true"></span>
+          </div>
+
+          <!-- 精密工程线框示意图 -->
+          <div class="surf-card__wire" aria-hidden="true">
+            {s.id === 'desktop' && (
+              <svg viewBox="0 0 180 64" fill="none">
+                <rect x="6" y="6" width="168" height="52" rx="1.5" stroke="currentColor" stroke-opacity="0.32" />
+                <line x1="46" y1="6" x2="46" y2="58" stroke="currentColor" stroke-opacity="0.24" />
+                <rect x="54" y="14" width="48" height="14" stroke="#56ccf2" stroke-opacity="0.8" />
+                <rect x="108" y="14" width="58" height="14" stroke="#e5a94c" stroke-opacity="0.75" />
+                <path d="M54 46 L76 38 L98 43 L122 33 L146 36 L166 29" stroke="#56ccf2" stroke-width="1.2" />
+              </svg>
+            )}
+            {s.id === 'pwa' && (
+              <svg viewBox="0 0 180 64" fill="none">
+                <rect x="6" y="6" width="168" height="52" rx="1.5" stroke="currentColor" stroke-opacity="0.32" />
+                <line x1="6" y1="18" x2="174" y2="18" stroke="currentColor" stroke-opacity="0.22" />
+                <circle cx="15" cy="12" r="2" fill="#56ccf2" />
+                <rect x="16" y="25" width="68" height="24" stroke="#56ccf2" stroke-opacity="0.65" />
+                <rect x="92" y="25" width="72" height="24" stroke="currentColor" stroke-opacity="0.28" stroke-dasharray="3 2" />
+              </svg>
+            )}
+            {s.id === 'agent' && (
+              <svg viewBox="0 0 180 64" fill="none">
+                <rect x="6" y="6" width="168" height="52" rx="1.5" stroke="currentColor" stroke-opacity="0.32" />
+                <path d="M18 22 L25 27 L18 32" stroke="#56ccf2" stroke-width="1.4" />
+                <line x1="30" y1="32" x2="72" y2="32" stroke="#56ccf2" stroke-width="1.4" />
+                <line x1="18" y1="44" x2="148" y2="44" stroke="currentColor" stroke-opacity="0.28" stroke-dasharray="4 3" />
+                <circle cx="158" cy="24" r="3" fill="#e5a94c" />
+              </svg>
+            )}
+            {s.id === 'android' && (
+              <svg viewBox="0 0 180 64" fill="none">
+                <rect x="16" y="6" width="38" height="52" rx="3" stroke="currentColor" stroke-opacity="0.38" />
+                <circle cx="35" cy="27" r="10" stroke="#56ccf2" stroke-width="1.3" stroke-dasharray="44 18" />
+                <rect x="66" y="8" width="46" height="22" rx="1.5" stroke="#56ccf2" stroke-opacity="0.65" />
+                <rect x="118" y="8" width="46" height="22" rx="1.5" stroke="#e5a94c" stroke-opacity="0.65" />
+                <rect x="66" y="36" width="98" height="22" rx="1.5" stroke="currentColor" stroke-opacity="0.28" />
+              </svg>
             )}
           </div>
-          <h3 class="arch-stage__name">{st.name}</h3>
-          <p class="arch-stage__tech mono">{st.tech}</p>
-          <p class="arch-stage__body">{st.body}</p>
-        </li>
-      ))}
-    </ol>
 
-    <!-- 四端协同矩阵 -->
-    <div class="arch-surfaces">
-      {t.surfaces.map((sf) => (
-        <article class="arch-surface glass-card reveal">
-          <span class="arch-surface__badge mono">{sf.badge}</span>
-          <h3 class="arch-surface__title">{sf.title}</h3>
-          <p class="arch-surface__os mono">{sf.os}</p>
-          <p class="arch-surface__desc">{sf.desc}</p>
+          <h3 class="surf-card__title">{s.title}</h3>
+          <p class="surf-card__os mono">{s.os}</p>
+          <p class="surf-card__desc">{s.desc}</p>
         </article>
       ))}
     </div>
@@ -43,124 +217,385 @@ const t = CONTENT[lang].flow;
 </section>
 
 <style>
-  .arch-pipeline {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
-    margin-bottom: 22px;
+  .flow-box {
+    border: 1px solid var(--line-2);
+    background: var(--ink-1);
+    margin-bottom: 28px;
   }
 
-  @media (max-width: 960px) {
-    .arch-pipeline {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .arch-stage__arrow {
-      display: none;
-    }
-  }
-
-  .arch-stage {
-    padding: 22px 24px;
+  .flow-box__bar {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
-    border-color: rgb(56 189 248 / 0.2);
-  }
-
-  .arch-stage__top {
-    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--ink-2);
   }
 
-  .arch-stage__step {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: var(--cyan);
-  }
-
-  .arch-stage__arrow {
-    font-size: 0.72rem;
-    color: rgb(56 189 248 / 0.65);
-  }
-
-  .arch-stage__name {
-    font-size: 1.18rem;
-    font-weight: 680;
-    letter-spacing: -0.015em;
-  }
-
-  .arch-stage__tech {
-    font-size: 0.74rem;
-    padding: 4px 9px;
-    border-radius: 6px;
-    background: rgb(6 10 20 / 0.75);
-    border: 1px solid var(--line);
-    color: #bae6fd;
-    align-self: flex-start;
-    max-width: 100%;
-    overflow-wrap: anywhere;
-  }
-
-  .arch-stage__body {
-    font-size: 0.89rem;
-    line-height: 1.65;
+  .flow-box__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
     color: var(--fg-dim);
   }
 
-  .arch-surfaces {
+  .flow-box__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+
+  .flow-box__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .flow-modes {
+    display: inline-flex;
+    flex-wrap: wrap;
+    border: 1px solid var(--line-2);
+    background: var(--void);
+  }
+
+  .flow-mode {
+    padding: 5px 11px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-dim);
+    font-size: 0.71rem;
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s;
+  }
+
+  .flow-mode.is-active {
+    background: var(--fg);
+    color: var(--void);
+    font-weight: 600;
+  }
+
+  .flow-stale-btn {
+    padding: 5px 11px;
+    border-radius: 2px;
+    border: 1px solid rgb(229 169 76 / 0.42);
+    background: rgb(229 169 76 / 0.1);
+    color: var(--brass);
+    font-size: 0.71rem;
+    cursor: pointer;
+    transition: background 0.18s, border-color 0.18s, color 0.18s;
+  }
+
+  .flow-stale-btn:hover {
+    border-color: var(--brass);
+    background: rgb(229 169 76 / 0.18);
+  }
+
+  .flow-stale-btn.is-stale {
+    border-color: var(--cyan);
+    background: var(--cyan-soft);
+    color: var(--cyan);
+  }
+
+  .flow-stage {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: 200px minmax(0, 1fr) 200px;
+    align-items: stretch;
+    min-height: 292px;
+  }
+
+  @media (max-width: 960px) {
+    .flow-stage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .flow-nodes {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    padding: 14px;
+    gap: 8px;
+    background: rgb(5 6 8 / 0.55);
+  }
+
+  .flow-nodes--src {
+    border-right: 1px solid var(--line);
+  }
+
+  .flow-nodes--dst {
+    border-left: 1px solid var(--line);
+  }
+
+  @media (max-width: 960px) {
+    .flow-nodes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .flow-nodes--src {
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .flow-nodes--dst {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+    }
+  }
+
+  @media (max-width: 520px) {
+    .flow-nodes {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .flow-nodes li {
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    background: var(--ink-1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .flow-node__name {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .flow-node__meta {
+    font-size: 0.63rem;
+    color: var(--fg-faint);
+  }
+
+  .flow-node__meta[data-state='live'] {
+    color: var(--cyan);
+  }
+
+  .flow-node__meta[data-state='stale'] {
+    color: var(--fg-faint);
+  }
+
+  .flow-canvas-wrap {
+    position: relative;
+    min-height: 260px;
+    background: #06080c;
+  }
+
+  .flow-canvas {
+    width: 100%;
+    height: 100%;
+    min-height: 260px;
+  }
+
+  .flow-box__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--line);
+    font-size: 0.71rem;
+    color: var(--fg-dim);
+  }
+
+  .flow-status[data-tone='cyan'] {
+    color: var(--cyan);
+  }
+
+  .flow-status[data-tone='stale'] {
+    color: var(--brass);
+  }
+
+  .flow-egress {
+    color: var(--cyan);
+    font-size: 0.68rem;
+  }
+
+  /* 零外泄双栏对照账本 */
+  .priv-ledger {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    background: var(--line-2);
+    border: 1px solid var(--line-2);
+    gap: 1px;
+    margin-bottom: 28px;
+  }
+
+  @media (max-width: 900px) {
+    .priv-ledger {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .priv-col {
+    background: var(--ink-1);
+    padding: clamp(22px, 3vw, 34px);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .priv-col__head {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .priv-col__head h3 {
+    font-family: var(--f-display);
+    font-weight: 340;
+    font-size: clamp(1.22rem, 1.8vw, 1.52rem);
+    color: var(--fg);
+  }
+
+  .priv-list {
+    display: flex;
+    flex-direction: column;
     gap: 14px;
   }
 
-  @media (max-width: 1080px) {
-    .arch-surfaces {
+  .priv-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .priv-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .priv-row dt {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.9rem;
+    color: var(--fg);
+  }
+
+  .priv-row__idx {
+    font-size: 0.66rem;
+    color: var(--cyan);
+  }
+
+  .priv-row__idx--brass {
+    color: var(--brass);
+  }
+
+  .priv-row dd {
+    padding-left: 26px;
+    font-size: 0.83rem;
+    line-height: 1.62;
+    color: var(--fg-dim);
+  }
+
+  .priv-foot {
+    margin-top: auto;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.77rem;
+    color: var(--fg-faint);
+  }
+
+  .priv-doc {
+    color: var(--cyan);
+    font-size: 0.74rem;
+    text-decoration: none;
+  }
+  .priv-doc:hover {
+    text-decoration: underline;
+  }
+
+  /* 四大原生终端线框规格矩阵 */
+  .surf-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: var(--line);
+    border: 1px solid var(--line-2);
+    gap: 1px;
+  }
+
+  @media (max-width: 1040px) {
+    .surf-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
   @media (max-width: 560px) {
-    .arch-surfaces {
+    .surf-grid {
       grid-template-columns: minmax(0, 1fr);
     }
   }
 
-  .arch-surface {
-    padding: 20px 20px 22px;
+  .surf-card {
+    background: var(--void);
+    padding: 20px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+    transition: background 0.2s var(--ease);
   }
 
-  .arch-surface__badge {
-    align-self: flex-start;
-    padding: 3px 8px;
-    border-radius: 5px;
-    font-size: 0.67rem;
-    font-weight: 650;
-    letter-spacing: 0.08em;
-    background: rgb(167 139 250 / 0.14);
-    border: 1px solid rgb(167 139 250 / 0.3);
-    color: #ddd6fe;
+  .surf-card:hover {
+    background: var(--ink-1);
   }
 
-  .arch-surface__title {
-    font-size: 1.06rem;
-    font-weight: 670;
-    margin-top: 2px;
+  .surf-card__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+    color: var(--fg-faint);
   }
 
-  .arch-surface__os {
-    font-size: 0.72rem;
+  .surf-card__wire {
+    color: var(--fg);
+    background: var(--ink-1);
+    border: 1px solid var(--line);
+    padding: 6px;
+  }
+
+  .surf-card__wire svg {
+    width: 100%;
+    height: auto;
+  }
+
+  .surf-card__title {
+    font-family: var(--f-display);
+    font-weight: 460;
+    font-size: 1.02rem;
+    color: var(--fg);
+  }
+
+  .surf-card__os {
+    font-size: 0.68rem;
     color: var(--cyan);
   }
 
-  .arch-surface__desc {
-    font-size: 0.86rem;
-    line-height: 1.62;
+  .surf-card__desc {
+    font-size: 0.81rem;
+    line-height: 1.6;
     color: var(--fg-dim);
   }
 </style>
+
+<script>
+  import { initFlowSandbox } from '../scripts/flow';
+  document.querySelectorAll<HTMLElement>('[data-flow]').forEach((el) => initFlowSandbox(el));
+</script>

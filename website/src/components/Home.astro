@@ -1,12 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
+import Stage from './Stage.astro';
 import Nav from './Nav.astro';
 import Hero from './Hero.astro';
+import Anatomy from './Anatomy.astro';
 import Workbench from './Workbench.astro';
-import Questions from './Questions.astro';
 import Flow from './Flow.astro';
-import Rules from './Rules.astro';
-import Privacy from './Privacy.astro';
 import Sources from './Sources.astro';
 import Install from './Install.astro';
 import Footer from './Footer.astro';
@@ -17,7 +16,9 @@ import type { Lang } from '../i18n/content';
 import sansLatin from '../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2?url';
 import monoLatin from '../../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url';
 
-interface Props { lang: Lang }
+interface Props {
+  lang: Lang;
+}
 const { lang } = Astro.props;
 const release = await getRelease();
 const preloadFonts = [sansLatin, monoLatin];
@@ -25,29 +26,19 @@ const preloadFonts = [sansLatin, monoLatin];
 
 <Base lang={lang}>
   {preloadFonts.map((href) => <link slot="head" rel="preload" href={href} as="font" type="font/woff2" crossorigin />)}
+  <Stage lang={lang} />
   <Nav lang={lang} tag={release?.tag} />
   <main id="main">
     <Hero lang={lang} release={release} />
-    <div class="content">
-      <Workbench lang={lang} />
-      <Questions lang={lang} />
-      <Flow lang={lang} />
-      <Rules lang={lang} />
-      <Privacy lang={lang} />
-      <Sources lang={lang} />
-      <Install lang={lang} release={release} />
-    </div>
+    <Anatomy lang={lang} />
+    <Workbench lang={lang} />
+    <Flow lang={lang} />
+    <Sources lang={lang} />
+    <Install lang={lang} release={release} />
   </main>
   <Footer lang={lang} />
   <script type="application/json" id="release-data" set:html={JSON.stringify(release)} />
 </Base>
-
-<style>
-  .content {
-    position: relative;
-    background: var(--bg);
-  }
-</style>
 
 <script>
   import { initRelease } from '../scripts/release';
@@ -63,7 +54,7 @@ const preloadFonts = [sansLatin, monoLatin];
         }
       }
     },
-    { rootMargin: '0px 0px -10% 0px', threshold: 0.04 },
+    { rootMargin: '0px 0px -4% 0px', threshold: 0.01 },
   );
   document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
 </script>

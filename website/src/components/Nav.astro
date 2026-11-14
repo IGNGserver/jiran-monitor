@@ -3,28 +3,31 @@ import Mark from './Mark.astro';
 import { CONTENT, LANGS, type Lang } from '../i18n/content';
 import { REPO_URL } from '../data/product';
 
-interface Props { lang: Lang; tag?: string }
+interface Props {
+  lang: Lang;
+  tag?: string;
+}
 const { lang, tag } = Astro.props;
 const t = CONTENT[lang].nav;
 const sw = LANGS[lang];
 ---
+
 <header class="site-nav" data-site-nav>
   <div class="wrap site-nav__inner">
     <a class="site-nav__brand" href="#top">
-      <Mark size={30} />
+      <Mark size={28} />
       <span class="site-nav__word">
         <span class="site-nav__name">{t.brand}</span>
+        <span class="site-nav__sub mono">{t.sub}</span>
         <span class="site-nav__tag mono" data-release-tag>{tag ?? 'v1.7'}</span>
       </span>
     </a>
 
     <nav class="site-nav__links" aria-label={lang === 'zh' ? '主导航' : 'Primary'}>
-      <a href="#workbench">{t.workbench}</a>
-      <a href="#capabilities">{t.capabilities}</a>
-      <a href="#architecture">{t.architecture}</a>
-      <a href="#principles">{t.principles}</a>
-      <a href="#privacy">{t.privacy}</a>
-      <a href="#sources">{t.sources}</a>
+      <a href="#anatomy"><span class="mono site-nav__num">01</span>{t.anatomy}</a>
+      <a href="#workbench"><span class="mono site-nav__num">02</span>{t.workbench}</a>
+      <a href="#architecture"><span class="mono site-nav__num">03</span>{t.architecture}</a>
+      <a href="#sources"><span class="mono site-nav__num">04</span>{t.sources}</a>
     </nav>
 
     <div class="site-nav__actions">
@@ -37,7 +40,7 @@ const sw = LANGS[lang];
         {sw.switchLabel}
       </a>
       <a class="site-nav__gh" href={REPO_URL} rel="noopener" aria-label="GitHub">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
           <path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.02c-3.2.7-3.88-1.38-3.88-1.38-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.47.11-3.06 0 0 .97-.31 3.18 1.18a11.02 11.02 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.77.12 3.06.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z" />
         </svg>
       </a>
@@ -52,10 +55,10 @@ const sw = LANGS[lang];
     inset: 0 0 auto;
     z-index: 90;
     height: var(--nav-h);
-    background: rgb(6 10 20 / 0.72);
-    backdrop-filter: blur(18px) saturate(150%);
-    -webkit-backdrop-filter: blur(18px) saturate(150%);
-    border-bottom: 1px solid rgb(148 184 255 / 0.1);
+    background: rgb(5 6 8 / 0.82);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--line);
   }
 
   .site-nav__inner {
@@ -63,7 +66,7 @@ const sw = LANGS[lang];
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 14px;
   }
 
   .site-nav__brand {
@@ -76,42 +79,66 @@ const sw = LANGS[lang];
 
   .site-nav__word {
     display: inline-flex;
-    align-items: center;
+    align-items: baseline;
     gap: 8px;
   }
 
   .site-nav__name {
-    font-weight: 700;
-    font-size: 1.05rem;
+    font-weight: 560;
+    font-size: 1.02rem;
     letter-spacing: -0.02em;
     color: var(--fg);
   }
 
+  .site-nav__sub {
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    color: var(--fg-faint);
+  }
+
+  @media (max-width: 640px) {
+    .site-nav__sub {
+      display: none;
+    }
+  }
+
   .site-nav__tag {
-    font-size: 0.68rem;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: rgb(56 189 248 / 0.12);
-    border: 1px solid rgb(56 189 248 / 0.28);
+    font-size: 0.66rem;
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: var(--cyan-soft);
+    border: 1px solid rgb(86 204 242 / 0.3);
     color: var(--cyan);
   }
 
   .site-nav__links {
     display: none;
     align-items: center;
-    gap: clamp(14px, 2vw, 26px);
-    font-size: 0.875rem;
+    gap: clamp(16px, 2.2vw, 28px);
+    font-size: 0.84rem;
     color: var(--fg-dim);
   }
 
   .site-nav__links a {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
     text-decoration: none;
     padding: 6px 2px;
-    transition: color 0.18s;
   }
 
   .site-nav__links a:hover {
     color: var(--fg);
+  }
+
+  .site-nav__num {
+    font-size: 0.65rem;
+    color: var(--fg-faint);
+    letter-spacing: 0.06em;
+  }
+
+  .site-nav__links a:hover .site-nav__num {
+    color: var(--cyan);
   }
 
   @media (min-width: 1024px) {
@@ -132,19 +159,19 @@ const sw = LANGS[lang];
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 34px;
+    height: 32px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: 2px;
     border: 1px solid var(--line);
-    background: rgb(13 21 39 / 0.6);
-    font-size: 0.75rem;
+    background: var(--ink-1);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
     color: var(--fg-dim);
     text-decoration: none;
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
   }
 
   .site-nav__gh {
-    width: 34px;
+    width: 32px;
     padding: 0;
   }
 
@@ -152,36 +179,36 @@ const sw = LANGS[lang];
   .site-nav__gh:hover {
     color: var(--fg);
     border-color: var(--line-2);
-    background: rgb(20 32 58 / 0.85);
+    background: var(--ink-2);
   }
 
   .site-nav__cta {
     display: inline-flex;
     align-items: center;
-    height: 34px;
+    height: 32px;
     padding: 0 14px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, #38bdf8 0%, #0a84ff 100%);
-    color: #030712;
-    font-size: 0.8125rem;
-    font-weight: 650;
+    border-radius: 2px;
+    background: var(--fg);
+    color: var(--void);
+    font-size: 0.79rem;
+    font-weight: 620;
     text-decoration: none;
-    transition: filter 0.2s, transform 0.2s;
+    transition: background 0.18s var(--ease), transform 0.18s var(--ease);
   }
 
   .site-nav__cta:hover {
-    color: #030712;
-    filter: brightness(1.08);
+    background: #ffffff;
+    color: var(--void);
     transform: translateY(-1px);
   }
 
-  @media (max-width: 420px) {
+  @media (max-width: 440px) {
     .site-nav__tag {
       display: none;
     }
     .site-nav__cta {
       padding: 0 10px;
-      font-size: 0.78rem;
+      font-size: 0.75rem;
     }
   }
 </style>

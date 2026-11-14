@@ -1,10 +1,12 @@
 ---
-import SectionHead from './SectionHead.astro';
 import { CONTENT, type Lang } from '../i18n/content';
 import { DOCS, HUB_SNIPPET, RELEASES_URL } from '../data/product';
 import type { ReleaseInfo } from '../data/release';
 
-interface Props { lang: Lang; release: ReleaseInfo | null }
+interface Props {
+  lang: Lang;
+  release: ReleaseInfo | null;
+}
 const { lang, release } = Astro.props;
 const t = CONTENT[lang].install;
 
@@ -13,9 +15,15 @@ const fmtSize = (bytes?: number) =>
   bytes ? `${(bytes / 1048576).toFixed(bytes > 1048576 * 10 ? 0 : 1)} MB` : '';
 ---
 
-<section class="section" id="install" aria-labelledby="inst-title">
+<section class="section section--veil" id="install" data-idx={t.numeral} aria-labelledby="inst-title">
   <div class="wrap">
-    <SectionHead id="inst-title" index={t.index} title={t.title} lead={t.lead} />
+    <header class="sec-head reveal">
+      <div class="sec-head__left">
+        <span class="eyebrow">{t.index}</span>
+        <h2 class="sec-title" id="inst-title">{t.title}</h2>
+      </div>
+      <p class="sec-lead">{t.lead}</p>
+    </header>
 
     <div class="inst-meta mono reveal">
       <span>
@@ -32,16 +40,16 @@ const fmtSize = (bytes?: number) =>
       </span>
       <span class="inst-meta__links">
         <a href={RELEASES_URL} rel="noopener">{t.allReleases} ↗</a>
-        <span>·</span>
+        <span>/</span>
         <a href={DOCS.signing} rel="noopener">{t.signingLink}</a>
-        <span>·</span>
+        <span>/</span>
         <a href={DOCS.updates} rel="noopener">{t.updatesLink}</a>
       </span>
     </div>
 
     <div class="inst-grid reveal">
       <!-- 左栏：五平台安装包标签页 -->
-      <div class="inst-downloads glass-card" data-dl>
+      <div class="inst-downloads" data-dl>
         <div class="inst-tabs" role="tablist" aria-label={lang === 'zh' ? '选择操作系统' : 'Choose platform'}>
           {platformOrder.map((key, idx) => (
             <button
@@ -70,7 +78,11 @@ const fmtSize = (bytes?: number) =>
               data-panel={key}
               hidden={idx !== 0}
             >
-              <p class="inst-panel__badge mono">{p.badge}</p>
+              <div class="inst-panel__top mono">
+                <span class="inst-panel__badge">{p.badge}</span>
+                <span class="reg" aria-hidden="true"></span>
+              </div>
+
               <div class="inst-assets">
                 {p.items.map((item) => {
                   const asset = release?.assets[item.asset];
@@ -95,14 +107,15 @@ const fmtSize = (bytes?: number) =>
                   );
                 })}
               </div>
+
               <p class="inst-panel__note">{p.note}</p>
             </div>
           );
         })}
       </div>
 
-      <!-- 右栏：自建 Docker Compose Hub 快速启动 -->
-      <div class="inst-hub glass-card">
+      <!-- 右栏：CSS 3D 等距分层中枢架构栈 + Docker Compose 一键启动 -->
+      <div class="inst-hub">
         <div class="inst-hub__head">
           <h3 class="inst-hub__title">{t.hubBoxTitle}</h3>
           <button
@@ -115,13 +128,20 @@ const fmtSize = (bytes?: number) =>
             {t.copyBtn}
           </button>
         </div>
+
+        <!-- CSS 3D 等距透视三层容器堆栈 -->
+        <div class="iso-stack" aria-label={lang === 'zh' ? 'Hub 容器分层架构' : 'Hub layered container stack'}>
+          {t.stackLayers.map((layer, idx) => (
+            <div class:list={['iso-slab', idx === 1 && 'iso-slab--brass']} style={`--slab-i: ${idx}`}>
+              <span class="iso-slab__port mono">{layer.port}</span>
+              <strong class="iso-slab__name mono">{layer.name}</strong>
+              <span class="iso-slab__meta">{layer.meta}</span>
+            </div>
+          ))}
+        </div>
+
         <pre class="inst-code mono"><code data-copy-src>{HUB_SNIPPET}</code></pre>
-        <ul class="inst-hub__specs mono" aria-label={lang === 'zh' ? 'Hub 规格参数' : 'Hub specifications'}>
-          <li><span>BIND</span><strong>127.0.0.1:17321</strong></li>
-          <li><span>STORE</span><strong>MySQL 8.4</strong></li>
-          <li><span>VAULT</span><strong>AES-256-GCM</strong></li>
-          <li><span>STREAM</span><strong>Slim SSE · PWA</strong></li>
-        </ul>
+
         <p class="inst-hub__doc mono">
           <a href={DOCS.hub} rel="noopener">{t.hubDocLink}</a>
         </p>
@@ -139,11 +159,10 @@ const fmtSize = (bytes?: number) =>
     align-items: center;
     justify-content: space-between;
     gap: 10px 20px;
-    padding: 12px 18px;
-    border-radius: 10px;
-    background: rgb(11 18 34 / 0.68);
-    border: 1px solid var(--line);
-    font-size: 0.76rem;
+    padding: 11px 16px;
+    background: rgb(9 11 15 / 0.88);
+    border: 1px solid var(--line-2);
+    font-size: 0.74rem;
     color: var(--fg-dim);
     margin-bottom: 18px;
   }
@@ -158,10 +177,21 @@ const fmtSize = (bytes?: number) =>
     gap: 8px;
   }
 
+  .inst-meta__links a {
+    text-decoration: none;
+  }
+
+  .inst-meta__links a:hover {
+    color: var(--fg);
+    text-decoration: underline;
+  }
+
   .inst-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    gap: 18px;
+    grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr);
+    background: var(--line-2);
+    border: 1px solid var(--line-2);
+    gap: 1px;
     align-items: stretch;
   }
 
@@ -173,40 +203,48 @@ const fmtSize = (bytes?: number) =>
 
   .inst-downloads,
   .inst-hub {
-    padding: clamp(20px, 2.5vw, 28px);
+    background: rgb(9 11 15 / 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: clamp(20px, 2.6vw, 30px);
     display: flex;
     flex-direction: column;
     gap: 18px;
   }
 
   .inst-tabs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    background: var(--line);
+    border: 1px solid var(--line-2);
+    gap: 1px;
+  }
+
+  @media (max-width: 560px) {
+    .inst-tabs {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 
   .inst-tab {
-    padding: 7px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--line);
-    background: rgb(6 10 20 / 0.65);
+    padding: 9px 8px;
+    border: 0;
+    background: var(--void);
     color: var(--fg-dim);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     cursor: pointer;
-    transition: border-color 0.18s, color 0.18s, background 0.18s;
+    text-align: center;
+    transition: background 0.18s, color 0.18s;
   }
 
   .inst-tab:hover {
     color: var(--fg);
-    border-color: var(--line-2);
+    background: var(--ink-2);
   }
 
   .inst-tab[aria-selected='true'] {
-    border-color: var(--cyan);
-    background: rgb(56 189 248 / 0.15);
-    color: #e0f2fe;
+    background: var(--fg);
+    color: var(--void);
     font-weight: 650;
   }
 
@@ -217,10 +255,20 @@ const fmtSize = (bytes?: number) =>
     flex: 1;
   }
 
+  .inst-panel[hidden] {
+    display: none;
+  }
+
+  .inst-panel__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
   .inst-panel__badge {
-    font-size: 0.71rem;
-    letter-spacing: 0.06em;
-    color: var(--emerald);
+    font-size: 0.69rem;
+    letter-spacing: 0.08em;
+    color: var(--cyan);
   }
 
   .inst-assets {
@@ -231,21 +279,21 @@ const fmtSize = (bytes?: number) =>
 
   .inst-asset {
     padding: 14px 16px;
-    border-radius: 10px;
+    border-radius: 2px;
     border: 1px solid var(--line-2);
-    background: rgb(6 10 20 / 0.72);
+    background: var(--void);
     text-decoration: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    transition: border-color 0.2s, background 0.2s, transform 0.2s var(--ease-out);
+    transition: border-color 0.18s var(--ease), background 0.18s var(--ease), transform 0.18s var(--ease);
   }
 
   .inst-asset:hover {
     color: var(--fg);
     border-color: var(--cyan);
-    background: rgb(14 25 48 / 0.9);
+    background: var(--ink-2);
     transform: translateY(-1px);
   }
 
@@ -257,17 +305,18 @@ const fmtSize = (bytes?: number) =>
   }
 
   .inst-asset__title {
-    font-size: 0.94rem;
+    font-size: 0.92rem;
+    font-weight: 560;
     color: var(--fg);
   }
 
   .inst-asset__sub {
-    font-size: 0.8rem;
+    font-size: 0.79rem;
     color: var(--fg-dim);
   }
 
   .inst-asset__file {
-    font-size: 0.71rem;
+    font-size: 0.69rem;
     color: var(--cyan);
     overflow-wrap: anywhere;
   }
@@ -277,26 +326,26 @@ const fmtSize = (bytes?: number) =>
     align-items: center;
     gap: 10px;
     flex-shrink: 0;
-    font-size: 0.75rem;
+    font-size: 0.73rem;
     color: var(--fg-dim);
   }
 
   .inst-asset__dl {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
+    width: 28px;
+    height: 28px;
+    border-radius: 2px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgb(56 189 248 / 0.14);
-    color: var(--cyan);
+    background: var(--fg);
+    color: var(--void);
     font-weight: 700;
   }
 
   .inst-panel__note {
     margin-top: auto;
-    font-size: 0.8rem;
-    line-height: 1.6;
+    font-size: 0.79rem;
+    line-height: 1.62;
     color: var(--fg-faint);
   }
 
@@ -308,17 +357,18 @@ const fmtSize = (bytes?: number) =>
   }
 
   .inst-hub__title {
-    font-size: 1.05rem;
-    font-weight: 660;
+    font-family: var(--f-display);
+    font-size: 1rem;
+    font-weight: 460;
   }
 
   .inst-copy {
     padding: 5px 11px;
-    border-radius: 6px;
+    border-radius: 2px;
     border: 1px solid var(--line-2);
-    background: rgb(6 10 20 / 0.78);
-    color: #e2e8f0;
-    font-size: 0.72rem;
+    background: var(--void);
+    color: var(--fg);
+    font-size: 0.7rem;
     cursor: pointer;
   }
 
@@ -327,59 +377,105 @@ const fmtSize = (bytes?: number) =>
     color: #ffffff;
   }
 
+  /* CSS 3D 等距分层架构板 */
+  .iso-stack {
+    perspective: 1100px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .iso-slab {
+    display: grid;
+    grid-template-columns: 128px minmax(0, 1fr);
+    gap: 2px 12px;
+    align-items: baseline;
+    padding: 10px 13px;
+    background: linear-gradient(90deg, rgb(86 204 242 / 0.08), rgb(14 17 23 / 0.92) 48%);
+    border: 1px solid rgb(86 204 242 / 0.32);
+    border-left: 2px solid var(--cyan);
+    transform: rotateX(12deg) translateZ(0);
+    transform-origin: center;
+    transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+  }
+
+  .iso-slab:hover {
+    transform: rotateX(4deg) translateY(-2px);
+    border-color: var(--cyan);
+  }
+
+  .iso-slab--brass {
+    background: linear-gradient(90deg, rgb(229 169 76 / 0.09), rgb(14 17 23 / 0.92) 48%);
+    border-color: rgb(229 169 76 / 0.34);
+    border-left-color: var(--brass);
+  }
+
+  .iso-slab--brass:hover {
+    border-color: var(--brass);
+  }
+
+  .iso-slab__port {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--cyan);
+    grid-row: span 2;
+  }
+
+  .iso-slab--brass .iso-slab__port {
+    color: var(--brass);
+  }
+
+  .iso-slab__name {
+    font-size: 0.76rem;
+    color: var(--fg);
+  }
+
+  .iso-slab__meta {
+    font-size: 0.71rem;
+    color: var(--fg-dim);
+  }
+
+  @media (max-width: 520px) {
+    .iso-slab {
+      grid-template-columns: minmax(0, 1fr);
+      transform: none;
+    }
+    .iso-slab__port {
+      grid-row: auto;
+    }
+  }
+
   .inst-code {
     margin: 0;
-    padding: 16px;
-    border-radius: 10px;
-    background: #04070f;
+    padding: 14px 16px;
+    border-radius: 2px;
+    background: #040507;
     border: 1px solid var(--line);
-    font-size: 0.78rem;
-    line-height: 1.72;
-    color: #bae6fd;
+    font-size: 0.74rem;
+    line-height: 1.68;
+    color: var(--fg);
     overflow-x: auto;
   }
 
-  .inst-hub__specs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-top: auto;
-  }
-
-  .inst-hub__specs li {
-    padding: 9px 12px;
-    border-radius: 8px;
-    background: rgb(6 10 20 / 0.68);
-    border: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .inst-hub__specs span {
-    font-size: 0.62rem;
-    letter-spacing: 0.1em;
-    color: var(--fg-faint);
-  }
-
-  .inst-hub__specs strong {
-    font-size: 0.76rem;
-    font-weight: 600;
-    color: #e2e8f0;
-  }
-
   .inst-hub__doc {
-    font-size: 0.76rem;
+    margin-top: auto;
+    font-size: 0.74rem;
   }
 
   .inst-hub__doc a {
     color: var(--cyan);
+    text-decoration: none;
+  }
+
+  .inst-hub__doc a:hover {
+    text-decoration: underline;
   }
 
   .inst-verified {
     margin-top: 18px;
-    font-size: 0.8rem;
-    line-height: 1.6;
+    font-size: 0.78rem;
+    line-height: 1.62;
     color: var(--fg-faint);
   }
 </style>

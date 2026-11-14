@@ -1,40 +1,23 @@
 ---
-import { getImage } from 'astro:assets';
-import wide from '../assets/renders/hero-wide.webp';
-import tall from '../assets/renders/hero-tall.webp';
 import { CONTENT, type Lang } from '../i18n/content';
-import { REPO_URL, TOOLS } from '../data/product';
+import { REPO_URL } from '../data/product';
 import type { ReleaseInfo } from '../data/release';
 import DownloadLabel from './DownloadLabel.astro';
 
-interface Props { lang: Lang; release: ReleaseInfo | null }
+interface Props {
+  lang: Lang;
+  release: ReleaseInfo | null;
+}
 const { lang, release } = Astro.props;
 const t = CONTENT[lang].hero;
-
-const wideSet = await Promise.all([960, 1600, 2400].map((w) => getImage({ src: wide, width: w, format: 'webp', quality: 84 })));
-const tallSet = await Promise.all([600, 900, 1200].map((w) => getImage({ src: tall, width: w, format: 'webp', quality: 84 })));
-const srcset = (set: typeof wideSet) => set.map((i) => `${i.src} ${i.attributes.width}w`).join(', ');
-const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
 ---
 
 <section class="hero" id="top" data-hero aria-labelledby="hero-title">
-  <div class="hero__stage" aria-hidden="true">
-    <picture class="hero__poster">
-      <source media="(max-aspect-ratio: 21/20)" srcset={srcset(tallSet)} sizes="100vw" />
-      <img src={wideSet[1].src} srcset={srcset(wideSet)} sizes="100vw" alt="" width="2400" height="1260" fetchpriority="high" decoding="async" />
-    </picture>
-    <canvas class="hero__canvas" data-hero-canvas></canvas>
-    <div class="hero__veil"></div>
-  </div>
-
   <div class="wrap hero__content">
     <div class="hero__copy">
-      <div class="hero__pills">
-        <span class="hero__pulse-pill mono">
-          <span class="hero__pulse-dot" aria-hidden="true"></span>
-          <span>{t.eyebrow}</span>
-        </span>
-        <span class="hero__sub-pill mono">{t.badge}</span>
+      <div class="hero__kicker">
+        <span class="eyebrow">{t.eyebrow}</span>
+        <span class="hero__badge mono">{t.badge}</span>
       </div>
 
       <h1 class="hero__title" id="hero-title">
@@ -47,15 +30,15 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
       <div class="hero__ctas">
         <a class="btn btn--primary" href="#install" data-dl-primary>
           <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 2v8.8m0 0L4.6 7.4M8 10.8l3.4-3.4M2.8 13.8h10.4" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M8 2v8.8m0 0L4.6 7.4M8 10.8l3.4-3.4M2.8 13.8h10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
           <span>{t.ctaPrimary}</span>
           <DownloadLabel release={release} />
         </a>
-        <a class="btn btn--accent-ghost" href="#workbench">
+        <a class="btn btn--ghost" href="#workbench">
           <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1.8" y="2.5" width="12.4" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" />
-            <path d="M5.2 2.5v11M7.6 6.2h4.2M7.6 9.2h2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            <rect x="1.8" y="2.5" width="12.4" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.35" />
+            <path d="M5.2 2.5v11M7.6 6.2h4.2M7.6 9.2h2.8" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" />
           </svg>
           <span>{t.ctaWorkbench}</span>
         </a>
@@ -63,184 +46,114 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
 
       <p class="hero__links mono">
         <a href="#install">{t.ctaAll}</a>
-        <span aria-hidden="true">·</span>
+        <span aria-hidden="true">/</span>
+        <a href="#anatomy">JR-01 {lang === 'zh' ? '五层机芯解构' : '5-Layer Anatomy'} ↓</a>
+        <span aria-hidden="true">/</span>
         <a href={REPO_URL} rel="noopener">{t.ctaGithub} ↗</a>
       </p>
-    </div>
 
-    <dl class="hero__stats">
-      {t.stats.map((s) => (
-        <div class="hero__stat glass-card">
-          <dt class="hero__stat-k">{s.k}</dt>
-          <dd class="hero__stat-dd">
-            <span class="hero__stat-n mono">{s.n}</span>
-            <span class="hero__stat-sub">{s.sub}</span>
-          </dd>
+      <!-- JR-01 实时双信号计量读数表头（冰青 Token 脉冲 × 香槟黄铜成本/Credits） -->
+      <div class="hero__ledger" aria-label={t.readoutTitle}>
+        <div class="hero__ledger-bar mono">
+          <span class="hero__ledger-dot" aria-hidden="true"></span>
+          <span>{t.readoutTitle}</span>
+          <span class="reg" aria-hidden="true"></span>
         </div>
-      ))}
-    </dl>
+        <div class="hero__ledger-grid">
+          <div class="hero__ledger-cell">
+            <span class="hero__ledger-k mono">{t.readoutTokLabel}</span>
+            <strong class="hero__ledger-v hero__ledger-v--cyan mono" data-counter-n>0</strong>
+          </div>
+          <div class="hero__ledger-cell">
+            <span class="hero__ledger-k mono">{t.readoutCostLabel}</span>
+            <strong class="hero__ledger-v hero__ledger-v--brass mono" data-hero-cost>$47.82</strong>
+          </div>
+          <div class="hero__ledger-cell">
+            <span class="hero__ledger-k mono">{t.readoutQuotaLabel}</span>
+            <strong class="hero__ledger-v hero__ledger-v--cyan mono">38% · 1h42m</strong>
+          </div>
+          <div class="hero__ledger-cell">
+            <span class="hero__ledger-k mono">{t.readoutCreditsLabel}</span>
+            <strong class="hero__ledger-v hero__ledger-v--brass mono">120 Credits</strong>
+          </div>
+        </div>
+        <div class="hero__mix-bar" aria-hidden="true">
+          <span style="width: 21%" class="hero__mix-seg hero__mix-seg--in"></span>
+          <span style="width: 9%" class="hero__mix-seg hero__mix-seg--out"></span>
+          <span style="width: 58%" class="hero__mix-seg hero__mix-seg--cr"></span>
+          <span style="width: 12%" class="hero__mix-seg hero__mix-seg--cw"></span>
+        </div>
+        <p class="hero__ledger-foot mono">{t.readoutMix}</p>
+      </div>
+    </div>
 
-    <div class="hero__rail mono" aria-hidden="true">
-      <span>{t.hudLeft}</span>
-      <span>{t.hudRight}</span>
+    <!-- 底部 1px 无缝游丝事实矩阵（59 / 52 / 26 / 0） -->
+    <div class="hero__bottom">
+      <dl class="hero__stats">
+        {t.stats.map((s, idx) => (
+          <div class="hero__stat">
+            <div class="hero__stat-head mono">
+              <span>0{idx + 1}</span>
+              <span class="reg" aria-hidden="true"></span>
+            </div>
+            <dt class="hero__stat-k">{s.k}</dt>
+            <dd class="hero__stat-dd">
+              <span class:list={['hero__stat-n mono', idx === 2 && 'hero__stat-n--brass', idx === 3 && 'hero__stat-n--pure']}>
+                {s.n}
+              </span>
+              <span class="hero__stat-sub">{s.sub}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      <div class="hero__rail mono" aria-hidden="true">
+        <span>{t.hudLeft}</span>
+        <span>{t.hudRight}</span>
+      </div>
     </div>
   </div>
-
-  <div class="hero__hud" aria-hidden="true">
-    <div class="hero__counter" data-counter hidden>
-      <span class="hero__counter-lead"></span>
-      <span class="hero__counter-box">
-        <span class="hero__counter-k mono">{lang === 'zh' ? '实时计量核心 · TOKENS' : 'LIVE METERED · TOKENS'}</span>
-        <span class="hero__counter-n mono" data-counter-n>0</span>
-      </span>
-    </div>
-
-    <div class="hero__tag hero__focus" data-focus hidden>
-      <span class="hero__tag-dot"></span>
-      <span class="hero__tag-line"></span>
-      <span class="hero__tag-text mono">
-        <span class="hero__focus-k" data-focus-k></span>
-        <span data-focus-name></span>
-        <span class="hero__focus-caps" data-focus-caps></span>
-      </span>
-    </div>
-
-    <div class="hero__tag hero__credits" data-credits hidden>
-      <span class="hero__tag-dot hero__tag-dot--amber"></span>
-      <span class="hero__tag-line hero__tag-line--amber"></span>
-      <span class="hero__tag-text mono">
-        {lang === 'zh' ? 'CREDITS 独立通道 · 不混算 Token' : 'NATIVE CREDITS · ISOLATED CHANNEL'}
-      </span>
-    </div>
-  </div>
-
-  <script type="application/json" data-hero-tools set:html={JSON.stringify(tools)} />
 </section>
 
 <style>
   .hero {
     position: relative;
-    min-height: max(720px, 100svh);
+    z-index: 2;
+    min-height: max(760px, 100svh);
     display: flex;
-    align-items: center;
-    isolation: isolate;
-    overflow: clip;
-  }
-
-  .hero__stage {
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background: var(--bg);
-  }
-
-  .hero__poster img,
-  .hero__canvas {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-  }
-
-  .hero__poster img {
-    object-fit: cover;
-    object-position: 68% 48%;
-  }
-
-  .hero__canvas {
-    opacity: 0;
-    transition: opacity 0.95s var(--ease-out);
-  }
-
-  .hero.is-live .hero__canvas {
-    opacity: 1;
-  }
-
-  /* 左侧与底部暗场渐变遮罩：确保文字对比度 >15:1，同时让右侧三维核心通透呈现 */
-  .hero__veil {
-    position: absolute;
-    inset: 0;
-    background:
-      linear-gradient(90deg, rgb(6 10 20 / 0.95) 0%, rgb(6 10 20 / 0.84) 36%, rgb(6 10 20 / 0.22) 66%, rgb(6 10 20 / 0.08) 100%),
-      linear-gradient(180deg, rgb(6 10 20 / 0.88) 0%, rgb(6 10 20 / 0) 18%),
-      linear-gradient(0deg, var(--bg) 0%, rgb(6 10 20 / 0.72) 14%, rgb(6 10 20 / 0) 34%);
-    pointer-events: none;
-  }
-
-  @media (max-width: 960px) {
-    .hero__veil {
-      background:
-        linear-gradient(180deg, rgb(6 10 20 / 0.88) 0%, rgb(6 10 20 / 0.72) 55%, var(--bg) 100%);
-    }
+    align-items: stretch;
   }
 
   .hero__content {
-    position: relative;
-    z-index: 2;
-    padding-top: calc(var(--nav-h) + clamp(36px, 6vh, 72px));
-    padding-bottom: clamp(44px, 6vh, 76px);
+    padding-top: calc(var(--nav-h) + clamp(32px, 5vh, 64px));
+    padding-bottom: clamp(32px, 4.5vh, 52px);
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
     gap: clamp(32px, 5vh, 56px);
   }
 
   .hero__copy {
-    max-width: 650px;
+    max-width: 620px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 18px;
   }
 
-  .hero__pills {
+  .hero__kicker {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 10px 16px;
   }
 
-  .hero__pulse-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 12px;
-    border-radius: 999px;
-    font-size: 0.69rem;
-    letter-spacing: 0.1em;
-    background: rgb(56 189 248 / 0.1);
-    border: 1px solid rgb(56 189 248 / 0.3);
-    color: #bae6fd;
-  }
-
-  @media (max-width: 560px) {
-    .hero__pulse-pill {
-      font-size: 0.58rem;
-      letter-spacing: 0.055em;
-      padding: 4px 10px;
-      gap: 6px;
-    }
-  }
-
-  .hero__pulse-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--emerald);
-    box-shadow: 0 0 10px var(--emerald);
-    animation: heroPulse 2.4s ease-in-out infinite;
-  }
-
-  @keyframes heroPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.45; transform: scale(0.85); }
-  }
-
-  .hero__sub-pill {
-    padding: 5px 10px;
-    border-radius: 999px;
-    font-size: 0.69rem;
-    letter-spacing: 0.04em;
-    background: rgb(15 23 42 / 0.72);
-    border: 1px solid var(--line);
+  .hero__badge {
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid var(--line-2);
+    background: rgb(9 11 15 / 0.78);
     color: var(--fg-dim);
   }
 
@@ -252,49 +165,54 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
 
   .hero__brand {
     font-family: var(--f-display);
-    font-weight: 800;
-    font-size: clamp(3rem, 7vw, 5.4rem);
+    font-weight: 250;
+    font-size: clamp(3.1rem, 6.6vw, 5.2rem);
     line-height: 0.96;
-    letter-spacing: -0.04em;
-    background: linear-gradient(135deg, #ffffff 15%, #bae6fd 65%, #38bdf8 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    letter-spacing: -0.045em;
+    color: var(--fg);
   }
 
   :lang(zh) .hero__brand {
-    letter-spacing: 0.01em;
-    line-height: 1.05;
+    font-weight: 300;
+    letter-spacing: 0.02em;
+    line-height: 1.04;
   }
 
   .hero__motto {
     font-family: var(--f-display);
-    font-weight: 650;
-    font-size: clamp(1.38rem, 2.55vw, 2.15rem);
-    line-height: 1.24;
+    font-weight: 320;
+    font-size: clamp(1.32rem, 2.35vw, 1.98rem);
+    line-height: 1.28;
     letter-spacing: -0.02em;
     color: var(--fg);
     text-wrap: balance;
   }
 
   :lang(zh) .hero__motto {
-    line-height: 1.32;
+    font-weight: 340;
     letter-spacing: 0;
+    line-height: 1.36;
   }
 
   .hero__lead {
-    font-size: clamp(0.96rem, 1.15vw, 1.08rem);
-    line-height: 1.7;
+    font-size: clamp(0.92rem, 1.06vw, 1.02rem);
+    line-height: 1.72;
     color: var(--fg-dim);
-    max-width: 56ch;
+    max-width: 55ch;
   }
 
   .hero__ctas {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     padding-top: 4px;
+  }
+
+  @media (max-width: 480px) {
+    .hero__ctas .btn {
+      width: 100%;
+    }
   }
 
   .hero__links {
@@ -302,25 +220,131 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     color: var(--fg-dim);
   }
 
   .hero__links a {
     text-decoration: none;
     border-bottom: 1px solid var(--line-2);
-    padding-bottom: 2px;
+    padding-bottom: 1px;
   }
 
   .hero__links a:hover {
+    color: var(--fg);
     border-bottom-color: var(--cyan);
   }
 
-  /* 底部四格事实计数器 */
+  /* 实时双轨读数仪 */
+  .hero__ledger {
+    margin-top: 4px;
+    border: 1px solid var(--line-2);
+    background: rgb(9 11 15 / 0.84);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .hero__ledger-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.64rem;
+    letter-spacing: 0.14em;
+    color: var(--fg-faint);
+  }
+
+  .hero__ledger-bar .reg {
+    margin-left: auto;
+  }
+
+  .hero__ledger-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+
+  .hero__ledger-grid {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr 1fr 1fr;
+    background: var(--line);
+    gap: 1px;
+  }
+
+  @media (max-width: 680px) {
+    .hero__ledger-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .hero__ledger-cell {
+    background: rgb(9 11 15 / 0.94);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .hero__ledger-k {
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    color: var(--fg-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hero__ledger-v {
+    font-size: 0.96rem;
+    font-weight: 560;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+
+  .hero__ledger-v--cyan {
+    color: var(--cyan);
+  }
+
+  .hero__ledger-v--brass {
+    color: var(--brass);
+  }
+
+  .hero__mix-bar {
+    display: flex;
+    height: 3px;
+    background: var(--ink-2);
+    border-top: 1px solid var(--line);
+  }
+
+  .hero__mix-seg--in { background: #56ccf2; }
+  .hero__mix-seg--out { background: #edf0f5; }
+  .hero__mix-seg--cr { background: rgb(86 204 242 / 0.42); }
+  .hero__mix-seg--cw { background: #e5a94c; }
+
+  .hero__ledger-foot {
+    padding: 6px 12px;
+    font-size: 0.65rem;
+    color: var(--fg-dim);
+    border-top: 1px solid var(--line);
+  }
+
+  /* 底部 1px 游丝四格事实矩阵 */
+  .hero__bottom {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
   .hero__stats {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
+    background: var(--line-2);
+    border: 1px solid var(--line-2);
+    gap: 1px;
   }
 
   @media (max-width: 960px) {
@@ -333,28 +357,26 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
     .hero__stats {
       grid-template-columns: minmax(0, 1fr);
     }
-    .hero__ctas .btn {
-      width: 100%;
-    }
   }
 
   .hero__stat {
-    padding: 16px 18px;
-    border-radius: 12px;
-    background: rgb(10 17 33 / 0.72);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    padding: 15px 18px;
+    background: rgb(7 9 13 / 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    gap: 6px;
+    gap: 5px;
   }
 
-  .hero__stat-k {
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #cbd5e1;
-    order: 2;
+  .hero__stat-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    color: var(--fg-faint);
+    order: 0;
   }
 
   .hero__stat-dd {
@@ -363,259 +385,82 @@ const tools = TOOLS.map((x) => ({ n: x.name, c: [x.u, x.l, x.s] }));
 
   .hero__stat-n {
     order: 1;
-    font-size: clamp(1.75rem, 2.8vw, 2.35rem);
-    font-weight: 700;
-    line-height: 1.05;
+    font-size: clamp(1.85rem, 2.8vw, 2.5rem);
+    font-weight: 300;
+    line-height: 1.04;
     letter-spacing: -0.03em;
     color: var(--cyan);
   }
 
+  .hero__stat-n--brass {
+    color: var(--brass);
+  }
+
+  .hero__stat-n--pure {
+    color: var(--fg);
+  }
+
+  .hero__stat-k {
+    order: 2;
+    font-size: 0.82rem;
+    font-weight: 560;
+    color: var(--fg);
+  }
+
   .hero__stat-sub {
     order: 3;
-    font-size: 0.74rem;
-    line-height: 1.45;
-    color: var(--fg-faint);
+    font-size: 0.73rem;
+    line-height: 1.48;
+    color: var(--fg-dim);
   }
 
   .hero__rail {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 8px 20px;
-    padding-top: 12px;
-    border-top: 1px solid rgb(148 184 255 / 0.1);
-    font-size: 0.68rem;
-    letter-spacing: 0.1em;
+    gap: 6px 20px;
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
     color: var(--fg-faint);
-  }
-
-  /* 空间三维投影 HUD 标注（仅桌面宽屏显示，绝不遮挡正文） */
-  .hero__hud {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    overflow: hidden;
-  }
-
-  @media (max-width: 1120px) {
-    .hero__hud {
-      display: none;
-    }
-  }
-
-  .hero__counter {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    will-change: transform, opacity;
-    transition: opacity 0.35s;
-  }
-
-  .hero__counter-lead {
-    width: 32px;
-    height: 1px;
-    background: linear-gradient(90deg, var(--cyan), rgb(56 189 248 / 0.2));
-  }
-
-  .hero__counter-box {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 7px 12px;
-    border-radius: 8px;
-    background: rgb(7 13 27 / 0.82);
-    border: 1px solid rgb(56 189 248 / 0.32);
-    backdrop-filter: blur(8px);
-  }
-
-  .hero__counter-k {
-    font-size: 0.62rem;
-    letter-spacing: 0.1em;
-    color: var(--fg-dim);
-  }
-
-  .hero__counter-n {
-    font-size: 1.05rem;
-    font-weight: 650;
-    color: #e0f2fe;
-  }
-
-  .hero__tag {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    will-change: transform, opacity;
-    transition: opacity 0.25s;
-  }
-
-  .hero__tag.is-flipped {
-    flex-direction: row-reverse;
-  }
-
-  .hero__tag-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--cyan);
-    box-shadow: 0 0 8px var(--cyan);
-  }
-
-  .hero__tag-dot--amber {
-    background: var(--amber);
-    box-shadow: 0 0 8px var(--amber);
-  }
-
-  .hero__tag-line {
-    width: 24px;
-    height: 1px;
-    background: rgb(56 189 248 / 0.55);
-  }
-
-  .hero__tag-line--amber {
-    background: rgb(251 191 36 / 0.6);
-  }
-
-  .hero__tag-text {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 4px 9px;
-    border-radius: 6px;
-    font-size: 0.68rem;
-    background: rgb(7 13 27 / 0.84);
-    border: 1px solid rgb(148 184 255 / 0.22);
-    color: #e2e8f0;
-    white-space: nowrap;
-  }
-
-  .hero__focus-k {
-    color: var(--cyan);
-  }
-
-  .hero__focus-caps {
-    color: var(--emerald);
-    letter-spacing: 0.08em;
-    font-size: 0.62rem;
   }
 </style>
 
 <script>
-  import type { HeroView, ScreenPoint } from '../scripts/hero/scene';
+  const counterEl = document.querySelector<HTMLElement>('[data-counter-n]');
+  const costEl = document.querySelector<HTMLElement>('[data-hero-cost]');
 
-  const hero = document.querySelector<HTMLElement>('[data-hero]')!;
-  const stage = hero.querySelector<HTMLElement>('.hero__stage')!;
-  const canvas = hero.querySelector<HTMLCanvasElement>('[data-hero-canvas]')!;
-  const counter = hero.querySelector<HTMLElement>('[data-counter]')!;
-  const counterN = hero.querySelector<HTMLElement>('[data-counter-n]')!;
-  const focus = hero.querySelector<HTMLElement>('[data-focus]')!;
-  const focusK = hero.querySelector<HTMLElement>('[data-focus-k]')!;
-  const focusName = hero.querySelector<HTMLElement>('[data-focus-name]')!;
-  const focusCaps = hero.querySelector<HTMLElement>('[data-focus-caps]')!;
-  const credits = hero.querySelector<HTMLElement>('[data-credits]')!;
-  const toolsJson = hero.querySelector('[data-hero-tools]')?.textContent;
-  const tools: { n: string; c: boolean[] }[] = toolsJson ? JSON.parse(toolsJson) : [];
-
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const gl = (() => {
-    try {
-      const c = document.createElement('canvas');
-      return !!c.getContext('webgl2');
-    } catch {
-      return false;
-    }
-  })();
-
-  const params = new URLSearchParams(location.search);
-  const stillView = params.get('still') as HeroView | null;
-
-  const pin = (el: HTMLElement, p: ScreenPoint) => {
-    el.style.opacity = p.visible ? '1' : '0';
-    if (!p.visible) return;
-    const w = el.offsetWidth;
-    const flip = p.x + w > stage.clientWidth - 20;
-    el.classList.toggle('is-flipped', flip);
-    el.style.transform = `translate3d(${(flip ? p.x - w : p.x).toFixed(1)}px, ${(p.y - el.offsetHeight * 0.5).toFixed(1)}px, 0)`;
-  };
-
-  if (stillView && gl) {
-    document.fonts.ready
-      .then(() => import('../scripts/hero/scene'))
-      .then(({ startHero }) => {
-        startHero({
-          canvas,
-          host: stage,
-          tools: tools.map((x) => x.n),
-          still: {
-            view: stillView,
-            time: Number(params.get('t') ?? 41.3),
-            width: Number(params.get('w') ?? 2400),
-            height: Number(params.get('h') ?? 1260),
-          },
-        });
-        (window as Window & { __heroStill?: string }).__heroStill = canvas.toDataURL('image/png');
-      });
-  } else if (!reduced && gl) {
+  if (counterEl) {
     const fmt = new Intl.NumberFormat('en-US');
-    let lastText = '';
-    const boot = () =>
-      import('../scripts/hero/scene')
-        .then(({ startHero }) => {
-          startHero({
-            canvas,
-            host: stage,
-            tools: tools.map((x) => x.n),
-            onReady: () => {
-              hero.classList.add('is-live');
-              counter.hidden = false;
-              focus.hidden = false;
-              credits.hidden = false;
-            },
-            onCount: (n) => {
-              const text = fmt.format(Math.floor(n));
-              if (text !== lastText) counterN.textContent = lastText = text;
-            },
-            onReading: (p) => {
-              const safeBand = p.y > 92 && p.y < stage.clientHeight - 265;
-              const ok = p.visible && safeBand && stage.clientWidth >= 1120 && p.x > stage.clientWidth * 0.46;
-              counter.style.opacity = ok ? '1' : '0';
-              if (ok) {
-                const maxX = Math.min(p.x, stage.clientWidth - counter.offsetWidth - 24);
-                counter.style.transform = `translate3d(${maxX.toFixed(1)}px, ${(p.y - counter.offsetHeight / 2).toFixed(1)}px, 0)`;
-              }
-            },
-            onCredits: (p) => {
-              const safeBand = p.y > 92 && p.y < stage.clientHeight - 265;
-              const ok = p.visible && safeBand && stage.clientWidth >= 1120 && p.x > stage.clientWidth * 0.48;
-              pin(credits, { ...p, visible: ok });
-            },
-            onFocus: (p) => {
-              const safeBand = p.y > 92 && p.y < stage.clientHeight - 265;
-              const ok = p.visible && safeBand && stage.clientWidth >= 1120 && p.x > stage.clientWidth * 0.46;
-              pin(focus, { ...p, visible: ok });
-              if (!ok) return;
-              const tool = tools[p.index];
-              if (tool && focusName.textContent !== tool.n) {
-                focusK.textContent = `#${String(p.index + 1).padStart(2, '0')}`;
-                focusName.textContent = tool.n;
-                focusCaps.textContent = tool.c.map((on) => (on ? '●' : '○')).join('');
-              }
-            },
-          });
-        })
-        .catch((err) => console.warn('[hero] WebGL scene unavailable, keeping poster', err));
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const baseTokens = 184_920_410;
+    const baseCost = 47.82;
 
-    const idle = () => {
-      if ('requestIdleCallback' in window) window.requestIdleCallback(boot, { timeout: 1200 });
-      else setTimeout(boot, 300);
-    };
-    if (document.readyState === 'complete') idle();
-    else window.addEventListener('load', idle, { once: true });
+    if (reduced) {
+      counterEl.textContent = fmt.format(baseTokens);
+    } else {
+      const t0 = performance.now();
+      let bonus = 0;
+
+      const ramp = (now: number) => {
+        const p = Math.min(1, (now - t0) / 900);
+        const eased = 1 - Math.pow(1 - p, 3);
+        counterEl.textContent = fmt.format(Math.floor(baseTokens * eased));
+        if (p < 1) {
+          requestAnimationFrame(ramp);
+        }
+      };
+      requestAnimationFrame(ramp);
+
+      window.setInterval(() => {
+        if (document.hidden) return;
+        const delta = 1420 + Math.floor(Math.random() * 2890);
+        bonus += delta;
+        counterEl.textContent = fmt.format(baseTokens + bonus);
+        if (costEl) {
+          const usd = baseCost + bonus * 0.0000042;
+          costEl.textContent = `$${usd.toFixed(2)}`;
+        }
+      }, 2200);
+    }
   }
 </script>

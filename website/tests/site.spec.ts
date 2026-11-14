@@ -37,10 +37,22 @@ for (const p of PAGES) {
       expect(await page.locator('img:not([alt])').count()).toBe(0);
     });
 
-    test('首屏三维遥测核心启动（软件 WebGL2）', async ({ page }) => {
+    test('全局三维计量舞台与首屏实时读数启动（软件 WebGL2 + GLB）', async ({ page }) => {
       await page.goto(p.path);
+      await expect(page.locator('[data-stage]')).toHaveClass(/is-live/, { timeout: 15_000 });
       await expect(page.locator('[data-hero]')).toHaveClass(/is-live/, { timeout: 15_000 });
       await expect(page.locator('[data-counter-n]')).not.toHaveText('0', { timeout: 10_000 });
+    });
+
+    test('五层爆炸解构区（#anatomy）：导轨点击可精确切换对应机芯层', async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(p.path);
+      await expect(page.locator('[data-stage]')).toHaveClass(/is-live/, { timeout: 15_000 });
+
+      await page.locator('#anatomy').scrollIntoViewIfNeeded();
+      await page.locator('[data-rail="2"]').click();
+      await expect(page.locator('[data-step="2"]')).toHaveClass(/is-active/, { timeout: 10_000 });
+      await expect(page.locator('[data-rail="2"]')).toHaveAttribute('aria-current', 'true');
     });
 
     test('交互式工作台：场景切换、ISO 周一窗口、币种与亮暗主题均真实联动', async ({ page }) => {
@@ -73,6 +85,17 @@ for (const p of PAGES) {
       await expect(wb.locator('.wb-main')).toContainText('120 Credits');
     });
 
+    test('零外泄拓扑沙盒（#architecture）：离线仅本机切换与 >10m Stale 模拟均联动', async ({ page }) => {
+      await page.goto(p.path);
+      const flow = page.locator('[data-flow]');
+      await flow.locator('[data-flow-mode="local"]').click();
+      await expect(flow.locator('[data-flow-egress]')).toContainText('0.0 KB/s (OFFLINE)');
+
+      await flow.locator('[data-flow-mode="fleet"]').click();
+      await flow.locator('[data-flow-stale]').click();
+      await expect(flow.locator('[data-flow-mac-state]')).toHaveText('STALE >10m');
+    });
+
     for (const width of [360, 768, 1024, 1440]) {
       test(`${width}px 视口无横向滚动溢出`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
@@ -84,21 +107,16 @@ for (const p of PAGES) {
   });
 }
 
-test('减少动态时不启动 WebGL，保留静帧海报', async ({ browser }) => {
+test('减少动态时不启动 WebGL，保留 Cycles 高清静帧海报与静态爆炸剖面图', async ({ browser }) => {
   const ctx = await browser.newContext({ reducedMotion: 'reduce' });
   const page = await ctx.newPage();
   await page.goto('/');
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('html')).toHaveClass(/no-gl/);
   await expect(page.locator('[data-hero]')).not.toHaveClass(/is-live/);
-  await expect(page.locator('.hero__poster img')).toBeVisible();
+  await expect(page.locator('.stage__poster img')).toBeVisible();
+  await expect(page.locator('.anat__static-fig img')).toBeVisible();
   await ctx.close();
-});
-
-test('静帧模式：同一场景确定性渲染出 PNG（design/tools/stills.mjs 依赖它）', async ({ page }) => {
-  await page.goto('/?still=wide&t=41.3&w=480&h=252');
-  await page.waitForFunction(() => (window as Window & { __heroStill?: string }).__heroStill?.startsWith('data:image/png'), null, {
-    timeout: 30_000,
-  });
 });
 
 test('来源矩阵：按能力筛选与实时搜索均生效', async ({ page }) => {

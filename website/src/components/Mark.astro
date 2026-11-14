@@ -1,6 +1,8 @@
 ---
 /**
- * 计然 / Jiran 品牌标识：与产品真实应用图标（assets/icon.png）同构的开口计量环 + T 形中轴 + 信号原点。
+ * 计然 / Jiran 精密光学标识：与产品真实应用图标（assets/icon.png）及顶层冠冕表圈同构的
+ * 开口计量双弧 + T 字中轴擒纵桥 + 信号原点。
+ * 采用冷铂白 -> 冰青（Token 遥测）与香槟金（成本/积分原点）双信号配色，告别廉价蓝紫荧光渐变。
  */
 interface Props { size?: number; class?: string }
 const { size = 28, class: cls } = Astro.props;
@@ -9,13 +11,13 @@ const uid = `jm-${Math.random().toString(36).slice(2, 7)}`;
 <svg class:list={['mark', cls]} width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">
   <defs>
     <linearGradient id={uid} x1="25" y1="4" x2="6" y2="27" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#38bdf8" />
-      <stop offset="0.52" stop-color="#0a84ff" />
-      <stop offset="1" stop-color="#2563eb" />
+      <stop offset="0" stop-color="#edf0f5" />
+      <stop offset="0.55" stop-color="#56ccf2" />
+      <stop offset="1" stop-color="#2fa4cf" />
     </linearGradient>
   </defs>
-  <rect width="32" height="32" rx="7.5" fill="#050a18" stroke="rgba(120, 175, 255, 0.24)" stroke-width="1" />
-  <path d="M14.65 6.2A9.9 9.9 0 0 0 7.15 20.3" fill="none" stroke={`url(#${uid})`} stroke-width="2.65" stroke-linecap="round" />
-  <path d="M17.35 6.2A9.9 9.9 0 0 1 16 25.9V15.1M11.7 15.1h8.6" fill="none" stroke={`url(#${uid})`} stroke-width="2.65" stroke-linecap="round" stroke-linejoin="round" />
-  <circle cx="9.35" cy="22.75" r="2.05" fill="#38bdf8" />
+  <rect width="32" height="32" rx="3" fill="#050608" stroke="rgba(237, 240, 245, 0.22)" stroke-width="1" />
+  <path d="M14.65 6.2A9.9 9.9 0 0 0 7.15 20.3" fill="none" stroke={`url(#${uid})`} stroke-width="2.5" stroke-linecap="round" />
+  <path d="M17.35 6.2A9.9 9.9 0 0 1 16 25.9V15.1M11.7 15.1h8.6" fill="none" stroke={`url(#${uid})`} stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="9.35" cy="22.75" r="2.05" fill="#e5a94c" />
 </svg>
