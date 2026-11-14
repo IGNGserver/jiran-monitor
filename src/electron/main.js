@@ -1020,18 +1020,6 @@ function macosLiquidGlassIsAvailable() {
   }) && macosLiquidGlassSupported();
 }
 
-function keepNativeBlurActive() {
-  if (!mainWindow) return;
-  if (!nativeBlurEnabled()) return;
-  if (
-    process.platform === 'darwin'
-    && macosGlassStyleFor() === MACOS_GLASS_VIBRANCY
-    && typeof mainWindow.setVisualEffectState === 'function'
-  ) {
-    mainWindow.setVisualEffectState('active');
-  }
-}
-
 function applyNativeMaterialToWindow(win, source = settings) {
   if (!win || win.isDestroyed?.()) return;
   const enabled = nativeBlurEnabled(source);
@@ -1039,15 +1027,11 @@ function applyNativeMaterialToWindow(win, source = settings) {
     const style = enabled ? macosGlassStyleFor(source) : null;
     if (style === MACOS_GLASS_LIQUID && applyMacosGlass(win, style)) {
       if (typeof win.setVibrancy === 'function') win.setVibrancy(null);
-      if (typeof win.setVisualEffectState === 'function') win.setVisualEffectState('inactive');
       return;
     }
     clearMacosGlass(win);
     if (typeof win.setVibrancy === 'function') {
-      win.setVibrancy(enabled ? 'hud' : null);
-      if (typeof win.setVisualEffectState === 'function') {
-        win.setVisualEffectState(enabled ? 'active' : 'inactive');
-      }
+      win.setVibrancy(enabled ? 'under-window' : null);
     }
   }
   // Windows: backgroundMaterial is locked in at window creation. setBackgroundMaterial('none')
@@ -3112,6 +3096,7 @@ function createWindow(boundsOverride, options = {}) {
   ensureSettingsLoaded();
   const glass = nativeBlurEnabled();
   const macosGlassStyle = macosGlassStyleFor(settings);
+  const macosGlass = process.platform === 'darwin' && glass;
   const windowsSurface = windowsSurfaceFor({ systemGlass: glass });
   const nativeWindowsBackdrop = windowsSurface.nativeBackdrop;
   // Only the very first window of a sign-in launch starts hidden: a later rebuild
@@ -3124,10 +3109,10 @@ function createWindow(boundsOverride, options = {}) {
   const bounds = boundsOverride || restoredBounds() || DEFAULT_WINDOW;
   // A normal application window: framed, resizable, minimizable, and present in
   // the taskbar/Dock. The widget-era build's borderless always-on-top chrome is gone, so
-  // `frame: false`, `transparent`, `skipTaskbar` and the fixed collapsed size
-  // have no remaining caller. macOS keeps an inset title bar so the traffic
-  // lights sit on the app's own toolbar, which is the platform convention for a
-  // window with a full-height sidebar.
+  // `frame: false`, `skipTaskbar` and the fixed collapsed size have no remaining caller.
+  // On macOS, glass modes (`vibrancy` and `liquid-glass`) must enable window transparency
+  // at construction time so Chromium clears transparent WebContents pixels between frames and
+  // AppKit lets NSGlassEffectView / NSVisualEffectView sample behind the clear NSWindow.
   const win = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
@@ -3141,8 +3126,9 @@ function createWindow(boundsOverride, options = {}) {
     backgroundColor: (glass || nativeWindowsBackdrop) ? '#00000000' : nativeSurface.background,
     icon: APP_ICON_PATH,
     autoHideMenuBar: process.platform !== 'darwin',
-    ...(process.platform === 'darwin' && glass && macosGlassStyle === MACOS_GLASS_VIBRANCY
-      ? { vibrancy: 'under-window', visualEffectState: 'active' }
+    ...(macosGlass ? { transparent: true, visualEffectState: 'active' } : {}),
+    ...(macosGlass && macosGlassStyle === MACOS_GLASS_VIBRANCY
+      ? { vibrancy: 'under-window' }
       : {}),
     ...(process.platform === 'win32' && nativeWindowsBackdrop
       ? { backgroundMaterial: windowsSurface.nativeMaterial }
@@ -3167,14 +3153,16 @@ function createWindow(boundsOverride, options = {}) {
   });
   applyWindowSettings();
   applyNativeMaterial();
-  keepNativeBlurActive();
-  win.on('focus', () => {
-    keepNativeBlurActive();
-  });
   win.on('show', replayDeferredStatsPush);
   win.on('restore', replayDeferredStatsPush);
-  win.on('blur', () => {
-    keepNativeBlurActive();
+  win.on('enter-full-screen', () => {
+    if (process.platform === 'darwin' && nativeBlurEnabled()) applyNativeMaterial();
+  });
+  win.on('leave-full-screen', () => {
+    if (process.platform === 'darwin' && nativeBlurEnabled()) applyNativeMaterial();
+  });
+  win.once('closed', () => {
+    clearMacosGlass(win);
   });
   win.on('resized', persistBoundsSoon);
   win.on('moved', persistBoundsSoon);
@@ -3197,6 +3185,7 @@ function createWindow(boundsOverride, options = {}) {
     startHidden,
     query: {
       ...initialRendererViewStateQuery(rendererViewState),
+      platform: process.platform,
       ...(settings?.systemGlass === false ? { systemGlassDisabled: '1' } : {}),
       windowSurface: effectiveWindowSurface(settings),
       ...(process.platform === 'win32' ? { windowsSurface: windowsSurface.kind } : {})
@@ -3557,8 +3546,9 @@ function rebuildWindow() {
   old.removeAllListeners('close');
   // Build the new window first so total window count never drops to 0
   // (otherwise window-all-closed fires and quits the app on Windows).
-  createWindow(bounds);
+  createWindow(bounds, { waitForContent: true, inactive: !wasFocused });
   mainWindow.once('show', () => {
+    clearMacosGlass(old);
     if (!old.isDestroyed()) old.destroy();
     if (wasFocused && !mainWindow.isDestroyed()) mainWindow.focus();
   });
@@ -4011,11 +4001,13 @@ app.whenReady().then(() => {
     const nextWindowsSurface = windowsSurfaceFor({ systemGlass: nextNativeMaterial }).kind;
     const surfaceChanged = previousRuntimeSettings.systemGlass !== settings.systemGlass
       || previousRuntimeSettings.windowsBackdrop !== settings.windowsBackdrop;
-    if (process.platform === 'win32' && (
+    const macosTransparencyChanged = process.platform === 'darwin'
+      && previousNativeMaterial !== nextNativeMaterial;
+    if (macosTransparencyChanged || (process.platform === 'win32' && (
       previousNativeMaterial !== nextNativeMaterial
       || previousWindowsSurface !== nextWindowsSurface
       || surfaceChanged
-    )) {
+    ))) {
       rebuildWindow();
     } else {
       applyNativeMaterial();
@@ -4045,7 +4037,10 @@ app.whenReady().then(() => {
     return settingsForRenderer();
   });
   ipcMain.handle('appearance:preview', (_event, patch) => {
-    applyNativeMaterial({ ...settings, ...patch });
+    const candidate = { ...settings, ...patch };
+    if (process.platform !== 'darwin' || nativeBlurEnabled(settings) === nativeBlurEnabled(candidate)) {
+      applyNativeMaterial(candidate);
+    }
     if (patch && patch.zoomFactor !== undefined && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.setZoomFactor(clampZoom(patch.zoomFactor));
     }

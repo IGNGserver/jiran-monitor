@@ -23,6 +23,13 @@ configureTransport(createIpcTransport(bridge));
 // The renderer shell owns a real client-area title bar on every desktop OS.
 // Mark the platform before the shared stylesheet and app module render so the
 // native chrome offsets are deterministic from first paint.
+function applyPlatformClass(platform) {
+  const normalized = platform === 'darwin' ? 'mac' : platform;
+  if (!normalized) return;
+  document.body.classList.remove('is-mac', 'is-win32', 'is-linux');
+  document.body.classList.add(`is-${normalized}`);
+}
+
 function applyWindowSurfaceClass(surface) {
   const target = document.documentElement;
   const body = document.body;
@@ -33,12 +40,16 @@ function applyWindowSurfaceClass(surface) {
 
 try {
   const urlParams = new URLSearchParams(window.location.search);
+  const initialPlatform = urlParams.get('platform');
+  if (initialPlatform) {
+    applyPlatformClass(initialPlatform);
+  }
   const initialSurface = urlParams.get('windowSurface');
   if (initialSurface) {
     applyWindowSurfaceClass(initialSurface);
   }
   const info = await bridge.getAppInfo?.();
-  if (info?.platform) document.body.classList.add(`is-${info.platform === 'darwin' ? 'mac' : info.platform}`);
+  if (info?.platform) applyPlatformClass(info.platform);
   if (info?.effectiveWindowSurface) {
     applyWindowSurfaceClass(info.effectiveWindowSurface);
   }
