@@ -7,6 +7,7 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: 'tests',
   fullyParallel: true,
+  workers: process.env.CI ? 2 : 3,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
@@ -16,9 +17,9 @@ export default defineConfig({
     launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] },
   },
   webServer: {
-    // Astro 7 检测到 AI agent 环境（AI_AGENT / CLAUDECODE）时会把 preview 转入后台，
-    // Playwright 就无法在测试结束后关掉它；清掉这两个变量，保持与 CI 一致的前台行为。
-    command: 'env -u AI_AGENT -u CLAUDECODE pnpm exec astro preview --port 4322 --host 127.0.0.1',
+    // Astro 7 检测到 AI agent 环境（ANTIGRAVITY_AGENT / AI_AGENT / CLAUDECODE）时会把 preview 转入后台，
+    // Playwright 就无法在测试结束后关掉它；清掉这些变量，保持与 CI 一致的前台行为。
+    command: 'env -u ANTIGRAVITY_AGENT -u AI_AGENT -u CLAUDECODE pnpm exec astro preview --port 4322 --host 127.0.0.1',
     url: 'http://127.0.0.1:4322/',
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

@@ -26,7 +26,7 @@ const SHOTS = [
 ];
 
 await mkdir(out, { recursive: true });
-const browser = await chromium.launch({ args: ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] });
+const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 for (const [file, view, w, h, t] of SHOTS) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on('pageerror', (e) => console.error(`[${file}]`, e.message));

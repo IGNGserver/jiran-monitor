@@ -1,350 +1,117 @@
 /**
- * 首屏「刻漏」实时场景。几何、节奏与配色读 design/kelou.json；站点静帧也由本场景渲染
- * （design/tools/stills.mjs），所以静帧与实时画面同源。
+ * 首屏「计算遥测核心（Computational Telemetry Conduit & Precision Gauge Core）」实时 WebGL2 场景。
+ * 站点静帧母版同样由本场景确定性渲染（design/tools/stills.mjs），确保静帧与实时画面 100% 同源。
  *
- * 叙事：五十九处来源的水滴落入源壶 → 平水壶把它们匀成稳定的一滴一滴 → 受水壶里的浮箭随计入的
- * Token 上升，刻度从朱砂指针旁经过。实测的水滴是实心的，按内容重建的水滴是半透明的；
- * credits 落进旁边单独的小杯，不倒进主壶（credits 绝不折算进 Token）。
+ * 视觉结构与产品事实一一对应：
+ * 1. 中央「开口双计量环 + 原点信号球 + 测地球面经纬核」与计然应用图标（assets/icon.png）几何同构；
+ * 2. 外圈精密游标盘精确排布 59 枚径向刻线，59 条三维光纤流道将各方工具的激光脉冲汇聚入本地采集核；
+ * 3. 实心高光脉冲代表上游精确 Token，半透明脉冲代表按内容推算的本地适配数据；
+ * 4. 右侧中段独立三环琥珀色立柱计量仪专收原生 Credits，绝不并入主计量核（准则 02：积分与 Token 严格分账）。
  *
- * 所有水滴的位置都是 f(种子, 时间) 的纯函数：同一时刻渲染出的画面完全一致，没有逐帧积累的状态
- * （唯一的例外是演示计数器的缓动）。只在支持 WebGL 且未开启「减少动态」时由 Hero 动态加载；
- * 任何失败都停在静帧上。
+ * 所有粒子矩阵均为 f(seed, time) 纯函数，同一时刻 t 在任意机器上渲染结果完全一致。
  */
 import {
-  CanvasTexture,
-  CircleGeometry,
+  AdditiveBlending,
+  BoxGeometry,
+  BufferGeometry,
+  CatmullRomCurve3,
   Color,
+  CylinderGeometry,
   DirectionalLight,
-  Fog,
+  Float32BufferAttribute,
+  FogExp2,
   Group,
   HemisphereLight,
+  IcosahedronGeometry,
   InstancedMesh,
-  LatheGeometry,
+  Line,
+  LineBasicMaterial,
+  LineSegments,
   MathUtils,
   Matrix4,
   Mesh,
-  MeshPhysicalMaterial,
+  MeshBasicMaterial,
   MeshStandardMaterial,
-  NoToneMapping,
-  PCFShadowMap,
+  OctahedronGeometry,
   PerspectiveCamera,
   PlaneGeometry,
-  PMREMGenerator,
+  Points,
+  PointsMaterial,
+  PointLight,
   Quaternion,
-  RepeatWrapping,
   Scene,
   ShaderMaterial,
-  ShadowMaterial,
   SphereGeometry,
   SRGBColorSpace,
+  TorusGeometry,
   TubeGeometry,
-  UniformsLib,
-  UniformsUtils,
-  Vector2,
   Vector3,
-  Vector4,
   WebGLRenderer,
-  CatmullRomCurve3,
-  BoxGeometry,
+  WireframeGeometry,
 } from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import spec from '../../../design/kelou.json';
-import { MAX_HITS, waterFragment, waterVertex } from './shaders';
+import paletteSpec from '../../../design/palette.json';
+import { arcFragment, arcVertex, coreFragment, coreVertex, gridFragment, gridVertex } from './shaders';
 
 export type HeroView = 'wide' | 'tall' | 'macro';
 
-export interface ScreenPoint { x: number; y: number; visible: boolean }
+export interface ScreenPoint {
+  x: number;
+  y: number;
+  visible: boolean;
+}
 
 export interface HeroOptions {
   canvas: HTMLCanvasElement;
   host: HTMLElement;
   tools: string[];
-  /** 当前被标注的来源：index 对应 tools，坐标是那一滴水在画布上的位置 */
   onFocus?: (info: ScreenPoint & { index: number }) => void;
-  /** 朱砂指针在画布上的位置，用来把读数贴在它旁边 */
-  onReading?: (info: ScreenPoint) => void;
-  /** credits 小杯在画布上的位置 */
-  onCredits?: (info: ScreenPoint) => void;
+  onReading?: (pt: ScreenPoint) => void;
+  onCredits?: (pt: ScreenPoint) => void;
   onCount?: (tokens: number) => void;
   onReady?: () => void;
-  /** 静帧模式：只渲染给定时刻的一帧（供 design/tools/stills.mjs 使用），不启动动画循环 */
-  still?: { time: number; view: HeroView; width: number; height: number };
+  still?: { view: HeroView; time: number; width: number; height: number };
 }
 
-const P = spec.palette;
-const G = spec.gravity;
-const RIPPLE_LIFE = 2.4;
-// 从高处落下的水滴很快达到终端速度：先加速，再匀速。这样它们在画面里停留得够久，能被看清、被标注
-const V = spec.sources.speed;
-const TAU = spec.sources.settle;
+const P = paletteSpec.palette;
+const SOURCE_COUNT = 59;
+const USAGE_COUNT = 52;
+const PACKETS_CAP = 260;
 
-/** 终端速度下落 h 米所需的秒数（不动点迭代，几步就收敛） */
-function terminalFall(h: number) {
-  let T = h / V + TAU;
-  for (let i = 0; i < 4; i++) T = h / V + TAU * (1 - Math.exp(-T / TAU));
-  return T;
+/** 确定性无状态哈希 [0, 1) */
+function hash(a: number, b: number): number {
+  let x = (Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x7f4a7c15, 0xc2b2ae35)) >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x7feb352d) >>> 0;
+  x ^= x >>> 15;
+  return (x >>> 0) / 4294967296;
 }
 
-/** 整数哈希 → [0, 1)。与时间无关的「种子」都从这里来。 */
-function hash(a: number, b: number) {
-  let h = Math.imul((a | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul((b | 0) + 0x632be59b, 0xc2b2ae35);
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x7feb352d);
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x846ca68b);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-/** 画质档位。软件光栅（SwiftShader / llvmpipe 等，没有 GPU 的机器与 CI）走最轻的一档：小而硬的阴影、30 帧。 */
-function tier(gl: WebGLRenderingContext | WebGL2RenderingContext) {
-  const info = gl.getExtension('WEBGL_debug_renderer_info');
-  const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
-  if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name)) return { shadow: 512, dpr: 1, soft: false, fps: 30 };
-  const w = Math.min(window.innerWidth, window.innerHeight * 2);
-  const cores = navigator.hardwareConcurrency || 4;
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
-  if (w < 700 || cores <= 4 || mem <= 2) return { shadow: 1024, dpr: 1.5, soft: true, fps: 60 };
-  return { shadow: 2048, dpr: 2, soft: true, fps: 60 };
-}
-
-type VesselSpec = { id: string; pos: number[]; radius: number; height: number; level: number };
-
-const WALL = 0.045;
-const FOOT = 0.9; // 壶底半径相对口沿的比例（略收）
-
-/** 壶的剖面：内壁 → 口沿 → 外壁 → 圈足，绕 Y 轴车出来。 */
-function vesselGeometry(R: number, H: number) {
-  const b = R * FOOT;
-  const pts = [
-    [0, WALL],
-    [b - WALL - 0.04, WALL],
-    [b - WALL, WALL + 0.04],
-    [R - WALL, H - 0.02],
-    [R - WALL + 0.012, H],
-    [R + 0.028, H],
-    [R + 0.036, H - 0.026],
-    [R + 0.004, H - 0.06],
-    [b, 0.07],
-    [b - 0.012, 0.03],
-    [b - 0.05, 0.0],
-    [0, 0],
-  ].map(([x, y]) => new Vector2(x, y));
-  const geo = new LatheGeometry(pts, 112);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-/** 内壁在高度 y（相对壶底）处的半径 */
-function innerRadius(R: number, H: number, y: number) {
-  const b = R * FOOT - WALL;
-  return MathUtils.lerp(b, R - WALL, MathUtils.clamp((y - WALL) / (H - WALL), 0, 1));
-}
-
-interface Surface {
-  center: Vector3; // 水面中心（世界坐标）
-  radius: number;
-  mat: ShaderMaterial;
-  hits: Vector4[];
-}
-
-interface Emitter {
-  x: number;
-  z: number;
-  y0: number; // 出水点高度
-  fall: number; // 落到水面所需秒数
+interface Conduit {
+  index: number;
+  curve: CatmullRomCurve3;
   interval: number;
-  phase: number; // 第 n 滴的出水时刻 = (n + phase) * interval
-  surface: Surface;
-  kind: 'source' | 'drip' | 'credit';
-  index: number; // 来源序号；非来源为 -1
-  radius: number;
-  hang: boolean; // 出水口上是否挂着正在形成的一滴
-  terminal: boolean; // true：终端速度下落（远处来的水滴）；false：自由落体（出水口的短距离滴落）
+  duration: number;
+  phase: number;
+  estimated: boolean;
+  tone: 'cyan' | 'violet' | 'teal' | 'cobalt';
 }
 
-function makeSurface(center: Vector3, radius: number): Surface {
-  const mat = new ShaderMaterial({
-    vertexShader: waterVertex,
-    fragmentShader: waterFragment,
-    fog: true,
-    uniforms: UniformsUtils.merge([
-      UniformsLib.fog,
-      {
-        uTime: { value: 0 },
-        uRadius: { value: radius },
-        uHits: { value: Array.from({ length: MAX_HITS }, () => new Vector4()) },
-        uDeep: { value: new Color(P.water) },
-        uLight: { value: new Color(P.waterLight) },
-      },
-    ]),
-  });
-  return { center, radius, mat, hits: [] };
+interface Tier {
+  dpr: number;
+  fps: number;
+  filaments: number;
+  gridSegments: number;
 }
 
-/** 浮箭的刻度：象牙色竹片，每「刻」一道长线并标上汉字序数，中间四道短线。 */
-function rodTexture() {
-  const r = spec.rod;
-  const w = 64;
-  const h = 2048;
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const g = c.getContext('2d')!;
-  g.fillStyle = P.ivory;
-  g.fillRect(0, 0, w, h);
-  // 竹纹：几道极淡的纵向纤维
-  g.globalAlpha = 0.06;
-  g.fillStyle = P.wood;
-  for (let i = 0; i < 9; i++) g.fillRect(4 + hash(i, 3) * (w - 8), 0, 1, h);
-  g.globalAlpha = 1;
-  const numerals = ['十', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-  const major = h / r.marks;
-  g.fillStyle = P.ink;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.font = `600 26px 'Noto Serif SC', 'Songti SC', 'STSong', serif`;
-  for (let m = 0; m < r.marks; m++) {
-    // 画布 y 向下；纹理 v 向上，所以从底往上排
-    const y = h - m * major;
-    g.fillRect(0, y - 2, w, 3);
-    for (let k = 1; k < 5; k++) g.fillRect(0, y - (k * major) / 5 - 1, w * 0.32, 2);
-    g.fillText(numerals[m], w / 2 + 6, y - major * 0.5);
+function detectTier(gl: WebGLRenderingContext | WebGL2RenderingContext, forcedStill: boolean): Tier {
+  if (forcedStill) return { dpr: 1, fps: 60, filaments: SOURCE_COUNT, gridSegments: 88 };
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const rendererName = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+  const isSoftware = /swiftshader|llvmpipe|software|basic render/i.test(rendererName);
+  if (isSoftware) {
+    return { dpr: 1, fps: 18, filaments: 28, gridSegments: 32 };
   }
-  const tex = new CanvasTexture(c);
-  tex.colorSpace = SRGBColorSpace;
-  tex.wrapS = RepeatWrapping;
-  tex.wrapT = RepeatWrapping;
-  tex.anisotropy = 4;
-  return tex;
-}
-
-function buildApparatus(shadowSize: number) {
-  const root = new Group();
-  const celadon = new MeshPhysicalMaterial({
-    color: P.celadon,
-    roughness: 0.3,
-    clearcoat: 0.9,
-    clearcoatRoughness: 0.18,
-    envMapIntensity: 0.9,
-  });
-  const stone = new MeshStandardMaterial({ color: P.stone, roughness: 0.92, metalness: 0 });
-  const wood = new MeshStandardMaterial({ color: P.wood, roughness: 0.6 });
-  const vessels = spec.vessels as VesselSpec[];
-  const surfaces: Surface[] = [];
-  const tips: Vector3[] = [];
-
-  const addVessel = (v: VesselSpec, plinth: boolean) => {
-    const [x, y, z] = v.pos;
-    const mesh = new Mesh(vesselGeometry(v.radius, v.height), celadon);
-    mesh.position.set(x, y + 0.004, z); // 抬起一点，避免圈足与石台共面产生阴影条纹
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    root.add(mesh);
-    if (plinth && y > 0.001) {
-      const side = v.radius * 2.25;
-      const block = new Mesh(new RoundedBoxGeometry(side, y, side, 3, 0.035), stone);
-      block.position.set(x, y / 2, z);
-      block.castShadow = true;
-      block.receiveShadow = true;
-      root.add(block);
-    }
-    const ly = v.height * v.level;
-    const surf = makeSurface(new Vector3(x, y + ly, z), innerRadius(v.radius, v.height, ly));
-    const disc = new Mesh(new CircleGeometry(surf.radius, 72), surf.mat);
-    disc.rotation.x = -Math.PI / 2;
-    disc.position.copy(surf.center);
-    root.add(disc);
-    surfaces.push(surf);
-    return surf;
-  };
-
-  vessels.forEach((v) => addVessel(v, true));
-  const cr = spec.credits;
-  const creditsSurface = addVessel({ id: 'credits', pos: cr.pos, radius: cr.radius, height: cr.height, level: cr.level }, false);
-
-  // 出水管：从上一只壶的侧壁伸出，弯向下一只壶的水面上方
-  const spoutMat = new MeshStandardMaterial({ color: P.celadonDeep, roughness: 0.35, metalness: 0.05 });
-  for (let i = 0; i < vessels.length - 1; i++) {
-    const a = vessels[i];
-    const b = vessels[i + 1];
-    const d = new Vector3(b.pos[0] - a.pos[0], 0, b.pos[2] - a.pos[2]);
-    const dist = d.length();
-    d.normalize();
-    const y0 = a.pos[1] + 0.2;
-    const start = new Vector3(a.pos[0], y0, a.pos[2]).addScaledVector(d, a.radius * 0.96);
-    const reach = dist - b.radius * 0.42;
-    const tip = new Vector3(a.pos[0], y0 - 0.12, a.pos[2]).addScaledVector(d, reach);
-    const mid = new Vector3(a.pos[0], y0 + 0.02, a.pos[2]).addScaledVector(d, MathUtils.lerp(a.radius, reach, 0.62));
-    const bend = new Vector3(a.pos[0], y0 - 0.04, a.pos[2]).addScaledVector(d, reach - 0.04);
-    const curve = new CatmullRomCurve3([start, mid, bend, tip]);
-    const tube = new Mesh(new TubeGeometry(curve, 40, 0.032, 12, false), spoutMat);
-    tube.castShadow = true;
-    root.add(tube);
-    tips.push(tip);
-  }
-
-  // 受水壶：口沿上架一根横木，浮箭从水里升起；横木上立一根小柱，挑出朱砂指针
-  const recv = vessels[vessels.length - 1];
-  const rs = surfaces[vessels.length - 1];
-  const rimY = recv.pos[1] + recv.height + 0.03;
-  const bar = new Mesh(new BoxGeometry(recv.radius * 2 + 0.16, 0.05, 0.07), wood);
-  bar.position.set(recv.pos[0], rimY, recv.pos[2]);
-  bar.castShadow = true;
-  root.add(bar);
-  const r = spec.rod;
-  const rodTex = rodTexture();
-  rodTex.repeat.set(1, (r.above + r.below) / r.period);
-  const rodMat = new MeshStandardMaterial({ color: '#ffffff', map: rodTex, roughness: 0.55 });
-  const rodLen = r.above + r.below;
-  const rod = new Mesh(new BoxGeometry(r.width, rodLen, r.width), rodMat);
-  rod.position.set(recv.pos[0], rs.center.y - r.below + rodLen / 2, recv.pos[2]);
-  rod.castShadow = true;
-  root.add(rod);
-  const postX = recv.pos[0] + 0.15;
-  const postH = r.pointer + 0.16;
-  const post = new Mesh(new BoxGeometry(0.035, postH, 0.035), wood);
-  post.position.set(postX, rimY + postH / 2, recv.pos[2]);
-  post.castShadow = true;
-  root.add(post);
-  const pointerY = rs.center.y + r.pointer;
-  const pointer = new Mesh(
-    new BoxGeometry(0.15 - r.width / 2, 0.016, 0.03),
-    new MeshStandardMaterial({ color: P.cinnabar, roughness: 0.4 }),
-  );
-  pointer.position.set(recv.pos[0] + r.width / 2 + (0.15 - r.width / 2) / 2, pointerY, recv.pos[2]);
-  root.add(pointer);
-  const pointerTip = new Vector3(recv.pos[0] + 0.15, pointerY, recv.pos[2]);
-
-  // 地面只接影子：画面里没有「桌面」，器物直接立在纸上
-  const ground = new Mesh(new PlaneGeometry(40, 40), new ShadowMaterial({ color: P.ink, opacity: 0.16 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  root.add(ground);
-
-  return { root, surfaces, tips, rodTex, pointerTip, creditsSurface, shadowSize };
-}
-
-/** 构图：宽屏把刻漏放在右侧给文字让位；竖屏放在上半屏。 */
-function framing(aspect: number, view: HeroView) {
-  if (view === 'macro') {
-    return { fov: 24, distance: 3.1, elevation: 9, azimuth: 30, target: new Vector3(0.98, 1.55, 0.55), shiftX: 0, shiftY: 0 };
-  }
-  if (view === 'wide' && aspect >= 1.05) {
-    const squeeze = MathUtils.clamp((1.9 - aspect) / 0.7, 0, 1);
-    return {
-      fov: 30,
-      distance: 12.8 + squeeze * 5.2,
-      elevation: 21,
-      azimuth: 32,
-      target: new Vector3(-0.35, 1.3, -0.3),
-      shiftX: -0.21 - squeeze * 0.02,
-      shiftY: 0,
-    };
-  }
-  const narrow = MathUtils.clamp((1.05 - aspect) / 0.6, 0, 1);
-  return { fov: 34, distance: 13.5 + narrow * 4, elevation: 22, azimuth: 30, target: new Vector3(-0.5, 1.4, -0.45), shiftX: 0, shiftY: 0.2 };
+  return { dpr: Math.min(window.devicePixelRatio || 1, 2), fps: 60, filaments: SOURCE_COUNT, gridSegments: 88 };
 }
 
 export function startHero(opts: HeroOptions) {
@@ -356,278 +123,647 @@ export function startHero(opts: HeroOptions) {
     powerPreference: 'high-performance',
     preserveDrawingBuffer: !!still,
   });
-  const t = tier(renderer.getContext());
   renderer.outputColorSpace = SRGBColorSpace;
-  renderer.toneMapping = NoToneMapping;
-  renderer.setClearColor(P.paper, 1);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = PCFShadowMap;
+  renderer.setClearColor(new Color(P.bg), 1);
+
+  const tier = detectTier(renderer.getContext(), !!still);
+  let dpr = tier.dpr;
 
   const scene = new Scene();
-  scene.fog = new Fog(P.paper, 13, 30);
-  const pmrem = new PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.5;
-  scene.add(new HemisphereLight(P.paper, P.stone, 0.55));
-  const key = new DirectionalLight('#fff4e4', 1.7);
-  key.position.set(-5.5, 9, 6.5);
-  key.target.position.set(0, 0.8, 0);
-  key.castShadow = true;
-  const shadowSize = still ? 4096 : t.shadow;
-  key.shadow.mapSize.set(shadowSize, shadowSize);
-  key.shadow.radius = still || t.soft ? 6 : 1;
-  key.shadow.bias = -0.0006;
-  key.shadow.normalBias = 0.035;
-  Object.assign(key.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 30 });
-  scene.add(key, key.target);
+  scene.fog = new FogExp2(P.bg, 0.046);
 
-  const camera = new PerspectiveCamera(30, 1, 0.1, 80);
-  const app = buildApparatus(shadowSize);
-  scene.add(app.root);
+  const camera = new PerspectiveCamera(36, 16 / 9, 0.1, 80);
 
-  // ------------------------------------------------------------------ 水滴
-  const [srcS, lvlS, rcvS] = app.surfaces;
-  const src = spec.sources;
-  const emitters: Emitter[] = [];
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  for (let k = 0; k < src.count; k++) {
-    // 向日葵排布：五十九个落点均匀铺在源壶水面上
-    const rr = srcS.radius * src.spread * Math.sqrt((k + 0.5) / src.count);
-    const th = k * golden;
-    const h = src.height + hash(k, 11) * 1.2;
-    emitters.push({
-      x: srcS.center.x + rr * Math.cos(th),
-      z: srcS.center.z + rr * Math.sin(th),
-      y0: srcS.center.y + h,
-      fall: terminalFall(h),
-      interval: src.base * (1 + k * src.growth),
-      phase: hash(k, 7),
-      surface: srcS,
-      kind: 'source',
-      index: k,
-      radius: src.radius * (0.85 + hash(k, 5) * 0.3),
-      hang: false,
-      terminal: true,
-    });
-  }
-  const dripFrom = (tip: Vector3, to: Surface, interval: number, phase: number): Emitter => ({
-    x: tip.x,
-    z: tip.z,
-    y0: tip.y - 0.03,
-    fall: Math.sqrt((2 * (tip.y - 0.03 - to.center.y)) / G),
-    interval,
-    phase,
-    surface: to,
-    kind: 'drip',
-    index: -1,
-    radius: 0.044,
-    hang: true,
-    terminal: false,
-  });
-  const toLevel = dripFrom(app.tips[0], lvlS, spec.drips.source, 0.1);
-  const toReceive = dripFrom(app.tips[1], rcvS, spec.drips.level, 0.55);
-  emitters.push(toLevel, toReceive);
-  const cs = app.creditsSurface;
-  const creditH = 6.2;
-  emitters.push({
-    x: cs.center.x - 0.03,
-    z: cs.center.z + 0.02,
-    y0: cs.center.y + creditH,
-    fall: terminalFall(creditH),
-    interval: spec.credits.interval,
-    phase: spec.credits.phase,
-    surface: cs,
-    kind: 'credit',
-    index: -1,
-    radius: 0.038,
-    hang: false,
-    terminal: true,
-  });
+  // 精密冷色布光（不使用 RoomEnvironment 棚灯贴图，杜绝球面灰色塑料反光斑）
+  const hemi = new HemisphereLight('#bae6fd', '#050b18', 1.05);
+  const keyLight = new DirectionalLight('#e0f2fe', 2.1);
+  keyLight.position.set(4.2, 6.8, 5.2);
+  const rimLight = new DirectionalLight('#3b82f6', 1.75);
+  rimLight.position.set(-5.2, 2.4, -3.8);
+  const coreLight = new PointLight('#38bdf8', 4.2, 9.5, 1.6);
+  coreLight.position.set(0, 0.52, 0);
+  scene.add(hemi, keyLight, rimLight, coreLight);
 
-  const dropGeo = new SphereGeometry(1, 18, 12);
-  const solidMat = new MeshPhysicalMaterial({ color: '#ffffff', roughness: 0.06, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.4 });
-  const ghostMat = new MeshPhysicalMaterial({
-    color: P.drop,
-    roughness: 0.1,
+  // 舞台根组
+  const rig = new Group();
+  scene.add(rig);
+
+  // 1. 底部空间遥测坐标网格（自定义 GLSL）
+  const gridUniforms = {
+    uTime: { value: 0 },
+    uBg: { value: new Color(P.bg) },
+    uCyan: { value: new Color(P.cyan) },
+    uCobalt: { value: new Color(P.cobalt) },
+  };
+  const gridMat = new ShaderMaterial({
+    vertexShader: gridVertex,
+    fragmentShader: gridFragment,
+    uniforms: gridUniforms,
     transparent: true,
-    opacity: 0.32,
     depthWrite: false,
-    envMapIntensity: 1.2,
   });
-  const CAP = 160;
-  const solid = new InstancedMesh(dropGeo, solidMat, CAP);
-  const ghost = new InstancedMesh(dropGeo, ghostMat, CAP);
-  solid.frustumCulled = ghost.frustumCulled = false;
-  scene.add(solid, ghost);
-  const cDrop = new Color(P.drop);
-  const cCredit = new Color(P.brass);
-  const cFocus = new Color(P.ink);
-  for (let i = 0; i < CAP; i++) solid.setColorAt(i, cDrop);
+  const gridMesh = new Mesh(new PlaneGeometry(30, 30, tier.gridSegments, tier.gridSegments), gridMat);
+  gridMesh.rotation.x = -Math.PI / 2;
+  gridMesh.position.y = -1.72;
+  scene.add(gridMesh);
 
-  const m4 = new Matrix4();
-  const q = new Quaternion();
-  const pos = new Vector3();
-  const scl = new Vector3();
+  // 2. 中央「计然开口计量环 + 球面经纬光学核 + 测地线框笼」组件
+  const coreCenter = new Vector3(0, 0.5, 0);
+  const coreGroup = new Group();
+  coreGroup.position.copy(coreCenter);
+  rig.add(coreGroup);
 
-  let focusK = -1;
+  // 中央程序化经纬流场球核
+  const coreUniforms = {
+    uTime: { value: 0 },
+    uDeep: { value: new Color('#040a1a') },
+    uCobalt: { value: new Color('#0a84ff') },
+    uCyan: { value: new Color('#38bdf8') },
+    uViolet: { value: new Color('#818cf8') },
+  };
+  const coreMat = new ShaderMaterial({
+    vertexShader: coreVertex,
+    fragmentShader: coreFragment,
+    uniforms: coreUniforms,
+    transparent: true,
+  });
+  const innerSphere = new Mesh(new SphereGeometry(0.74, 56, 40), coreMat);
+  coreGroup.add(innerSphere);
+
+  // 外层测地多面体精密线框笼（替代混浊玻璃球，营造通透锐利的计算仪器质感）
+  const geoWire = new WireframeGeometry(new IcosahedronGeometry(0.94, 2));
+  const latticeCage = new LineSegments(
+    geoWire,
+    new LineBasicMaterial({
+      color: '#38bdf8',
+      transparent: true,
+      opacity: 0.19,
+      blending: AdditiveBlending,
+    }),
+  );
+  coreGroup.add(latticeCage);
+
+  // 正交双星盘细环（Astrolabe Rings）
+  const astrolabeGroup = new Group();
+  coreGroup.add(astrolabeGroup);
+  const fineRingMat = new MeshBasicMaterial({
+    color: '#7dd3fc',
+    transparent: true,
+    opacity: 0.36,
+    blending: AdditiveBlending,
+  });
+  const eqRing = new Mesh(new TorusGeometry(1.08, 0.0055, 10, 112), fineRingMat);
+  eqRing.rotation.x = Math.PI * 0.42;
+  const merRing = new Mesh(new TorusGeometry(1.08, 0.0055, 10, 112), fineRingMat);
+  merRing.rotation.y = Math.PI * 0.38;
+  merRing.rotation.x = -0.25;
+  astrolabeGroup.add(eqRing, merRing);
+
+  // 与产品图标（assets/icon.png）几何同构的开口双圆弧 + 左下发光原点球
+  const arcGroup = new Group();
+  arcGroup.rotation.x = 0.2;
+  arcGroup.rotation.y = -0.26;
+  coreGroup.add(arcGroup);
+
+  const rightArcMat = new ShaderMaterial({
+    vertexShader: arcVertex,
+    fragmentShader: arcFragment,
+    uniforms: {
+      uTime: { value: 0 },
+      uColorA: { value: new Color('#7dd3fc') },
+      uColorB: { value: new Color('#0a84ff') },
+      uPhase: { value: 0.0 },
+    },
+    transparent: true,
+  });
+  const leftArcMat = new ShaderMaterial({
+    vertexShader: arcVertex,
+    fragmentShader: arcFragment,
+    uniforms: {
+      uTime: { value: 0 },
+      uColorA: { value: new Color('#38bdf8') },
+      uColorB: { value: new Color('#2563eb') },
+      uPhase: { value: 0.5 },
+    },
+    transparent: true,
+  });
+
+  // 底层暗钛金属导轨环，衬托发光圆弧厚度
+  const darkTitanium = new MeshStandardMaterial({
+    color: '#0d182e',
+    emissive: '#081226',
+    emissiveIntensity: 0.4,
+    metalness: 0.78,
+    roughness: 0.3,
+  });
+  const backingTrack = new Mesh(new TorusGeometry(1.42, 0.016, 12, 112), darkTitanium);
+  arcGroup.add(backingTrack);
+
+  const rightArc = new Mesh(new TorusGeometry(1.42, 0.048, 22, 80, Math.PI * 0.96), rightArcMat);
+  rightArc.rotation.z = -Math.PI * 0.47;
+  arcGroup.add(rightArc);
+
+  const leftArc = new Mesh(new TorusGeometry(1.42, 0.048, 22, 68, Math.PI * 0.72), leftArcMat);
+  leftArc.rotation.z = Math.PI * 0.55;
+  arcGroup.add(leftArc);
+
+  // 左下发光原点信号球 + 光晕壳
+  const originOrbAngle = Math.PI * 1.33;
+  const orbPos = new Vector3(Math.cos(originOrbAngle) * 1.42, Math.sin(originOrbAngle) * 1.42, 0);
+  const originOrb = new Mesh(
+    new SphereGeometry(0.115, 24, 20),
+    new MeshBasicMaterial({ color: '#bae6fd' }),
+  );
+  originOrb.position.copy(orbPos);
+  const originHalo = new Mesh(
+    new SphereGeometry(0.19, 20, 16),
+    new MeshBasicMaterial({
+      color: '#38bdf8',
+      transparent: true,
+      opacity: 0.28,
+      blending: AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  originHalo.position.copy(orbPos);
+  arcGroup.add(originOrb, originHalo);
+
+  // 内层「26 项多窗口订阅配额环」（5h 滚动窗 + 周限额双弧示意）
+  const quotaRingGroup = new Group();
+  quotaRingGroup.rotation.set(-0.34, 0.22, 0.15);
+  coreGroup.add(quotaRingGroup);
+  const quotaArc5h = new Mesh(
+    new TorusGeometry(1.22, 0.015, 12, 72, Math.PI * 1.18),
+    new MeshBasicMaterial({ color: '#a78bfa', transparent: true, opacity: 0.72 }),
+  );
+  const quotaArcWeek = new Mesh(
+    new TorusGeometry(1.22, 0.015, 12, 54, Math.PI * 0.56),
+    new MeshBasicMaterial({ color: '#34d399', transparent: true, opacity: 0.76 }),
+  );
+  quotaArcWeek.rotation.z = Math.PI * 1.32;
+  quotaRingGroup.add(quotaArc5h, quotaArcWeek);
+
+  // 外层深色钛金属游标盘 + 59 枚来源刻度针
+  const vernierGroup = new Group();
+  vernierGroup.rotation.x = 1.06;
+  vernierGroup.rotation.z = -0.22;
+  coreGroup.add(vernierGroup);
+
+  const bezelRing = new Mesh(new TorusGeometry(1.88, 0.018, 14, 120), darkTitanium);
+  vernierGroup.add(bezelRing);
+
+  const tickGeo = new BoxGeometry(0.02, 0.125, 0.012);
+  const tickMat = new MeshBasicMaterial({ color: '#ffffff' });
+  const ticks = new InstancedMesh(tickGeo, tickMat, SOURCE_COUNT);
+  const tmpM = new Matrix4();
+  const tmpQ = new Quaternion();
+  const tmpP = new Vector3();
+  const tmpS = new Vector3();
+  const cCyan = new Color(P.cyan);
+  const cViolet = new Color(P.violet);
+  const cEmerald = new Color(P.emerald);
+
+  for (let i = 0; i < SOURCE_COUNT; i++) {
+    const a = (i / SOURCE_COUNT) * Math.PI * 2;
+    const isSession = i < 4 || i === 25;
+    const isQuotaOnly = i >= USAGE_COUNT;
+    const r = 1.88 + (isSession ? 0.085 : 0.048);
+    tmpP.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+    tmpQ.setFromAxisAngle(new Vector3(0, 0, 1), a - Math.PI / 2);
+    tmpS.set(1, isSession ? 1.55 : isQuotaOnly ? 1.2 : 0.88, 1);
+    tmpM.compose(tmpP, tmpQ, tmpS);
+    ticks.setMatrixAt(i, tmpM);
+    ticks.setColorAt(i, isSession ? cEmerald : isQuotaOnly ? cViolet : cCyan);
+  }
+  ticks.instanceMatrix.needsUpdate = true;
+  if (ticks.instanceColor) ticks.instanceColor.needsUpdate = true;
+  vernierGroup.add(ticks);
+
+  // 外围斜交陀螺仪细环
+  const gyroRing = new Mesh(
+    new TorusGeometry(2.22, 0.009, 10, 108, Math.PI * 1.65),
+    new MeshBasicMaterial({
+      color: '#38bdf8',
+      transparent: true,
+      opacity: 0.3,
+      blending: AdditiveBlending,
+    }),
+  );
+  gyroRing.rotation.set(-0.58, 0.46, 0.28);
+  coreGroup.add(gyroRing);
+
+  // 3. 下方 14 日量化柱阵（呼应总览页 14 天趋势柱）
+  const barsGroup = new Group();
+  barsGroup.position.set(0, -1.66, 0);
+  rig.add(barsGroup);
+  const barGeo = new CylinderGeometry(0.032, 0.032, 1, 12);
+  const barMat = new MeshStandardMaterial({
+    color: '#1e3a8a',
+    emissive: '#0ea5e9',
+    emissiveIntensity: 0.55,
+    roughness: 0.25,
+    metalness: 0.45,
+    transparent: true,
+    opacity: 0.68,
+  });
+  const barMeshes: Mesh[] = [];
+  for (let i = 0; i < 14; i++) {
+    const bm = new Mesh(barGeo, barMat);
+    const angle = ((i - 6.5) / 14) * 1.42;
+    bm.position.set(Math.sin(angle) * 1.42, 0.18, Math.cos(angle) * 0.52 - 0.35);
+    barsGroup.add(bm);
+    barMeshes.push(bm);
+  }
+
+  // 4. 右侧中段独立「原生 Credits 三环晶柱计量仪」（高于底部统计卡，绝不混入主 Token 核）
+  const creditsCenter = new Vector3(2.18, 0.14, 0.34);
+  const creditsGroup = new Group();
+  creditsGroup.position.copy(creditsCenter);
+  rig.add(creditsGroup);
+
+  const amberMat = new MeshBasicMaterial({
+    color: P.amber,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const amberSoftMat = new MeshBasicMaterial({
+    color: '#f59e0b',
+    transparent: true,
+    opacity: 0.42,
+    blending: AdditiveBlending,
+  });
+
+  // 三层水平精密刻度环 + 中央八面体晶核 + 垂直轴杆
+  const creditsRings: Mesh[] = [];
+  [-0.17, 0, 0.17].forEach((yy, idx) => {
+    const r = idx === 1 ? 0.28 : 0.21;
+    const ring = new Mesh(new TorusGeometry(r, 0.012, 12, 48, Math.PI * 1.7), idx === 1 ? amberMat : amberSoftMat);
+    ring.rotation.x = Math.PI * 0.46;
+    ring.position.y = yy;
+    creditsGroup.add(ring);
+    creditsRings.push(ring);
+  });
+
+  const creditsCrystal = new Mesh(
+    new OctahedronGeometry(0.115, 0),
+    new MeshBasicMaterial({ color: '#fde68a' }),
+  );
+  const creditsCage = new LineSegments(
+    new WireframeGeometry(new OctahedronGeometry(0.175, 0)),
+    new LineBasicMaterial({ color: P.amber, transparent: true, opacity: 0.65 }),
+  );
+  const creditsAxis = new Mesh(
+    new CylinderGeometry(0.006, 0.006, 0.52, 8),
+    amberSoftMat,
+  );
+  creditsGroup.add(creditsCrystal, creditsCage, creditsAxis);
+
+  // Credits 独立双流道曲线（来自外围独立积分工具，绝不进入主核心）
+  const creditsCurves = [
+    new CatmullRomCurve3([
+      new Vector3(4.45, 1.48, -0.55),
+      new Vector3(3.42, 0.85, 0.08),
+      new Vector3(2.68, 0.42, 0.28),
+      creditsCenter.clone(),
+    ]),
+    new CatmullRomCurve3([
+      new Vector3(4.25, -0.45, -0.35),
+      new Vector3(3.32, -0.18, 0.12),
+      new Vector3(2.65, 0.02, 0.3),
+      creditsCenter.clone(),
+    ]),
+  ];
+  for (const cc of creditsCurves) {
+    rig.add(
+      new Mesh(
+        new TubeGeometry(cc, 28, 0.0055, 6, false),
+        new MeshBasicMaterial({
+          color: P.amber,
+          transparent: true,
+          opacity: 0.28,
+          blending: AdditiveBlending,
+        }),
+      ),
+    );
+  }
+
+  // 5. 59 条来源三维光纤流道（Catmull-Rom 样条）+ 外围 59 枚来源星点锚
+  const conduits: Conduit[] = [];
+  const lineMatExact = new LineBasicMaterial({
+    color: '#38bdf8',
+    transparent: true,
+    opacity: 0.19,
+    blending: AdditiveBlending,
+  });
+  const lineMatQuota = new LineBasicMaterial({
+    color: '#818cf8',
+    transparent: true,
+    opacity: 0.16,
+    blending: AdditiveBlending,
+  });
+
+  const tones: Conduit['tone'][] = ['cyan', 'teal', 'violet', 'cobalt'];
+  const sourcePositions: number[] = [];
+  const sourceColors: number[] = [];
+
+  for (let i = 0; i < SOURCE_COUNT; i++) {
+    const golden = i * 2.39996323;
+    const band = (i / (SOURCE_COUNT - 1)) * 2 - 1;
+    const radius = 4.15 + hash(i, 11) * 1.85;
+    const sx = Math.cos(golden) * radius * 1.12;
+    const sy = band * 2.3 + (hash(i, 23) - 0.5) * 0.42 + 0.45;
+    const sz = Math.sin(golden) * radius * 0.78 - 0.55;
+
+    const start = new Vector3(sx, sy, sz);
+    sourcePositions.push(sx, sy, sz);
+    const sc = i < 4 || i === 25 ? cEmerald : i >= USAGE_COUNT ? cViolet : cCyan;
+    sourceColors.push(sc.r, sc.g, sc.b);
+
+    const mid1 = start.clone().lerp(coreCenter, 0.38);
+    mid1.y += (hash(i, 37) - 0.42) * 0.85;
+    mid1.z += Math.cos(golden) * 0.52;
+
+    const entryAngle = (i / SOURCE_COUNT) * Math.PI * 2;
+    const mid2 = new Vector3(
+      coreCenter.x + Math.cos(entryAngle) * 1.52,
+      coreCenter.y + Math.sin(entryAngle) * 0.82,
+      coreCenter.z + Math.sin(entryAngle * 2) * 0.52,
+    );
+
+    const curve = new CatmullRomCurve3([start, mid1, mid2, coreCenter.clone()]);
+    const estimated = i === 22 || i === 24;
+    conduits.push({
+      index: i,
+      curve,
+      interval: 1.5 + hash(i, 53) * 1.4,
+      duration: 1.85 + hash(i, 71) * 0.9,
+      phase: hash(i, 97),
+      estimated,
+      tone: tones[i % tones.length],
+    });
+
+    if (i < tier.filaments) {
+      const pts = curve.getPoints(36);
+      const geo = new BufferGeometry().setFromPoints(pts);
+      rig.add(new Line(geo, i >= USAGE_COUNT ? lineMatQuota : lineMatExact));
+    }
+  }
+
+  const anchorGeo = new BufferGeometry();
+  anchorGeo.setAttribute('position', new Float32BufferAttribute(sourcePositions, 3));
+  anchorGeo.setAttribute('color', new Float32BufferAttribute(sourceColors, 3));
+  const anchorPoints = new Points(
+    anchorGeo,
+    new PointsMaterial({
+      size: 0.065,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.78,
+      blending: AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  rig.add(anchorPoints);
+
+  // 6. 实例化纤细激光脉冲（实心精确 Token 脉冲 + 半透明推算脉冲 + 琥珀色积分脉冲）
+  const packetGeo = new SphereGeometry(1, 12, 8);
+  const solidPacketMat = new MeshBasicMaterial({ color: '#ffffff' });
+  const ghostPacketMat = new MeshBasicMaterial({
+    color: P.cyan,
+    transparent: true,
+    opacity: 0.45,
+    blending: AdditiveBlending,
+    depthWrite: false,
+  });
+
+  const solidPackets = new InstancedMesh(packetGeo, solidPacketMat, PACKETS_CAP);
+  const ghostPackets = new InstancedMesh(packetGeo, ghostPacketMat, 64);
+  solidPackets.frustumCulled = false;
+  ghostPackets.frustumCulled = false;
+  rig.add(solidPackets, ghostPackets);
+
+  const toneColors: Record<Conduit['tone'], Color> = {
+    cyan: new Color('#7dd3fc'),
+    teal: new Color('#5eead4'),
+    violet: new Color('#c4b5fd'),
+    cobalt: new Color('#60a5fa'),
+  };
+  const cAmber = new Color('#fcd34d');
+  const cWhite = new Color('#ffffff');
+
+  let focusK = 0;
   let focusN = 0;
   let focusStart = 0;
   let focusEnd = -1;
-  let lastK = 0;
-  const focusPos = new Vector3();
+  let lastPicked = 0;
   let focusLive = false;
+  const focusWorld = new Vector3();
 
-  /** 选下一滴要标注的水：在空中、离落下至少还有约 1.2 秒的里面，最先落下的那一滴 */
   const pickFocus = (time: number) => {
     let best: { k: number; n: number; land: number } | null = null;
-    for (let step = 1; step <= 12; step++) {
-      const k = (lastK + step * 7) % src.count; // 跳着走，避免相邻的来源挨在一起
-      const e = emitters[k];
-      const n = Math.ceil((time + 1.2 - e.fall) / e.interval - e.phase);
-      const land = (n + e.phase) * e.interval + e.fall;
+    for (let step = 1; step <= 15; step++) {
+      const k = (lastPicked + step * 5) % SOURCE_COUNT;
+      const c = conduits[k];
+      const n = Math.ceil((time + 1.15 - c.duration) / c.interval - c.phase);
+      const land = (n + c.phase) * c.interval + c.duration;
       if (!best || land < best.land) best = { k, n, land };
     }
     focusK = best!.k;
     focusN = best!.n;
     focusEnd = best!.land;
-    focusStart = Math.max(time, focusEnd - emitters[focusK].fall);
-    lastK = focusK;
+    focusStart = Math.max(time, focusEnd - conduits[focusK].duration);
+    lastPicked = focusK;
   };
 
-  const writeDrops = (time: number) => {
+  const pt = new Vector3();
+  const tangent = new Vector3();
+  const upAxis = new Vector3(0, 1, 0);
+
+  const updateSceneAt = (time: number) => {
+    gridUniforms.uTime.value = time;
+    coreUniforms.uTime.value = time;
+    rightArcMat.uniforms.uTime.value = time;
+    leftArcMat.uniforms.uTime.value = time;
+
+    // 多层精密反相运动
+    latticeCage.rotation.y = time * 0.09;
+    latticeCage.rotation.x = -time * 0.055;
+    astrolabeGroup.rotation.z = time * 0.11;
+    astrolabeGroup.rotation.y = -time * 0.07;
+
+    arcGroup.rotation.z = Math.sin(time * 0.26) * 0.12;
+    arcGroup.rotation.y = -0.26 + Math.cos(time * 0.2) * 0.14;
+    quotaRingGroup.rotation.z = 0.15 - time * 0.16;
+    vernierGroup.rotation.z = -0.22 + time * 0.08;
+    gyroRing.rotation.z = 0.28 - time * 0.13;
+
+    creditsCrystal.rotation.y = time * 0.55;
+    creditsCage.rotation.y = -time * 0.32;
+    creditsRings.forEach((r, idx) => {
+      r.rotation.z = time * (idx === 1 ? -0.42 : 0.34);
+    });
+
+    for (let i = 0; i < barMeshes.length; i++) {
+      const h = 0.22 + 0.38 * (0.5 + 0.5 * Math.sin(time * 1.1 + i * 0.55));
+      barMeshes[i].scale.set(1, h, 1);
+      barMeshes[i].position.y = h * 0.5;
+    }
+
     let ns = 0;
     let ng = 0;
     focusLive = false;
-    for (const s of app.surfaces) s.hits.length = 0;
-    for (const e of emitters) {
-      const nMax = Math.floor(time / e.interval - e.phase);
-      const nMin = Math.ceil((time - e.fall) / e.interval - e.phase);
+
+    for (const c of conduits) {
+      const nMax = Math.floor(time / c.interval - c.phase);
+      const nMin = Math.ceil((time - c.duration) / c.interval - c.phase);
       for (let n = nMin; n <= nMax; n++) {
-        const tt = time - (n + e.phase) * e.interval;
-        if (tt < 0 || tt > e.fall) continue;
-        const decay = Math.exp(-tt / TAU);
-        const y = e.terminal ? e.y0 - V * (tt - TAU * (1 - decay)) : e.y0 - 0.5 * G * tt * tt;
-        const v = e.terminal ? V * (1 - decay) : G * tt;
-        const stretch = 1 + Math.min(1.4, v * 0.2);
-        pos.set(e.x, y, e.z);
-        scl.set(e.radius, e.radius * stretch, e.radius);
-        m4.compose(pos, q, scl);
-        const estimated = e.kind === 'source' && hash(e.index * 131 + 17, n) < src.estimated;
-        if (estimated) {
-          if (ng < CAP) ghost.setMatrixAt(ng++, m4);
-        } else if (ns < CAP) {
-          const isFocus = e.index === focusK && n === focusN;
-          if (isFocus) {
-            focusPos.copy(pos);
-            focusLive = true;
-          }
-          solid.setMatrixAt(ns, m4);
-          solid.setColorAt(ns, isFocus ? cFocus : e.kind === 'credit' ? cCredit : cDrop);
+        const u = (time - (n + c.phase) * c.interval) / c.duration;
+        if (u <= 0 || u >= 1) continue;
+        const eased = u * u * (3 - 2 * u);
+        c.curve.getPointAt(eased, pt);
+        c.curve.getTangentAt(eased, tangent);
+        tmpQ.setFromUnitVectors(upAxis, tangent.normalize());
+
+        // 纤细高速激光脉冲比例，告别粗胖胶囊感
+        const fadeScale = Math.sin(u * Math.PI);
+        const radius = 0.014 + 0.008 * fadeScale;
+        const stretch = 3.8 + 3.4 * fadeScale;
+        tmpS.set(radius, radius * stretch, radius);
+        tmpM.compose(pt, tmpQ, tmpS);
+
+        const isFocus = c.index === focusK && n === focusN;
+        if (isFocus) {
+          focusWorld.copy(pt);
+          rig.localToWorld(focusWorld);
+          focusLive = true;
+        }
+
+        if (c.estimated) {
+          if (ng < 64) ghostPackets.setMatrixAt(ng++, tmpM);
+        } else if (ns < PACKETS_CAP) {
+          solidPackets.setMatrixAt(ns, tmpM);
+          solidPackets.setColorAt(ns, isFocus ? cWhite : toneColors[c.tone]);
           ns++;
         }
       }
-      // 出水口上正在形成的一滴：随间隔慢慢长大，落下的一瞬间消失
-      if (e.hang && ns < CAP) {
-        const f = time / e.interval - e.phase;
-        const grow = Math.pow(f - Math.floor(f), 0.7);
-        const r = e.radius * (0.25 + 0.75 * grow);
-        pos.set(e.x, e.y0 + 0.02 - r, e.z);
-        scl.set(r, r * (1 + 0.25 * grow), r);
-        m4.compose(pos, q, scl);
-        solid.setMatrixAt(ns, m4);
-        solid.setColorAt(ns, cDrop);
+    }
+
+    // 独立 Credits 双通道琥珀色脉冲
+    const creditInterval = 1.45;
+    const creditDuration = 1.6;
+    for (let ci = 0; ci < creditsCurves.length; ci++) {
+      const cc = creditsCurves[ci];
+      const phase = ci * 0.48;
+      const cnMax = Math.floor(time / creditInterval - phase);
+      const cnMin = Math.ceil((time - creditDuration) / creditInterval - phase);
+      for (let n = cnMin; n <= cnMax; n++) {
+        const u = (time - (n + phase) * creditInterval) / creditDuration;
+        if (u <= 0 || u >= 1 || ns >= PACKETS_CAP) continue;
+        cc.getPointAt(u, pt);
+        cc.getTangentAt(u, tangent);
+        tmpQ.setFromUnitVectors(upAxis, tangent.normalize());
+        const fadeScale = Math.sin(u * Math.PI);
+        const r = 0.016 + 0.007 * fadeScale;
+        tmpS.set(r, r * 4.2, r);
+        tmpM.compose(pt, tmpQ, tmpS);
+        solidPackets.setMatrixAt(ns, tmpM);
+        solidPackets.setColorAt(ns, cAmber);
         ns++;
       }
-      // 涟漪：最近落下的几滴
-      const hMax = Math.floor((time - e.fall) / e.interval - e.phase);
-      const hMin = Math.ceil((time - e.fall - RIPPLE_LIFE) / e.interval - e.phase);
-      for (let n = hMin; n <= hMax; n++) {
-        const at = (n + e.phase) * e.interval + e.fall;
-        const strength = e.kind === 'source' ? 0.75 : 1;
-        e.surface.hits.push(new Vector4(e.x - e.surface.center.x, -(e.z - e.surface.center.z), at, strength));
-      }
     }
-    solid.count = ns;
-    ghost.count = ng;
-    solid.instanceMatrix.needsUpdate = true;
-    ghost.instanceMatrix.needsUpdate = true;
-    if (solid.instanceColor) solid.instanceColor.needsUpdate = true;
-    for (const s of app.surfaces) {
-      s.hits.sort((a, b) => b.z - a.z);
-      const u = s.mat.uniforms.uHits.value as Vector4[];
-      for (let i = 0; i < MAX_HITS; i++) {
-        const h = s.hits[i];
-        if (h) u[i].copy(h);
-        else u[i].set(0, 0, -99, 0);
-      }
-      s.mat.uniforms.uTime.value = time;
-    }
+
+    solidPackets.count = ns;
+    ghostPackets.count = ng;
+    solidPackets.instanceMatrix.needsUpdate = true;
+    if (solidPackets.instanceColor) solidPackets.instanceColor.needsUpdate = true;
+    ghostPackets.instanceMatrix.needsUpdate = true;
   };
 
-  /** 截至 time 为止落进受水壶的 Token（演示值） */
-  const chunk = (n: number) => spec.count.min + hash(n, 29) * spec.count.spread;
-  const landedIndex = (time: number) => Math.floor((time - toReceive.fall) / toReceive.interval - toReceive.phase);
+  /** 根据视口比例与机位放置相机：宽屏将核心置于右上方开阔舞台，给左侧标题与底部统计卡留足净空 */
+  const placeCamera = (viewMode: HeroView | 'auto', time: number, scrollP: number, px: number, py: number) => {
+    const aspect = camera.aspect;
+    const mode: HeroView =
+      viewMode === 'auto' ? (aspect < 1.02 ? 'tall' : 'wide') : viewMode;
 
-  // ------------------------------------------------------------------ 镜头
-  const view: HeroView = still?.view ?? 'wide';
-  let frame = framing(1, view);
-  let dpr = still ? 1 : Math.min(window.devicePixelRatio || 1, t.dpr);
-  let W = 1;
-  let H = 1;
+    if (mode === 'macro') {
+      camera.fov = 30;
+      camera.position.set(0.62, 0.72, 3.85);
+      rig.position.set(0.15, -0.05, 0);
+      camera.lookAt(0.15, 0.42, 0);
+    } else if (mode === 'tall') {
+      camera.fov = 44;
+      const swayX = Math.sin(time * 0.18) * 0.14 + px * 0.22;
+      const swayY = Math.cos(time * 0.15) * 0.1 - py * 0.16;
+      rig.position.set(0, 0.48 - scrollP * 0.4, 0);
+      camera.position.set(swayX, 0.92 + swayY + scrollP * 0.55, 7.6);
+      camera.lookAt(0, 0.32, 0);
+    } else {
+      camera.fov = 35;
+      const offsetX = MathUtils.clamp((aspect - 1.0) * 1.55, 0.9, 1.98);
+      rig.position.set(offsetX, 0.16 - scrollP * 0.35, 0);
+      const swayX = Math.sin(time * 0.18) * 0.18 + px * 0.32;
+      const swayY = Math.cos(time * 0.14) * 0.12 - py * 0.22;
+      camera.position.set(swayX * 0.6, 0.8 + swayY + scrollP * 0.65, 6.85 + scrollP * 0.6);
+      camera.lookAt(offsetX * 0.52, 0.28, 0);
+    }
+    camera.updateProjectionMatrix();
+  };
+
+  const scratch = new Vector3();
+  const project = (world: Vector3, margin = 48): ScreenPoint => {
+    scratch.copy(world).project(camera);
+    const w = host.clientWidth;
+    const h = host.clientHeight;
+    const x = (scratch.x * 0.5 + 0.5) * w;
+    const y = (-scratch.y * 0.5 + 0.5) * h;
+    const visible =
+      scratch.z > -1 &&
+      scratch.z < 1 &&
+      x > margin &&
+      x < w - margin &&
+      y > margin &&
+      y < h - margin;
+    return { x, y, visible };
+  };
+
+  // 静帧母版渲染分支（design/tools/stills.mjs）
+  if (still) {
+    renderer.setPixelRatio(1);
+    renderer.setSize(still.width, still.height, false);
+    camera.aspect = still.width / still.height;
+    pickFocus(still.time);
+    updateSceneAt(still.time);
+    placeCamera(still.view, still.time, 0, 0, 0);
+    renderer.render(scene, camera);
+    return {
+      draw: () => renderer.render(scene, camera),
+      dispose: () => {
+        renderer.dispose();
+      },
+    };
+  }
+
+  // 实时交互模式
   const resize = () => {
-    W = still ? still.width : host.clientWidth;
-    H = still ? still.height : host.clientHeight;
+    const w = Math.max(1, host.clientWidth);
+    const h = Math.max(1, host.clientHeight);
     renderer.setPixelRatio(dpr);
-    renderer.setSize(W, H, false);
-    camera.aspect = W / H;
-    frame = framing(camera.aspect, view);
-    camera.fov = frame.fov;
-    if (frame.shiftX || frame.shiftY) camera.setViewOffset(W, H, W * frame.shiftX, H * frame.shiftY, W, H);
-    else camera.clearViewOffset();
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
   };
   resize();
-
-  const camPos = new Vector3();
-  const placeCamera = (time: number, scroll: number, px: number, py: number) => {
-    const p = MathUtils.smootherstep(Math.min(scroll, 1), 0, 1);
-    const el = MathUtils.degToRad(frame.elevation + py * 2 + p * 8);
-    const az = MathUtils.degToRad(frame.azimuth + Math.sin(time * 0.05) * 3 + px * 3);
-    const dist = frame.distance * MathUtils.lerp(1, 0.78, p);
-    const target = frame.target.clone().lerp(app.pointerTip, p * 0.5);
-    camPos.set(dist * Math.cos(el) * Math.sin(az), dist * Math.sin(el), dist * Math.cos(el) * Math.cos(az)).add(target);
-    camera.position.copy(camPos);
-    camera.lookAt(target);
-  };
-
-  const project = (v: Vector3, pad = 0): ScreenPoint => {
-    const p = v.clone().project(camera);
-    const x = (p.x * 0.5 + 0.5) * W;
-    const y = (-p.y * 0.5 + 0.5) * H;
-    return { x, y, visible: p.z < 1 && x > pad && x < W - pad && y > pad && y < H - pad };
-  };
-
-  if (still) {
-    // 刻度用的是页面字体；等字体就绪再画一次纹理
-    placeCamera(still.time, 0, 0, 0);
-    writeDrops(still.time);
-    const draw = () => renderer.render(scene, camera);
-    draw();
-    return { draw, dispose: () => renderer.dispose() };
-  }
-
   const ro = new ResizeObserver(resize);
   ro.observe(host);
 
-  // 指针：只做极轻的视差
   let px = 0;
   let py = 0;
   let tx = 0;
   let ty = 0;
   const onMove = (e: PointerEvent) => {
     if (e.pointerType === 'touch') return;
-    tx = (e.clientX / window.innerWidth) * 2 - 1;
-    ty = (e.clientY / window.innerHeight) * 2 - 1;
+    tx = (e.clientX / Math.max(1, window.innerWidth)) * 2 - 1;
+    ty = (e.clientY / Math.max(1, window.innerHeight)) * 2 - 1;
   };
   window.addEventListener('pointermove', onMove, { passive: true });
 
@@ -638,97 +774,98 @@ export function startHero(opts: HeroOptions) {
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
 
-  let running = true;
-  let visible = true;
+  let visible = document.visibilityState === 'visible';
   const onVisibility = () => {
     visible = document.visibilityState === 'visible';
   };
   document.addEventListener('visibilitychange', onVisibility);
 
-  // 字体加载后重画刻度（汉字序数）
-  document.fonts?.ready.then(() => {
-    const fresh = rodTexture();
-    app.rodTex.image = fresh.image;
-    app.rodTex.needsUpdate = true;
-  });
-
+  let running = true;
   const t0 = performance.now();
-  // 从一个已经「流起来」的时刻开始，避免首帧空无一滴
-  const OFFSET = 30;
+  const OFFSET = 41.3;
   let prev = t0;
-  let landed = landedIndex(OFFSET);
-  let counted = 0;
-  let shown = 0;
+  let baseTokens = 18_420_600;
+  let shownTokens = baseTokens;
   let ready = false;
-  const samples: number[] = [];
+  const frameSamples: number[] = [];
   let degraded = false;
+
+  const coreReadingAnchor = new Vector3();
+  const creditsAnchor = new Vector3();
 
   const tick = (now: number) => {
     if (!running) return;
     requestAnimationFrame(tick);
-    if (!visible || scrollP >= 1.05) {
+    if (!visible || scrollP >= 0.85) {
       prev = now;
       return;
     }
-    // 软件光栅限到 30 帧，把 CPU 留给页面本身
-    if (t.fps < 60 && now - prev < 1000 / t.fps - 2) return;
+    if (tier.fps < 60 && now - prev < 1000 / tier.fps - 2) return;
+
     const dt = Math.min(0.05, (now - prev) / 1000);
     prev = now;
     const time = OFFSET + (now - t0) / 1000;
 
-    // 自适应：前 90 帧平均超过 26ms 就降分辨率、关掉软阴影
-    if (!degraded && samples.length < 90) {
-      samples.push(dt);
-      if (samples.length === 90) {
-        const avg = samples.slice(20).reduce((a, b) => a + b, 0) / 70;
-        if (avg > 0.026) {
+    if (!degraded && frameSamples.length < 80) {
+      frameSamples.push(dt);
+      if (frameSamples.length === 80) {
+        const avg = frameSamples.slice(16).reduce((a, b) => a + b, 0) / 64;
+        if (avg > 0.028 && dpr > 1) {
           degraded = true;
           dpr = 1;
-          key.shadow.radius = 1;
           resize();
         }
       }
     }
 
-    px = MathUtils.damp(px, tx, 2, dt);
-    py = MathUtils.damp(py, ty, 2, dt);
-    placeCamera(time, scrollP, px, py);
+    px = MathUtils.damp(px, tx, 2.4, dt);
+    py = MathUtils.damp(py, ty, 2.4, dt);
 
     if (time > focusEnd) pickFocus(time);
-    writeDrops(time);
+    updateSceneAt(time);
+    placeCamera('auto', time, scrollP, px, py);
 
-    const li = landedIndex(time);
-    while (landed < li) counted += chunk(++landed);
-    shown = MathUtils.damp(shown, counted, 7, dt);
-    // 浮箭随读数上升：刻度向上走过指针
-    app.rodTex.offset.y = -(shown / (spec.rod.tokensPerMark * spec.rod.marks));
+    baseTokens += dt * 1480;
+    shownTokens = MathUtils.damp(shownTokens, baseTokens, 6, dt);
 
     renderer.render(scene, camera);
 
-    opts.onCount?.(shown);
-    const calm = scrollP < 0.2;
+    opts.onCount?.(shownTokens);
+
+    const calm = scrollP < 0.28;
     if (opts.onFocus) {
-      const fp = project(focusPos, 90);
+      const fp = project(focusWorld, 80);
       const age = time - focusStart;
-      opts.onFocus({ index: focusK, x: fp.x, y: fp.y, visible: calm && focusLive && fp.visible && age > 0.2 && focusEnd - time > 0.15 });
+      opts.onFocus({
+        index: focusK,
+        x: fp.x,
+        y: fp.y,
+        visible: calm && focusLive && fp.visible && age > 0.18 && focusEnd - time > 0.15,
+      });
     }
     if (opts.onReading) {
-      const rp = project(app.pointerTip, 40);
+      coreReadingAnchor.set(coreCenter.x + 1.46, coreCenter.y + 0.86, coreCenter.z);
+      rig.localToWorld(coreReadingAnchor);
+      const rp = project(coreReadingAnchor, 44);
       opts.onReading({ ...rp, visible: rp.visible && calm });
     }
     if (opts.onCredits) {
-      const cp = project(app.creditsSurface.center.clone().add(new Vector3(0, 0.05, 0)), 60);
+      creditsAnchor.copy(creditsCenter).add(new Vector3(0.28, -0.02, 0));
+      rig.localToWorld(creditsAnchor);
+      const cp = project(creditsAnchor, 56);
       opts.onCredits({ ...cp, visible: cp.visible && calm });
     }
+
     if (!ready) {
       ready = true;
       opts.onReady?.();
     }
   };
+
   requestAnimationFrame(tick);
 
   return {
-    draw: () => {},
+    draw: () => renderer.render(scene, camera),
     dispose: () => {
       running = false;
       ro.disconnect();

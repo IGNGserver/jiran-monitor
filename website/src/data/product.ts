@@ -1,7 +1,7 @@
 /**
  * 站点引用的产品事实。唯一来源是产品仓库，不在这里推断或补写能力：
  *   https://github.com/IGNGserver/jiran-monitor  （README.md / README.zh-CN.md、docs/supported-tools.md、docs/privacy.md）
- * 核对基线：main @ 8d7e29f（2026-10-25）。产品文档变化时同步更新本文件，并重跑 `pnpm test`
+ * 核对基线：main @ e227a1e2（v1.7.2）。产品文档变化时同步更新本文件，并重跑 `pnpm test`
  * （tests/facts.spec.ts 会校验计数与矩阵行数一致）。
  */
 
@@ -19,6 +19,8 @@ export const DOCS = {
   api: `${REPO_URL}/blob/main/docs/API.md`,
   signing: `${REPO_URL}/blob/main/docs/code-signing.md`,
   wsl: `${REPO_URL}/blob/main/docs/wsl-sqlite-setup.md`,
+  updates: `${REPO_URL}/blob/main/docs/DEVICE_UPDATES.md`,
+  pwa: `${REPO_URL}/blob/main/docs/browser-pwa.md`,
   license: `${REPO_URL}/blob/main/LICENSE`,
   tokscale: 'https://github.com/junhoyeo/tokscale',
 };

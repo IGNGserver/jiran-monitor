@@ -4,15 +4,14 @@
 
 ## 是什么
 
-计然 / Jiran 的产品官网：介绍产品、展示截图、提供下载入口与文档链接，并作为搜索引擎与
-AI 工具的可引用入口。站点源码位于产品仓库的 `website/`：
+计然 / Jiran 的产品官网：通过可交互的真实产品工作台展示核心能力、提供全平台下载入口与自建 Hub 指引，并作为搜索引擎与开发者的可信事实入口。站点源码位于产品仓库的 `website/`：
 
 | 事项 | 归属 |
 | --- | --- |
 | 产品功能、版本、发布资产、产品文档 | 产品仓库 `IGNGserver/jiran-monitor`（`website/` 之外） |
-| 页面、样式、静态资源、SEO、站点文案 | `IGNGserver/jiran-monitor/website/` |
+| 页面、交互工作台演示、三维场景、静态资源、SEO、站点文案 | `IGNGserver/jiran-monitor/website/` |
 
-## 当前状态（2026-10-25）
+## 当前状态
 
 - 中文首页 `/`、英文首页 `/en/`、`404`；纯静态输出；
 - 已部署到 Cloudflare Pages，正式地址 `https://jiran.igng.net/`；
@@ -23,23 +22,18 @@ AI 工具的可引用入口。站点源码位于产品仓库的 `website/`：
 
 | 事项 | 结论 |
 | --- | --- |
-| 技术栈 | Astro 7 静态输出 + TypeScript；首屏 three.js（懒加载）；pnpm；字体自托管 |
-| 页面结构 | 单页长卷：首屏 + 七章（名 / 问 / 则 / 汇 / 界 / 源 / 取），章节锚点 `#name` `#questions` `#rules` `#flow` `#privacy` `#sources` `#install` |
+| 技术栈 | Astro 7 静态输出 + TypeScript；首屏 Three.js WebGL2 + 自定义 GLSL（空闲按需懒加载）；pnpm；可变字体自托管 |
+| 叙事重心 | **产品本身是绝对主角**：首屏后紧接 1:1 复刻 `src/shared-ui` 结构的交互式产品工作台（`#workbench`），访问者可直接切换总览、模型工作台对比、订阅额度、WSL 设备与管理对账 |
+| 页面结构 | 首屏（`#top`）+ 七章：交互工作台（`#workbench`）、核心能力（`#capabilities`）、四端架构（`#architecture`）、计量准则（`#principles`）、隐私边界（`#privacy`）、59 支持源矩阵（`#sources`）、下载与自建 Hub（`#install`） |
 | 语言 | 简体中文为默认（`/`），英文 `/en/`；两份文案在 `src/i18n/content.ts`，测试保证结构一致；`hreflang` 互指 |
-| 视觉方向 | 「刻漏」（2026-10-15 取代「算仪」）：宣纸底、墨字、青瓷器物与水，朱砂只作印；主标语「点滴有数」；标识沿用产品图标的开口刻度环几何。详见 `design/DESIGN.md` |
-| 下载入口 | 构建时读取最新的非 prerelease 发布并烘焙直链；浏览器端再向 GitHub 刷新一次；失败退回 Releases 页面。`findStableRelease()` 分页查找，正式版不会被大量 prerelease 挤出第一页 |
+| 视觉方向 | **计算遥测美学（Computational Telemetry）**：与计然应用图标（`assets/icon.png`）及 Fluent 2 暗色工作台一脉相承的黑曜深空底色（`#060a14`）、电光青至钴蓝信号色（`#38bdf8` → `#0a84ff`）、高对比等宽遥测读数。详见 `design/DESIGN.md` |
+| 下载入口 | 构建时读取最新非 prerelease 正式版烘焙直链；浏览器端在 `load` 后空闲时向 GitHub 刷新一次；失败退回烘焙值或 Releases 页 |
 | Linux 安装 | 直接下载 GitHub Releases 的 `.deb` / AppImage；不再维护 APT 仓库 |
-| 隐私 | 无统计脚本、无 Cookie；唯一外部请求是 GitHub API（读版本号） |
-
-## 待办 / 已知问题
-
-- [ ] 产品真实界面截图：产品仓库目前只有 Fluent 2 概念图，没有发布版界面截图，站点暂以示意仪表代替；
-- [ ] 站点事实（`src/data/product.ts`）目前靠人工核对；后续可加产品仓库导出的 facts 文件或定时漂移检查；
-- [ ] 如需让新功能在站面上出现，优先补一个由 GitHub Releases 生成的 `/releases/` 页面，而不是反复重写营销长页。
+| 隐私 | 无统计脚本、无 Cookie、无第三方字体 CDN；唯一外部请求是读取 GitHub Releases 最新正式版标签 |
 
 ## 内容原则
 
-- 只陈述产品仓库当前支持的事实，不编造路线图；版本与平台矩阵以产品仓库 `README.md` / `docs/supported-tools.md` 为准；
-- 下载链接指向产品仓库的 Releases，不在本仓库托管安装包；
-- 品牌名遵循产品仓库规范：zh 显示“计然”，en/ja/ko 显示“Jiran”；
-- 版本标签区分「正式版」与开发版：页面显示最新非 prerelease；开发版通过 Releases 链接查看。
+- 只陈述产品仓库当前支持的事实，不编造路线图；支持矩阵与计数以 `README.md` / `docs/supported-tools.md` 为准；
+- 下载链接只由仓库常量与校验过的安全段构造，不在站点仓库托管二进制安装包；
+- 品牌名遵循产品规范：`zh` 显示「计然」，`en` 显示「Jiran」；
+- 交互工作台明确标注「交互式实机演示 · 模拟车队数据」，且严格遵守产品自身的五条计量诚实准则。
