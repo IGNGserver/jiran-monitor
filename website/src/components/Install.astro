@@ -1,334 +1,443 @@
 ---
 import SectionHead from './SectionHead.astro';
 import { CONTENT, type Lang } from '../i18n/content';
-import { DOCS, HUB_SNIPPET, RELEASES_URL, type AssetKey } from '../data/product';
+import { DOCS, HUB_SNIPPET, RELEASES_URL } from '../data/product';
 import type { ReleaseInfo } from '../data/release';
+
 interface Props { lang: Lang; release: ReleaseInfo | null }
 const { lang, release } = Astro.props;
 const t = CONTENT[lang].install;
 
-/** 没取到发布信息时显示的文件名模板（与产品 README 的 Install 表一致）。 */
-const PATTERN: Record<AssetKey, string> = {
-  macArm: 'Jiran-<version>-arm64.dmg',
-  macIntel: 'Jiran-<version>-x64.dmg',
-  winSetup: 'Jiran-Setup-<version>.exe',
-  winPortable: 'Jiran-<version>.exe',
-  appImage: 'Jiran-<version>.AppImage',
-  deb: 'Jiran-<version>.deb',
-  android: 'Jiran-Android-<version>.apk',
-  headless: 'Jiran-Headless-<version>.tar.gz',
-  hubCompose: 'Jiran-Hub-Compose-<version>.zip',
-};
-const mb = (n: number) => `${(n / 1048576).toFixed(n > 10485760 ? 0 : 1)} MB`;
+const platformOrder = ['mac', 'win', 'linux', 'android', 'server'] as const;
+const fmtSize = (bytes?: number) =>
+  bytes ? `${(bytes / 1048576).toFixed(bytes > 1048576 * 10 ? 0 : 1)} MB` : '';
 ---
 
-<section class="section install" id="install" aria-labelledby="install-title">
+<section class="section" id="install" aria-labelledby="inst-title">
   <div class="wrap">
-    <SectionHead index={7} id="install" kicker={t.kicker} title={t.title} intro={t.intro} />
+    <SectionHead id="inst-title" index={t.index} title={t.title} lead={t.lead} />
 
-    <div class="dl reveal" data-dl>
-      <div class="dl__head">
-        <p class="dl__release">
-          <span class="note">{t.latest}</span>
-          <a class="mono dl__tag" href={release?.url ?? RELEASES_URL} rel="noopener" data-release-url>
-            <span data-release-tag>{release?.tag ?? 'GitHub Releases'}</span> ↗
-          </a>
-          {release && (
-            <span class="note">{t.published} <time datetime={release.publishedAt} data-release-date>{release.publishedAt.slice(0, 10)}</time></span>
-          )}
-        </p>
-        <p class="note dl__detected" data-dl-detected hidden>{t.detected}</p>
-      </div>
+    <div class="inst-meta mono reveal">
+      <span>
+        {t.currentRelease}:{' '}
+        <a href={release?.url ?? RELEASES_URL} data-release-url rel="noopener">
+          <strong data-release-tag>{release?.tag ?? 'latest'}</strong>
+        </a>
+        {release?.publishedAt && (
+          <>
+            {' · '}
+            <time datetime={release.publishedAt} data-release-date>{release.publishedAt.slice(0, 10)}</time>
+          </>
+        )}
+      </span>
+      <span class="inst-meta__links">
+        <a href={RELEASES_URL} rel="noopener">{t.allReleases} ↗</a>
+        <span>·</span>
+        <a href={DOCS.signing} rel="noopener">{t.signingLink}</a>
+        <span>·</span>
+        <a href={DOCS.updates} rel="noopener">{t.updatesLink}</a>
+      </span>
+    </div>
 
-      <div class="dl__tabs" role="tablist" aria-label={t.title}>
-        {t.platforms.map((p, i) => (
-          <button type="button" role="tab" id={`dl-tab-${p.id}`} aria-controls={`dl-panel-${p.id}`} aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-platform={p.id}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-
-      {t.platforms.map((p, i) => (
-        <div class="dl__panel" role="tabpanel" id={`dl-panel-${p.id}`} aria-labelledby={`dl-tab-${p.id}`} hidden={i !== 0} data-panel={p.id}>
-          <p class="dl__req">{p.req}</p>
-          <ul class="dl__assets">
-            {p.assets.map(([key, label]) => {
-              const a = release?.assets[key as AssetKey];
-              return (
-                <li>
-                  <a class="dl__asset" href={a?.url ?? RELEASES_URL} rel="noopener" data-asset={key}>
-                    <span class="dl__asset-label">{label}</span>
-                    <span class="mono dl__asset-name" data-asset-name>{a?.name ?? PATTERN[key as AssetKey]}</span>
-                    <span class="mono dl__asset-size" data-asset-size>{a ? mb(a.size) : ''}</span>
-                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v9m0 0L4.5 7.5M8 11l3.5-3.5M3 14h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
+    <div class="inst-grid reveal">
+      <!-- 左栏：五平台安装包标签页 -->
+      <div class="inst-downloads glass-card" data-dl>
+        <div class="inst-tabs" role="tablist" aria-label={lang === 'zh' ? '选择操作系统' : 'Choose platform'}>
+          {platformOrder.map((key, idx) => (
+            <button
+              type="button"
+              role="tab"
+              id={`tab-${key}`}
+              class="inst-tab mono"
+              data-platform={key}
+              aria-selected={idx === 0 ? 'true' : 'false'}
+              aria-controls={`panel-${key}`}
+              tabindex={idx === 0 ? 0 : -1}
+            >
+              {t.platforms[key].label}
+            </button>
+          ))}
         </div>
-      ))}
 
-      <a class="dl__all" href={RELEASES_URL} rel="noopener">{t.fallback} ↗</a>
+        {platformOrder.map((key, idx) => {
+          const p = t.platforms[key];
+          return (
+            <div
+              role="tabpanel"
+              id={`panel-${key}`}
+              aria-labelledby={`tab-${key}`}
+              class="inst-panel"
+              data-panel={key}
+              hidden={idx !== 0}
+            >
+              <p class="inst-panel__badge mono">{p.badge}</p>
+              <div class="inst-assets">
+                {p.items.map((item) => {
+                  const asset = release?.assets[item.asset];
+                  return (
+                    <a
+                      class="inst-asset"
+                      href={asset?.url ?? RELEASES_URL}
+                      data-asset={item.asset}
+                      aria-disabled={asset ? undefined : 'true'}
+                      rel="noopener"
+                    >
+                      <div class="inst-asset__info">
+                        <strong class="inst-asset__title">{item.title}</strong>
+                        <span class="inst-asset__sub">{item.sub}</span>
+                        <span class="inst-asset__file mono" data-asset-name>{asset?.name ?? 'GitHub Releases'}</span>
+                      </div>
+                      <div class="inst-asset__right mono">
+                        <span class="inst-asset__size" data-asset-size>{fmtSize(asset?.size)}</span>
+                        <span class="inst-asset__dl" aria-hidden="true">↓</span>
+                      </div>
+                    </a>
+                  );
+                })}
+              </div>
+              <p class="inst-panel__note">{p.note}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <!-- 右栏：自建 Docker Compose Hub 快速启动 -->
+      <div class="inst-hub glass-card">
+        <div class="inst-hub__head">
+          <h3 class="inst-hub__title">{t.hubBoxTitle}</h3>
+          <button
+            type="button"
+            class="inst-copy mono"
+            data-copy-btn
+            data-label-copy={t.copyBtn}
+            data-label-copied={t.copiedBtn}
+          >
+            {t.copyBtn}
+          </button>
+        </div>
+        <pre class="inst-code mono"><code data-copy-src>{HUB_SNIPPET}</code></pre>
+        <ul class="inst-hub__specs mono" aria-label={lang === 'zh' ? 'Hub 规格参数' : 'Hub specifications'}>
+          <li><span>BIND</span><strong>127.0.0.1:17321</strong></li>
+          <li><span>STORE</span><strong>MySQL 8.4</strong></li>
+          <li><span>VAULT</span><strong>AES-256-GCM</strong></li>
+          <li><span>STREAM</span><strong>Slim SSE · PWA</strong></li>
+        </ul>
+        <p class="inst-hub__doc mono">
+          <a href={DOCS.hub} rel="noopener">{t.hubDocLink}</a>
+        </p>
+      </div>
     </div>
 
-    <div class="hub reveal">
-      <div class="hub__text">
-        <h3>{t.hubTitle}</h3>
-        <p>{t.hubBody}</p>
-        <a href={DOCS.hub} rel="noopener">{t.hubGuide} ↗</a>
-      </div>
-      <div class="code">
-        <button type="button" class="code__copy mono" data-copy data-label={t.copy} data-done={t.copied}>{t.copy}</button>
-        <pre><code>{HUB_SNIPPET}</code></pre>
-      </div>
-    </div>
-
-    <p class="install__tested note reveal">{t.tested}</p>
+    <p class="inst-verified reveal">{t.verified}</p>
   </div>
 </section>
 
 <style>
-  .dl {
-    margin-top: clamp(48px, 6vw, 80px);
-    border: 1px solid var(--line-2);
-    background: var(--bg-2);
-  }
-  .dl__head {
+  .inst-meta {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     justify-content: space-between;
-    align-items: baseline;
-    gap: 10px 24px;
-    padding: 22px 26px;
-    border-bottom: 1px solid var(--line);
-  }
-  .dl__release {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px 16px;
-  }
-  .dl__tag {
-    font-size: 1.35rem;
-    text-decoration: none;
-  }
-  .dl__detected {
-    color: var(--celadon);
-  }
-  .dl__tabs {
-    display: flex;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--line);
-    scrollbar-width: none;
-  }
-  .dl__tabs button {
-    flex: none;
-    padding: 16px 24px;
-    border: 0;
-    border-right: 1px solid var(--line);
-    background: none;
-    font-size: 0.9375rem;
+    gap: 10px 20px;
+    padding: 12px 18px;
+    border-radius: 10px;
+    background: rgb(11 18 34 / 0.68);
+    border: 1px solid var(--line);
+    font-size: 0.76rem;
     color: var(--fg-dim);
-    cursor: pointer;
-    position: relative;
-    transition: color 0.25s, background 0.25s;
-  }
-  .dl__tabs button:hover {
-    color: var(--fg);
-  }
-  .dl__tabs button[aria-selected='true'] {
-    color: var(--fg);
-    background: var(--bg-3);
-  }
-  .dl__tabs button[aria-selected='true']::after {
-    content: '';
-    position: absolute;
-    inset: auto 0 -1px;
-    height: 2px;
-    background: var(--cinnabar);
-  }
-  .dl__panel {
-    padding: 26px;
-  }
-  .dl__req {
-    color: var(--fg-dim);
-    font-size: 0.9375rem;
     margin-bottom: 18px;
   }
-  .dl__assets {
+
+  .inst-meta strong {
+    color: var(--cyan);
+  }
+
+  .inst-meta__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .inst-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 18px;
+    align-items: stretch;
+  }
+
+  @media (max-width: 980px) {
+    .inst-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .inst-downloads,
+  .inst-hub {
+    padding: clamp(20px, 2.5vw, 28px);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .inst-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .inst-tab {
+    padding: 7px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: rgb(6 10 20 / 0.65);
+    color: var(--fg-dim);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: border-color 0.18s, color 0.18s, background 0.18s;
+  }
+
+  .inst-tab:hover {
+    color: var(--fg);
+    border-color: var(--line-2);
+  }
+
+  .inst-tab[aria-selected='true'] {
+    border-color: var(--cyan);
+    background: rgb(56 189 248 / 0.15);
+    color: #e0f2fe;
+    font-weight: 650;
+  }
+
+  .inst-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+  }
+
+  .inst-panel__badge {
+    font-size: 0.71rem;
+    letter-spacing: 0.06em;
+    color: var(--emerald);
+  }
+
+  .inst-assets {
+    display: flex;
+    flex-direction: column;
     gap: 10px;
   }
-  .dl__asset {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-rows: auto auto;
-    gap: 4px 16px;
-    align-items: center;
-    padding: 18px 20px;
-    border: 1px solid var(--line);
+
+  .inst-asset {
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--line-2);
+    background: rgb(6 10 20 / 0.72);
     text-decoration: none;
-    transition: border-color 0.25s, background 0.25s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    transition: border-color 0.2s, background 0.2s, transform 0.2s var(--ease-out);
   }
-  .dl__asset:hover {
-    border-color: var(--fg);
-    background: var(--bg-3);
+
+  .inst-asset:hover {
+    color: var(--fg);
+    border-color: var(--cyan);
+    background: rgb(14 25 48 / 0.9);
+    transform: translateY(-1px);
   }
-  .dl__asset-label {
-    font-size: 1.0625rem;
+
+  .inst-asset__info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
   }
-  .dl__asset-name {
-    grid-row: 2;
-    font-size: 0.75rem;
-    color: var(--fg-faint);
-    overflow-wrap: anywhere;
+
+  .inst-asset__title {
+    font-size: 0.94rem;
+    color: var(--fg);
   }
-  .dl__asset-size {
-    grid-column: 2;
-    grid-row: 2;
-    font-size: 0.75rem;
-    color: var(--fg-faint);
-    text-align: right;
-  }
-  .dl__asset svg {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    width: 16px;
-    height: 16px;
-    color: var(--cinnabar);
-  }
-  .dl__all {
-    display: block;
-    padding: 16px 26px;
-    border-top: 1px solid var(--line);
-    font-size: var(--t-small);
+
+  .inst-asset__sub {
+    font-size: 0.8rem;
     color: var(--fg-dim);
   }
 
-  .hub {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-    gap: clamp(28px, 4vw, 64px);
-    margin-top: clamp(56px, 7vw, 96px);
-    align-items: start;
+  .inst-asset__file {
+    font-size: 0.71rem;
+    color: var(--cyan);
+    overflow-wrap: anywhere;
   }
-  .hub__text h3 {
-    font-family: var(--f-display);
-    font-weight: 400;
-    font-size: var(--t-h3);
-    margin-bottom: 12px;
-  }
-  :lang(zh) .hub__text h3 {
-    font-weight: 600;
-  }
-  .hub__text p {
+
+  .inst-asset__right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    font-size: 0.75rem;
     color: var(--fg-dim);
-    margin-bottom: 16px;
   }
-  .hub__text a {
-    font-size: var(--t-small);
+
+  .inst-asset__dl {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(56 189 248 / 0.14);
+    color: var(--cyan);
+    font-weight: 700;
   }
-  .code {
-    position: relative;
-    border: 1px solid var(--line);
-    background: var(--bg-2);
+
+  .inst-panel__note {
+    margin-top: auto;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: var(--fg-faint);
   }
-  .code pre {
-    margin: 0;
-    padding: 22px 24px;
-    overflow-x: auto;
-    font-family: var(--f-mono);
-    font-size: 0.8125rem;
-    line-height: 1.8;
-    color: var(--fg);
+
+  .inst-hub__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
-  .code__copy {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    padding: 5px 10px;
+
+  .inst-hub__title {
+    font-size: 1.05rem;
+    font-weight: 660;
+  }
+
+  .inst-copy {
+    padding: 5px 11px;
+    border-radius: 6px;
     border: 1px solid var(--line-2);
-    border-radius: 999px;
-    background: var(--bg);
-    font-size: 0.6875rem;
-    letter-spacing: 0.08em;
-    color: var(--fg-dim);
+    background: rgb(6 10 20 / 0.78);
+    color: #e2e8f0;
+    font-size: 0.72rem;
     cursor: pointer;
   }
-  .code__copy:hover {
-    color: var(--fg);
-    border-color: var(--fg);
+
+  .inst-copy:hover {
+    border-color: var(--cyan);
+    color: #ffffff;
   }
-  .install__tested {
-    margin-top: clamp(40px, 5vw, 64px);
-    max-width: 70em;
-    text-transform: none;
-    letter-spacing: 0.02em;
-    line-height: 1.7;
+
+  .inst-code {
+    margin: 0;
+    padding: 16px;
+    border-radius: 10px;
+    background: #04070f;
+    border: 1px solid var(--line);
+    font-size: 0.78rem;
+    line-height: 1.72;
+    color: #bae6fd;
+    overflow-x: auto;
   }
-  @media (max-width: 560px) {
-    .dl__tabs {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-    }
-    .dl__tabs button {
-      padding: 14px 8px;
-      border-bottom: 1px solid var(--line);
-    }
-    .dl__head,
-    .dl__panel {
-      padding: 20px 18px;
-    }
+
+  .inst-hub__specs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: auto;
   }
-  @media (max-width: 860px) {
-    .hub {
-      grid-template-columns: minmax(0, 1fr);
-    }
+
+  .inst-hub__specs li {
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: rgb(6 10 20 / 0.68);
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .inst-hub__specs span {
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    color: var(--fg-faint);
+  }
+
+  .inst-hub__specs strong {
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  .inst-hub__doc {
+    font-size: 0.76rem;
+  }
+
+  .inst-hub__doc a {
+    color: var(--cyan);
+  }
+
+  .inst-verified {
+    margin-top: 18px;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: var(--fg-faint);
   }
 </style>
 
 <script>
-  import { detectPlatform } from '../scripts/release';
+  const dlBox = document.querySelector<HTMLElement>('[data-dl]');
+  if (dlBox) {
+    const tabs = [...dlBox.querySelectorAll<HTMLButtonElement>('[data-platform]')];
+    const panels = [...dlBox.querySelectorAll<HTMLElement>('[data-panel]')];
 
-  const root = document.querySelector<HTMLElement>('[data-dl]');
-  if (root) {
-    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-platform]')];
-    const select = (id: string, focus = false) => {
-      tabs.forEach((b) => {
-        const on = b.dataset.platform === id;
-        b.setAttribute('aria-selected', String(on));
-        b.tabIndex = on ? 0 : -1;
-        if (on && focus) b.focus();
-      });
-      root.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== id));
+    const activate = (platform: string, moveFocus = false) => {
+      const targetTab = tabs.find((t) => t.dataset.platform === platform);
+      if (!targetTab) return;
+      for (const tab of tabs) {
+        const on = tab === targetTab;
+        tab.setAttribute('aria-selected', String(on));
+        tab.tabIndex = on ? 0 : -1;
+        if (on && moveFocus) tab.focus();
+      }
+      for (const panel of panels) {
+        panel.hidden = panel.dataset.panel !== platform;
+      }
     };
-    tabs.forEach((b, i) => {
-      b.addEventListener('click', () => select(b.dataset.platform!));
-      b.addEventListener('keydown', (e) => {
-        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-        if (d) select(tabs[(i + d + tabs.length) % tabs.length].dataset.platform!, true);
+
+    tabs.forEach((tab, idx) => {
+      tab.addEventListener('click', () => activate(tab.dataset.platform!));
+      tab.addEventListener('keydown', (e) => {
+        let next = -1;
+        if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = tabs.length - 1;
+        if (next >= 0) {
+          e.preventDefault();
+          activate(tabs[next].dataset.platform!, true);
+        }
       });
     });
-    const platform = detectPlatform();
-    if (platform) {
-      select(platform);
-      root.querySelector<HTMLElement>('[data-dl-detected]')!.hidden = false;
-    }
+
+    document.addEventListener('jiran:platform', (e) => {
+      const p = (e as CustomEvent<string>).detail;
+      if (p) activate(p);
+    });
   }
 
-  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const code = btn.parentElement?.querySelector('code')?.textContent ?? '';
+  const copyBtn = document.querySelector<HTMLButtonElement>('[data-copy-btn]');
+  const copySrc = document.querySelector<HTMLElement>('[data-copy-src]');
+  if (copyBtn && copySrc) {
+    copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(code);
-        btn.textContent = btn.dataset.done!;
-        setTimeout(() => (btn.textContent = btn.dataset.label!), 1600);
+        await navigator.clipboard.writeText(copySrc.textContent ?? '');
+        copyBtn.textContent = copyBtn.dataset.labelCopied ?? 'Copied';
+        setTimeout(() => {
+          copyBtn.textContent = copyBtn.dataset.labelCopy ?? 'Copy';
+        }, 1800);
       } catch {
-        /* 剪贴板不可用时保持原样 */
+        /* ignore clipboard restrictions */
       }
     });
-  });
+  }
 </script>

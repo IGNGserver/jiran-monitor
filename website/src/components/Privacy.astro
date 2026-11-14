@@ -2,148 +2,161 @@
 import SectionHead from './SectionHead.astro';
 import { CONTENT, type Lang } from '../i18n/content';
 import { DOCS } from '../data/product';
+
 interface Props { lang: Lang }
 const { lang } = Astro.props;
 const t = CONTENT[lang].privacy;
 ---
 
-<section class="section privacy" id="privacy" aria-labelledby="privacy-title">
+<section class="section" id="privacy" aria-labelledby="priv-title">
   <div class="wrap">
-    <SectionHead index={5} id="privacy" kicker={t.kicker} title={t.title} intro={t.intro} />
+    <SectionHead id="priv-title" index={t.index} title={t.title} lead={t.lead} />
 
-    <div class="membrane">
-      <div class="membrane__side membrane__stays reveal">
-        <h3 class="note">{t.staysTitle}</h3>
-        <ul>
-          {t.stays.map((x) => <li><span class="membrane__lock" aria-hidden="true"></span>{x}</li>)}
+    <div class="priv-grid">
+      <div class="priv-col priv-col--local glass-card reveal">
+        <div class="priv-col__head">
+          <span class="priv-badge priv-badge--emerald mono">{t.staySub}</span>
+          <h3>{t.stayTitle}</h3>
+        </div>
+        <ul class="priv-items">
+          {t.stay.map((item) => (
+            <li>
+              <strong>{item.k}</strong>
+              <p>{item.d}</p>
+            </li>
+          ))}
         </ul>
       </div>
-      <div class="membrane__wall" aria-hidden="true">
-        <span class="membrane__label mono">{t.boundary}</span>
-      </div>
-      <div class="membrane__side membrane__crosses reveal" style="--d:.12s">
-        <h3 class="note">{t.crossesTitle}</h3>
-        <ul>
-          {t.crosses.map((x, i) => <li style={`--i:${i}`}><span class="membrane__arrow" aria-hidden="true">→</span>{x}</li>)}
+
+      <div class="priv-col priv-col--hub glass-card reveal">
+        <div class="priv-col__head">
+          <span class="priv-badge priv-badge--cyan mono">{t.hubSub}</span>
+          <h3>{t.hubTitle}</h3>
+        </div>
+        <ul class="priv-items">
+          {t.hub.map((item) => (
+            <li>
+              <strong>{item.k}</strong>
+              <p>{item.d}</p>
+            </li>
+          ))}
         </ul>
       </div>
     </div>
 
-    <div class="privacy__foot reveal">
-      <p>{t.site}</p>
-      <a href={DOCS.privacy} rel="noopener">{t.more} ↗</a>
+    <div class="priv-foot glass-card reveal">
+      <p>{t.siteFoot}</p>
+      <a class="mono" href={DOCS.privacy} rel="noopener">{t.docLink}</a>
     </div>
   </div>
 </section>
 
 <style>
-  .membrane {
+  .priv-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 120px minmax(0, 1fr);
-    margin-top: clamp(56px, 7vw, 96px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
   }
-  .membrane__side h3 {
-    margin-bottom: 22px;
+
+  @media (max-width: 900px) {
+    .priv-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
-  .membrane__side ul {
-    display: grid;
-  }
-  .membrane__side li {
+
+  .priv-col {
+    padding: clamp(22px, 2.8vw, 32px);
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .priv-col--local {
+    border-color: rgb(52 211 153 / 0.26);
+  }
+
+  .priv-col--hub {
+    border-color: rgb(56 189 248 / 0.26);
+  }
+
+  .priv-col__head {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .priv-col__head h3 {
+    font-size: 1.28rem;
+    font-weight: 680;
+    letter-spacing: -0.02em;
+  }
+
+  .priv-badge {
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.67rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+  }
+
+  .priv-badge--emerald {
+    background: rgb(52 211 153 / 0.14);
+    border: 1px solid rgb(52 211 153 / 0.34);
+    color: #6ee7b7;
+  }
+
+  .priv-badge--cyan {
+    background: rgb(56 189 248 / 0.14);
+    border: 1px solid rgb(56 189 248 / 0.34);
+    color: #7dd3fc;
+  }
+
+  .priv-items {
+    display: flex;
+    flex-direction: column;
     gap: 14px;
-    padding: 14px 0;
+  }
+
+  .priv-items li {
+    padding-top: 12px;
     border-top: 1px solid var(--line);
-    font-size: 1.0625rem;
   }
-  .membrane__side li:last-child {
-    border-bottom: 1px solid var(--line);
-  }
-  .membrane__lock {
-    flex: none;
-    width: 9px;
-    height: 9px;
-    border: 1px solid var(--fg-dim);
-  }
-  .membrane__stays li {
+
+  .priv-items strong {
+    display: block;
+    font-size: 0.94rem;
+    margin-bottom: 4px;
     color: var(--fg);
   }
-  .membrane__crosses li {
+
+  .priv-items p {
+    font-size: 0.86rem;
+    line-height: 1.62;
     color: var(--fg-dim);
   }
-  .membrane__arrow {
-    flex: none;
-    font-family: var(--f-mono);
-    color: var(--celadon);
-    transition: transform 0.8s var(--ease-out);
-    transition-delay: calc(var(--i) * 80ms + 0.3s);
-    transform: translateX(-60px);
-    opacity: 0;
-  }
-  .membrane__crosses:global(.is-in) .membrane__arrow,
-  :global(.no-js) .membrane__arrow {
-    transform: none;
-    opacity: 1;
-  }
-  .membrane__wall {
-    position: relative;
-    display: flex;
-    justify-content: center;
-  }
-  .membrane__wall::before {
-    content: '';
-    width: 1px;
-    height: 100%;
-    background: repeating-linear-gradient(180deg, var(--fg-dim) 0 2px, transparent 2px 7px);
-  }
-  .membrane__label {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) rotate(-90deg);
-    padding: 6px 12px;
-    background: var(--bg);
-    font-size: var(--t-micro);
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-    white-space: nowrap;
-  }
-  .privacy__foot {
+
+  .priv-foot {
+    margin-top: 18px;
+    padding: 18px 24px;
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     justify-content: space-between;
-    align-items: baseline;
-    gap: 16px 40px;
-    margin-top: clamp(48px, 6vw, 80px);
-    padding: 22px 26px;
-    border: 1px solid var(--line);
-    border-left: 2px solid var(--cinnabar);
-  }
-  .privacy__foot p {
+    gap: 12px 24px;
+    font-size: 0.85rem;
     color: var(--fg-dim);
-    max-width: 52em;
   }
-  .privacy__foot a {
-    font-size: var(--t-small);
+
+  .priv-foot a {
+    font-size: 0.78rem;
+    color: var(--cyan);
     white-space: nowrap;
   }
 
-  @media (max-width: 800px) {
-    .membrane {
-      grid-template-columns: 1fr;
-    }
-    .membrane__wall {
-      height: 72px;
-      align-items: center;
-    }
-    .membrane__wall::before {
-      width: 100%;
-      height: 1px;
-      background: repeating-linear-gradient(90deg, var(--fg-dim) 0 2px, transparent 2px 7px);
-    }
-    .membrane__label {
-      transform: translate(-50%, -50%);
+  @media (max-width: 600px) {
+    .priv-foot a {
+      white-space: normal;
     }
   }
 </style>

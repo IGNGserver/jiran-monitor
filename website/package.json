@@ -8,8 +8,7 @@
     "preview": "astro preview",
     "check": "astro check",
     "test": "playwright test",
-    "media": "node design/tools/media.mjs",
-    "fonts": "python3 design/tools/cjk-fonts.py dist ."
+    "media": "node design/tools/media.mjs"
   },
   "dependencies": {
     "astro": "^7.3.8",
@@ -19,8 +18,6 @@
     "@astrojs/check": "^0.9.10",
     "@fontsource-variable/instrument-sans": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@fontsource/instrument-serif": "^5.3.0",
-    "@fontsource/noto-serif-sc": "^5.3.1",
     "@playwright/test": "^1.64.1",
     "@types/node": "^24.19.2",
     "@types/three": "^0.186.0",

@@ -1,147 +1,319 @@
 ---
 import SectionHead from './SectionHead.astro';
 import { CONTENT, type Lang } from '../i18n/content';
-import { COUNTS, DOCS, TOOLS } from '../data/product';
+import { DOCS, TOOLS } from '../data/product';
+import { iconMetaForTool } from '../data/icons';
+
 interface Props { lang: Lang }
 const { lang } = Astro.props;
 const t = CONTENT[lang].sources;
 const filters = [
-  { key: 'all', label: t.filters.all, n: COUNTS.rows },
-  { key: 'u', label: t.filters.u, n: COUNTS.usage },
-  { key: 'l', label: t.filters.l, n: COUNTS.limits },
-  { key: 's', label: t.filters.s, n: COUNTS.sessions },
-];
+  ['all', t.filters.all],
+  ['u', t.filters.u],
+  ['l', t.filters.l],
+  ['s', t.filters.s],
+] as const;
 ---
 
-<section class="section sources" id="sources" aria-labelledby="sources-title">
+<section class="section section--glow" id="sources" aria-labelledby="src-title">
   <div class="wrap">
-    <SectionHead index={6} id="sources" kicker={t.kicker} title={t.title} intro={t.intro} />
+    <SectionHead id="src-title" index={t.index} title={t.title} lead={t.lead} />
 
-    <div class="src__controls reveal" role="group" aria-label={t.legend} data-src-filters>
-      {filters.map((f, i) => (
-        <button type="button" aria-pressed={i === 0 ? 'true' : 'false'} data-filter={f.key}>
-          <span>{f.label}</span><span class="mono src__n">{f.n}</span>
-        </button>
-      ))}
+    <div class="src-toolbar reveal">
+      <div class="src-filters" role="group" aria-label={lang === 'zh' ? '按能力筛选' : 'Filter capabilities'}>
+        {filters.map(([key, label], idx) => (
+          <button
+            type="button"
+            class:list={['src-filter mono', idx === 0 && 'is-active']}
+            data-filter={key}
+            aria-pressed={idx === 0 ? 'true' : 'false'}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <label class="src-search">
+        <span class="sr-only">{t.searchPlaceholder}</span>
+        <input type="search" placeholder={t.searchPlaceholder} data-src-search autocomplete="off" />
+      </label>
     </div>
 
-    <ol class="src__wall reveal" data-src-wall data-filter="all">
-      {TOOLS.map((tool, i) => (
-        <li data-u={tool.u ? '' : undefined} data-l={tool.l ? '' : undefined} data-s={tool.s ? '' : undefined}>
-          <span class="src__i mono" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
-          <span class="src__name">{tool.name}</span>
-          <span class="src__caps" aria-label={[tool.u && t.filters.u, tool.l && t.filters.l, tool.s && t.filters.s].filter(Boolean).join(' · ')}>
-            <i class:list={{ on: tool.u }}></i><i class:list={{ on: tool.l }}></i><i class:list={{ on: tool.s }}></i>
-          </span>
-        </li>
-      ))}
-    </ol>
-
-    <div class="src__foot reveal">
-      <span class="note">{t.legend}</span>
-      <a href={DOCS.tools} rel="noopener">{t.more} ↗</a>
+    <div class="src-legend mono reveal">
+      <span><i class="src-dot src-dot--u"></i> {t.legend.u}</span>
+      <span><i class="src-dot src-dot--l"></i> {t.legend.l}</span>
+      <span><i class="src-dot src-dot--s"></i> {t.legend.s}</span>
     </div>
+
+    <ul class="src-wall reveal" data-src-wall data-filter="all">
+      {TOOLS.map((tool, idx) => {
+        const icon = iconMetaForTool(tool.name);
+        return (
+          <li
+            class="src-item glass-card"
+            data-name={tool.name.toLowerCase()}
+            data-u={tool.u ? '' : undefined}
+            data-l={tool.l ? '' : undefined}
+            data-s={tool.s ? '' : undefined}
+          >
+            <div class="src-item__main">
+              {icon && (
+                <img
+                  class="src-item__ico"
+                  src={icon.url}
+                  data-ico-tone={icon.tone}
+                  data-ico-slug={icon.slug}
+                  alt=""
+                  width="18"
+                  height="18"
+                  loading="lazy"
+                  decoding="async"
+                />
+              )}
+              <span class="src-item__name">{tool.name}</span>
+            </div>
+            <div class="src-item__meta mono">
+              <span class="src-item__idx">#{String(idx + 1).padStart(2, '0')}</span>
+              <span class="src-caps" aria-label={`${tool.u ? t.legend.u + ' ' : ''}${tool.l ? t.legend.l + ' ' : ''}${tool.s ? t.legend.s : ''}`}>
+                <i class:list={['src-dot', tool.u ? 'src-dot--u' : 'src-dot--off']}></i>
+                <i class:list={['src-dot', tool.l ? 'src-dot--l' : 'src-dot--off']}></i>
+                <i class:list={['src-dot', tool.s ? 'src-dot--s' : 'src-dot--off']}></i>
+              </span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+
+    <p class="src-empty mono" data-src-empty hidden>{t.empty}</p>
+
+    <p class="src-doc reveal">
+      <a class="mono" href={DOCS.tools} rel="noopener">{t.docLink}</a>
+    </p>
   </div>
 </section>
 
 <style>
-  .src__controls {
+  .src-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .src-filters {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: clamp(48px, 6vw, 80px);
   }
-  .src__controls button {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 9px 16px;
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
-    background: none;
-    font-size: 0.875rem;
+
+  .src-filter {
+    padding: 7px 13px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: rgb(11 18 34 / 0.7);
+    color: var(--fg-dim);
+    font-size: 0.76rem;
     cursor: pointer;
-    transition: all 0.25s;
+    transition: border-color 0.18s, color 0.18s, background 0.18s;
   }
-  .src__controls button:hover {
-    border-color: var(--fg);
+
+  .src-filter:hover {
+    color: var(--fg);
+    border-color: var(--line-2);
   }
-  .src__controls button[aria-pressed='true'] {
-    background: var(--fg);
-    color: var(--bg);
-    border-color: var(--fg);
+
+  .src-filter.is-active {
+    border-color: var(--cyan);
+    background: rgb(56 189 248 / 0.14);
+    color: #e0f2fe;
   }
-  .src__n {
-    font-size: 0.75rem;
-    opacity: 0.7;
+
+  .src-search {
+    flex: 1;
+    min-width: 240px;
+    max-width: 430px;
   }
-  .src__wall {
+
+  .src-search input {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: rgb(9 15 29 / 0.85);
+    color: var(--fg);
+    font-size: 0.82rem;
+  }
+
+  .src-search input:focus {
+    outline: none;
+    border-color: var(--cyan);
+  }
+
+  .src-legend {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 4px;
-    margin-top: 36px;
-    padding-top: 28px;
-    border-top: 1px solid var(--line);
+    gap: 16px;
+    font-size: 0.72rem;
+    color: var(--fg-faint);
+    margin-bottom: 18px;
   }
-  .src__wall li {
+
+  .src-legend span {
     display: inline-flex;
-    align-items: baseline;
-    gap: 7px;
-    padding: 2px 16px 2px 0;
-    transition: opacity 0.45s var(--ease-out), color 0.45s;
+    align-items: center;
+    gap: 6px;
   }
-  .src__i {
-    font-size: 0.625rem;
+
+  .src-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+  .src-dot--u { background: var(--cyan); box-shadow: 0 0 6px rgb(56 189 248 / 0.6); }
+  .src-dot--l { background: var(--violet); box-shadow: 0 0 6px rgb(167 139 250 / 0.6); }
+  .src-dot--s { background: var(--emerald); box-shadow: 0 0 6px rgb(52 211 153 / 0.6); }
+  .src-dot--off { background: rgb(148 163 184 / 0.18); }
+
+  .src-wall {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+    gap: 10px;
+  }
+
+  .src-item {
+    padding: 11px 13px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    transition: border-color 0.18s, opacity 0.18s;
+  }
+
+  .src-item:hover {
+    border-color: var(--line-2);
+  }
+
+  /* 筛选规则：隐藏不符合能力维度的条目 */
+  .src-wall[data-filter='u'] .src-item:not([data-u]),
+  .src-wall[data-filter='l'] .src-item:not([data-l]),
+  .src-wall[data-filter='s'] .src-item:not([data-s]) {
+    display: none;
+  }
+
+  .src-item__main {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+
+  .src-item__ico {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    object-fit: contain;
+  }
+
+  .src-item__ico[data-ico-tone='mono-dark'] {
+    filter: brightness(0) invert(1);
+    opacity: 0.92;
+  }
+
+  .src-item__ico[data-ico-slug='qoder'] {
+    filter: drop-shadow(0 0 0.6px rgb(226 232 240 / 0.55));
+  }
+
+  .src-item__name {
+    font-size: 0.85rem;
+    font-weight: 560;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .src-item__meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .src-item__idx {
+    font-size: 0.66rem;
     color: var(--fg-faint);
   }
-  .src__name {
-    font-family: var(--f-display);
-    font-size: clamp(1.25rem, 2.2vw, 1.9rem);
-    line-height: 1.3;
-    letter-spacing: -0.005em;
-  }
-  .src__caps {
+
+  .src-caps {
     display: inline-flex;
-    gap: 3px;
-    transform: translateY(-0.6em);
+    gap: 4px;
   }
-  .src__caps i {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    border: 1px solid var(--fg-faint);
+
+  .src-empty {
+    padding: 28px;
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 0.84rem;
   }
-  .src__caps i.on {
-    background: var(--celadon);
-    border-color: var(--celadon);
+
+  .src-doc {
+    margin-top: 22px;
+    font-size: 0.78rem;
   }
-  .src__wall[data-filter='u'] li:not([data-u]),
-  .src__wall[data-filter='l'] li:not([data-l]),
-  .src__wall[data-filter='s'] li:not([data-s]) {
-    opacity: 0.14;
-  }
-  .src__foot {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 12px 32px;
-    margin-top: 36px;
-    padding-top: 20px;
-    border-top: 1px solid var(--line);
-    font-size: var(--t-small);
+
+  .src-doc a {
+    color: var(--cyan);
   }
 </style>
 
 <script>
-  const bar = document.querySelector<HTMLElement>('[data-src-filters]');
-  const wall = document.querySelector<HTMLElement>('[data-src-wall]');
-  if (bar && wall) {
-    const buttons = [...bar.querySelectorAll<HTMLButtonElement>('[data-filter]')];
-    buttons.forEach((b) =>
-      b.addEventListener('click', () => {
-        buttons.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-        wall.dataset.filter = b.dataset.filter!;
-      }),
-    );
+  const sec = document.getElementById('sources');
+  if (sec) {
+    const wall = sec.querySelector<HTMLElement>('[data-src-wall]')!;
+    const btns = sec.querySelectorAll<HTMLButtonElement>('[data-filter]');
+    const input = sec.querySelector<HTMLInputElement>('[data-src-search]');
+    const empty = sec.querySelector<HTMLElement>('[data-src-empty]');
+    const items = [...wall.querySelectorAll<HTMLLIElement>('.src-item')];
+
+    let activeFilter = 'all';
+    let query = '';
+
+    const update = () => {
+      wall.dataset.filter = activeFilter;
+      let visibleCount = 0;
+      for (const li of items) {
+        const matchQuery = !query || (li.dataset.name ?? '').includes(query);
+        li.hidden = !matchQuery;
+        const matchCap =
+          activeFilter === 'all' ||
+          (activeFilter === 'u' && li.hasAttribute('data-u')) ||
+          (activeFilter === 'l' && li.hasAttribute('data-l')) ||
+          (activeFilter === 's' && li.hasAttribute('data-s'));
+        if (matchQuery && matchCap) visibleCount++;
+      }
+      if (empty) empty.hidden = visibleCount > 0;
+    };
+
+    btns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeFilter = btn.dataset.filter ?? 'all';
+        btns.forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle('is-active', on);
+          b.setAttribute('aria-pressed', String(on));
+        });
+        update();
+      });
+    });
+
+    input?.addEventListener('input', () => {
+      query = input.value.trim().toLowerCase();
+      update();
+    });
   }
 </script>

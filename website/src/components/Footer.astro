@@ -1,116 +1,143 @@
 ---
 import Mark from './Mark.astro';
 import { CONTENT, LANGS, type Lang } from '../i18n/content';
-import { DOCS, REPO_URL, RELEASES_URL } from '../data/product';
+import { DOCS, RELEASES_URL, REPO_URL } from '../data/product';
+
 interface Props { lang: Lang }
 const { lang } = Astro.props;
 const t = CONTENT[lang].footer;
-const other: Lang = lang === 'zh' ? 'en' : 'zh';
-const product = [
-  [t.links.repo, REPO_URL],
-  [t.links.releases, RELEASES_URL],
-  [t.links.tools, DOCS.tools],
-  [t.links.privacy, DOCS.privacy],
-];
-const docs = [
-  [t.links.hub, DOCS.hub],
-  [t.links.agent, DOCS.agent],
-  [t.links.config, DOCS.config],
-  [t.links.api, DOCS.api],
-];
+const nav = CONTENT[lang].nav;
+const sw = LANGS[lang];
 ---
-<footer class="foot">
-  <div class="wrap foot__grid">
-    <div class="foot__brand">
-      <p class="foot__word"><Mark size={40} /> <span>{t.line}</span></p>
-      <p class="foot__tag">{t.tagline}</p>
+
+<footer class="site-foot">
+  <div class="wrap site-foot__grid">
+    <div class="site-foot__brand">
+      <a class="site-foot__logo" href="#top">
+        <Mark size={30} />
+        <span>{nav.brand}</span>
+      </a>
+      <p class="site-foot__tag">{t.tagline}</p>
+      <p class="site-foot__meta mono">{t.mit}</p>
+      <p class="site-foot__credit">
+        {t.tokscalePre}
+        <a href={DOCS.tokscale} rel="noopener">tokscale</a>.
+      </p>
     </div>
-    <nav class="foot__col" aria-label={t.product}>
-      <h2 class="note">{t.product}</h2>
-      <ul>{product.map(([l, h]) => <li><a href={h} rel="noopener">{l}</a></li>)}</ul>
-    </nav>
-    <nav class="foot__col" aria-label={t.docs}>
-      <h2 class="note">{t.docs}</h2>
-      <ul>{docs.map(([l, h]) => <li><a href={h} rel="noopener">{l}</a></li>)}</ul>
-    </nav>
-  </div>
-  <div class="wrap foot__base">
-    <p>{t.credits.split(/(\{\w+\})/).map((part) =>
-      part === '{tokscale}' ? <a href={DOCS.tokscale} rel="noopener">tokscale</a>
-      : part === '{MIT}' ? <a href={DOCS.license} rel="noopener">MIT</a>
-      : part)}</p>
-    <p>{t.site}</p>
-    <p><a href={LANGS[other].path} hreflang={LANGS[other].htmlLang} lang={LANGS[other].htmlLang}>{CONTENT[lang].nav.langSwitch}</a> · © IGNGserver</p>
+
+    <div class="site-foot__col">
+      <h3 class="mono">{t.colProduct}</h3>
+      <ul>
+        <li><a href="#workbench">{nav.workbench}</a></li>
+        <li><a href="#capabilities">{nav.capabilities}</a></li>
+        <li><a href="#architecture">{nav.architecture}</a></li>
+        <li><a href="#principles">{nav.principles}</a></li>
+        <li><a href="#install">{nav.download}</a></li>
+      </ul>
+    </div>
+
+    <div class="site-foot__col">
+      <h3 class="mono">{t.colDocs}</h3>
+      <ul>
+        <li><a href={lang === 'zh' ? DOCS.readmeZh : DOCS.readme} rel="noopener">{t.links.readme}</a></li>
+        <li><a href={DOCS.tools} rel="noopener">{t.links.tools}</a></li>
+        <li><a href={DOCS.hub} rel="noopener">{t.links.hub}</a></li>
+        <li><a href={DOCS.agent} rel="noopener">{t.links.agent}</a></li>
+        <li><a href={DOCS.wsl} rel="noopener">{t.links.wsl}</a></li>
+        <li><a href={DOCS.privacy} rel="noopener">{t.links.privacy}</a></li>
+      </ul>
+    </div>
+
+    <div class="site-foot__col">
+      <h3 class="mono">{t.colCommunity}</h3>
+      <ul>
+        <li><a href={REPO_URL} rel="noopener">GitHub ({REPO_URL.replace('https://github.com/', '')})</a></li>
+        <li><a href={RELEASES_URL} rel="noopener">{t.links.releases}</a></li>
+        <li><a href={DOCS.api} rel="noopener">{t.links.api}</a></li>
+        <li><a href={DOCS.license} rel="noopener">{t.links.license}</a></li>
+        <li><a href={LANGS[sw.switchTo].path} hreflang={LANGS[sw.switchTo].htmlLang}>{LANGS[sw.switchTo].label}</a></li>
+      </ul>
+    </div>
   </div>
 </footer>
+
 <style>
-  .foot {
-    position: relative;
-    background: var(--bg);
+  .site-foot {
     border-top: 1px solid var(--line);
-    padding-top: clamp(72px, 10vw, 140px);
+    background: #04070f;
+    padding-block: clamp(52px, 7vw, 84px);
   }
-  .foot__grid {
+
+  .site-foot__grid {
     display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
-    gap: 40px;
+    grid-template-columns: 1.45fr repeat(3, minmax(0, 1fr));
+    gap: 32px 28px;
   }
-  .foot__word {
+
+  @media (max-width: 900px) {
+    .site-foot__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 520px) {
+    .site-foot__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .site-foot__brand {
     display: flex;
-    align-items: center;
-    gap: 18px;
-    font-family: var(--f-display);
-    font-size: clamp(2.4rem, 6vw, 4.6rem);
-    line-height: 1;
-  }
-  :lang(zh) .foot__word {
-    font-weight: 600;
-  }
-  .foot__tag {
-    margin-top: 18px;
-    color: var(--fg-dim);
-    font-size: var(--t-lead);
-  }
-  .foot__col h2 {
-    margin-bottom: 16px;
-  }
-  .foot__col ul {
-    display: grid;
+    flex-direction: column;
     gap: 10px;
   }
-  .foot__col a {
+
+  .site-foot__logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 750;
+    font-size: 1.12rem;
     text-decoration: none;
+  }
+
+  .site-foot__tag {
+    font-size: 0.88rem;
     color: var(--fg-dim);
+    max-width: 34ch;
   }
-  .foot__col a:hover {
-    color: var(--fg);
-  }
-  .foot__base {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 10px 32px;
-    position: relative;
-    margin-top: clamp(64px, 8vw, 120px);
-    padding-block: 28px 40px;
-  }
-  .foot__base::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: var(--gutter);
-    right: var(--gutter);
-    height: 1px;
-    background: var(--line);
-    font-size: var(--t-small);
+
+  .site-foot__meta {
+    font-size: 0.72rem;
     color: var(--fg-faint);
   }
-  @media (max-width: 760px) {
-    .foot__grid {
-      grid-template-columns: 1fr 1fr;
-    }
-    .foot__brand {
-      grid-column: 1 / -1;
-    }
+
+  .site-foot__credit {
+    font-size: 0.78rem;
+    color: var(--fg-faint);
+  }
+
+  .site-foot__col h3 {
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    margin-bottom: 12px;
+  }
+
+  .site-foot__col ul {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+  }
+
+  .site-foot__col a {
+    text-decoration: none;
+  }
+
+  .site-foot__col a:hover {
+    color: var(--fg);
   }
 </style>

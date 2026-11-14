@@ -5,16 +5,21 @@ import { CONTENT } from '../i18n/content';
 const zh = CONTENT.zh.notFound;
 const en = CONTENT.en.notFound;
 ---
+
 <Base lang="zh" title="404 · 计然 Jiran" noindex>
   <main id="main" class="nf">
     <Mark size={56} />
-    <p class="nf__code mono">~404</p>
+    <p class="nf__code mono">404 // NOT_INDEXED</p>
     <h1>{zh.title}</h1>
     <p lang="en" class="nf__en">{en.title}</p>
     <p class="nf__body">{zh.body} <span lang="en">{en.body}</span></p>
-    <p class="nf__links"><a href="/">{zh.back}</a> · <a href="/en/" lang="en">{en.back}</a></p>
+    <p class="nf__links mono">
+      <a class="btn btn--accent-ghost" href="/">{zh.back}</a>
+      <a class="btn" href="/en/" lang="en">{en.back}</a>
+    </p>
   </main>
 </Base>
+
 <style>
   .nf {
     min-height: 100svh;
@@ -25,25 +30,33 @@ const en = CONTENT.en.notFound;
     gap: 14px;
     padding: 24px;
     text-align: center;
+    background: radial-gradient(50% 50% at 50% 35%, rgb(10 132 255 / 0.14), transparent 75%);
   }
   .nf__code {
-    font-size: clamp(3rem, 12vw, 7rem);
-    color: var(--cinnabar);
-    letter-spacing: -0.04em;
-    line-height: 1;
+    font-size: clamp(2rem, 6vw, 3.6rem);
+    font-weight: 700;
+    color: var(--cyan);
+    letter-spacing: -0.03em;
+    line-height: 1.1;
   }
   h1 {
     font-family: var(--f-display);
-    font-weight: 600;
-    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 700;
+    font-size: clamp(1.5rem, 3.5vw, 2.2rem);
   }
   .nf__en {
-    font-family: var(--f-display);
-    font-style: italic;
-    font-size: 1.3rem;
+    font-size: 1.1rem;
     color: var(--fg-dim);
   }
   .nf__body {
-    color: var(--fg-dim);
+    color: var(--fg-faint);
+    max-width: 44ch;
+  }
+  .nf__links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 8px;
   }
 </style>
