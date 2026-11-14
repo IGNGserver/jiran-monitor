@@ -139,12 +139,12 @@ maybe('readSessionEvents builds prompt/turn events in time order', () => {
   assert.strictEqual(out.events[1].timestamp, new Date(T1).toISOString());
 });
 
-maybe('readSessionEvents totals the tokscale way (reasoning excluded), matching the session card', () => {
+maybe('readSessionEvents adds disjoint reasoning into output and total, matching tokscale', () => {
   const file = fixture();
   const out = ocs.readSessionEvents('s1', { dbPaths: [file], sqlite });
   const turn = out.events[1].tokens;
-  assert.deepStrictEqual(turn, { input: 9416, output: 9, cacheRead: 0, cacheWrite: 0, reasoning: 16, total: 9425 });
-  // reasoning is informational only; total excludes it (DB's stored total of 9441 would over-count):
+  assert.deepStrictEqual(turn, { input: 9416, output: 25, cacheRead: 0, cacheWrite: 0, reasoning: 16, total: 9441 });
+  // disjoint reasoning (16) is folded into output (9 + 16 = 25) and total (9441), matching tokscale 4.22+:
   assert.strictEqual(turn.total, turn.input + turn.output + turn.cacheRead + turn.cacheWrite);
 });
 

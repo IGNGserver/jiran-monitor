@@ -61,12 +61,14 @@ maybe('readSessionDetail(opencode) groups exchanges with real per-turn cost', ()
   const [ex1, ex2] = detail.exchanges;
   assert.strictEqual(ex1.promptPreview, 'Hello there');
   assert.strictEqual(ex1.turnCount, 1);
-  assert.strictEqual(ex1.tokens.total, 9425); // 9416 + 9 (+0 cache); reasoning 16 excluded
+  assert.strictEqual(ex1.tokens.output, 25); // 9 output + 16 disjoint reasoning
+  assert.strictEqual(ex1.tokens.total, 9441); // 9416 + 9 + 16 reasoning (+0 cache)
   assert.strictEqual(ex1.costEstimate, 0.5);
 
   assert.strictEqual(ex2.promptPreview, 'Do a search');
   assert.strictEqual(ex2.turnCount, 2);
-  assert.strictEqual(ex2.tokens.total, 295); // (50+30+15) + (120+40+40)
+  assert.strictEqual(ex2.tokens.output, 75); // (30+5 reasoning) + 40
+  assert.strictEqual(ex2.tokens.total, 300); // (50+30+15+5) + (120+40+40)
   assert.ok(Math.abs(ex2.costEstimate - 0.35) < 1e-9);
 });
 
@@ -76,7 +78,7 @@ maybe('readSessionDetail(opencode) totals use real cost + DB token totals', () =
     client: 'opencode', sessionId: 's1', period: 'total',
     deps: { dbPaths: [file], sqlite, now: () => T4 + 1000 }
   });
-  assert.strictEqual(detail.totals.totalTokens, 9720); // 9425 + 295
+  assert.strictEqual(detail.totals.totalTokens, 9741); // 9441 + 300
   assert.strictEqual(detail.totals.turnCount, 3);
   assert.strictEqual(detail.totals.exchangeCount, 2);
   assert.ok(Math.abs(detail.totals.costUsd - 0.85) < 1e-9);

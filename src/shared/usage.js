@@ -15,9 +15,9 @@ const { normalizeTimeZone } = require('./fleetTimeZone');
 // device record must not be able to invent arbitrary keys there.
 const { QODER_CLIENT_IDS } = require('./qoderCnUsage');
 const TOKEN_KEYS = ['totalTokens', 'total_tokens', 'totalTokenCount', 'total_token_count', 'tokens', 'tokenCount', 'token_count'];
-// Additive components for a token total. `reasoning` is deliberately excluded for ordinary clients:
-// OpenAI/Codex report reasoning_output_tokens WITHIN output_tokens (tokscale's `output` already
-// includes it). Reasonix is the exception: its `output` and `reasoning` fields are disjoint.
+// Additive components summed when a raw row omits `totalTokens`. `reasoning` is
+// added via `firstNumber(obj, REASONING_TOKEN_KEYS)` in `tokenValueForClient` so
+// alias keys (`reasoning` + `reasoningTokens`) can never double-add here.
 const TOKEN_COMPONENT_KEYS = [
   'input', 'inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens',
   'output', 'outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens',
@@ -91,24 +91,22 @@ function tokenValue(obj) {
   return sum;
 }
 
-// Most clients expose reasoning as a subset of output, so the generic token
-// total intentionally leaves it out. Reasonix stats are different: Tokscale
-// emits output and reasoning as disjoint fields, so only that client adds the
-// separate reasoning component to its token total.
-function tokenValueForClient(obj, client) {
+// Tokscale emits `output` and `reasoning` as disjoint fields across every client
+// (`TokenBreakdown::total() = input + output + cache_read + cache_write + reasoning`),
+// including OpenAI/Codex where `tokscale` already subtracts reasoning from `output`.
+// Count disjoint reasoning in both `totalTokens` and the public `outputTokens`
+// family so cache-hit + cache-miss + output closes over `totalTokens`.
+function tokenValueForClient(obj) {
   const base = tokenValue(obj);
-  if (client !== REASONIX_CLIENT) return base;
   const direct = firstNumber(obj, TOKEN_KEYS);
   return direct !== 0 ? base : base + Math.max(0, firstNumber(obj, REASONING_TOKEN_KEYS));
 }
 
-// The public breakdown uses one output-family bucket. Reasonix's independent reasoning
-// component belongs there so cache-hit + cache-miss + output still closes over totalTokens.
-function outputValueForClient(obj, client) {
-  const output = Math.max(0, firstNumber(obj, OUTPUT_TOKEN_KEYS));
-  return client === REASONIX_CLIENT
-    ? output + Math.max(0, firstNumber(obj, REASONING_TOKEN_KEYS))
-    : output;
+// The public breakdown uses one output-family bucket; folding disjoint
+// reasoning here keeps period/session/history output semantics consistent.
+function outputValueForClient(obj) {
+  return Math.max(0, firstNumber(obj, OUTPUT_TOKEN_KEYS))
+    + Math.max(0, firstNumber(obj, REASONING_TOKEN_KEYS));
 }
 
 function costValue(obj) {
@@ -599,6 +597,7 @@ function sessionFromRow(row) {
   session.credits = Math.max(0, firstNumber(row, CREDITS_KEYS));
   session.messageCount = Math.max(0, Math.round(firstNumber(row, MESSAGE_COUNT_KEYS)));
   Object.assign(session, sessionTokenComponents(row));
+  session.outputTokens = Math.max(0, Math.round(outputValueForClient(row, client)));
   session.startedAt = normalizeIsoTimestamp(firstString(row, STARTED_AT_KEYS));
   session.lastUsedAt = normalizeIsoTimestamp(firstString(row, LAST_USED_AT_KEYS));
   session.projectId = String(row.projectId || row.project_id || '').trim();

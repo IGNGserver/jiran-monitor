@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  sumTokens, num, parseGraphResult, computeIntensities,
+  sumTokens, sumOutputTokens, num, parseGraphResult, computeIntensities,
   computeStreaks, monthlyRollup, normalizeHistory, mergeHistories
 } = require('../../src/shared/history');
 
@@ -35,11 +35,14 @@ test('num coerces finite numbers and strings, else 0', () => {
   assert.equal(num(undefined), 0);
 });
 
-test('sumTokens adds the additive components and excludes reasoning', () => {
+test('sumTokens adds the additive components including disjoint reasoning', () => {
   const b = { input: 10, output: 20, cacheRead: 100, cacheWrite: 5, reasoning: 999 };
-  assert.equal(sumTokens(b), 135);
+  assert.equal(sumTokens(b), 1134);
   assert.equal(sumTokens({}), 0);
   assert.equal(sumTokens(null), 0);
+  assert.equal(sumOutputTokens(b), 1019);
+  assert.equal(sumOutputTokens({}), 0);
+  assert.equal(sumOutputTokens(null), 0);
 });
 
 const SAMPLE = {
@@ -65,14 +68,15 @@ test('parseGraphResult folds client rows into perClient/perModel and derives day
   assert.equal(contributions.length, 1);
   const day = contributions[0];
   assert.equal(day.date, '2026-06-06');
-  // day.tokens is derived from perClient (reasoning excluded), NOT totals.tokens
-  assert.equal(day.tokens, 40);
+  // day.tokens is derived from perClient (including disjoint reasoning), NOT totals.tokens
+  assert.equal(day.tokens, 47);
+  assert.equal(day.outputTokens, 32);
   assert.equal(day.cost, 1.5);
   assert.equal(day.messages, 4);
   assert.equal(day.activeTimeMs, 3600000);
-  assert.deepEqual(day.perClient.claude, { tokens: 30, cost: 1.0, messages: 3 });
+  assert.deepEqual(day.perClient.claude, { tokens: 37, cost: 1.0, messages: 3 });
   assert.deepEqual(day.perClient.codex, { tokens: 10, cost: 0.5, messages: 1 });
-  assert.deepEqual(day.perModel.opus, { tokens: 30, cost: 1.0 });
+  assert.deepEqual(day.perModel.opus, { tokens: 37, cost: 1.0 });
   assert.deepEqual(day.perModel.gpt, { tokens: 10, cost: 0.5 });
 });
 

@@ -4,10 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 const { readJson, sharedDataDir, writeJsonAtomic } = require('./config');
-const { num, sumTokens } = require('./history');
-const { REASONIX_CLIENT } = require('./reasonixPaths');
+const { num, sumOutputTokens, sumTokens } = require('./history');
 
-const ARCHIVE_VERSION = 1;
+const ARCHIVE_VERSION = 2;
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function observationKey(value) {
@@ -53,7 +52,7 @@ function normalizeObservation(value) {
   };
 }
 
-function normalizeDay(value, fallbackDate = '') {
+function normalizeDay(value, fallbackDate = '', options = {}) {
   const date = String(value?.date || fallbackDate).slice(0, 10);
   if (!DAY_KEY_RE.test(date)) return null;
   const observations = {};
@@ -66,24 +65,27 @@ function normalizeDay(value, fallbackDate = '') {
     observations[observationKey(observation)] = observation;
   }
   if (Object.keys(observations).length === 0 && num(value?.activeTimeMs) <= 0) return null;
+  const legacyVersion = Number(value?.legacyVersion || options.legacyVersion || 0) === 1 ? 1 : 0;
   return {
     date,
     activeTimeMs: Math.max(0, Math.round(num(value?.activeTimeMs))),
-    observations
+    observations,
+    ...(legacyVersion === 1 ? { legacyVersion: 1 } : {})
   };
 }
 
 function normalizeDailyHistoryArchive(value) {
   const normalized = { version: ARCHIVE_VERSION, days: {} };
+  const legacyArchiveVersion = Number(value?.version) === 1 ? 1 : 0;
   const source = value?.days && typeof value.days === 'object' ? value.days : {};
   for (const [date, rawDay] of Object.entries(source)) {
-    const day = normalizeDay(rawDay, date);
+    const day = normalizeDay(rawDay, date, { legacyVersion: legacyArchiveVersion });
     if (day) normalized.days[day.date] = day;
   }
   const liveSource = value?.liveDays && typeof value.liveDays === 'object' ? value.liveDays : {};
   const liveDays = {};
   for (const [date, rawDay] of Object.entries(liveSource)) {
-    const day = normalizeDay(rawDay, date);
+    const day = normalizeDay(rawDay, date, { legacyVersion: legacyArchiveVersion });
     if (day) liveDays[day.date] = day;
   }
   if (Object.keys(liveDays).length > 0) normalized.liveDays = liveDays;
@@ -108,21 +110,19 @@ function observationsFromGraphs(graphs) {
           rawTokens.cacheRead, rawTokens.cache_read,
           rawTokens.cacheWrite, rawTokens.cache_write,
           rawTokens.output,
+          rawTokens.reasoning,
           raw?.unclassifiedTokens, raw?.unclassified_tokens
         ].some((value) => num(value) > 0);
         const candidate = normalizeObservation({
           ...raw,
-          tokens: sumTokens(raw?.tokens, raw?.client),
+          tokens: sumTokens(raw?.tokens),
           reasoningTokens: raw?.tokens?.reasoning,
           ...(raw?.tokenComponentsAvailable === true || hasComponentEvidence
             ? { tokenComponentsAvailable: raw?.tokenComponentsAvailable !== false }
             : {}),
           cacheReadTokens: raw?.tokens?.cacheRead ?? raw?.tokens?.cache_read,
           cacheWriteTokens: raw?.tokens?.cacheWrite ?? raw?.tokens?.cache_write,
-          outputTokens: num(raw?.tokens?.output)
-            + (String(raw?.client || '').trim().toLowerCase() === REASONIX_CLIENT
-              ? num(raw?.tokens?.reasoning)
-              : 0)
+          outputTokens: sumOutputTokens(raw?.tokens)
         });
         if (!candidate) continue;
         const key = observationKey(candidate);
@@ -167,18 +167,23 @@ function captureDailyHistoryArchive(existingArchive, graphs, options = {}) {
   for (const [date, incoming] of incomingDays) {
     if (hasTodayKey && date > todayKey) continue;
     const previous = archive.days[date] || { date, activeTimeMs: 0, observations: {} };
+    const replaceLegacyDay = previous.legacyVersion === 1;
     const next = {
       date,
       activeTimeMs: Math.max(previous.activeTimeMs, incoming.activeTimeMs),
       observations: { ...previous.observations }
     };
     for (const [key, observation] of Object.entries(incoming.observations)) {
-      if (shouldReplaceObservation(previous.observations[key], observation)) {
+      if (replaceLegacyDay || shouldReplaceObservation(previous.observations[key], observation)) {
         next.observations[key] = observation;
       }
     }
     const normalized = normalizeDay(next, date);
     if (normalized) archive.days[date] = normalized;
+    if (archive.liveDays?.[date]?.legacyVersion === 1) {
+      delete archive.liveDays[date];
+      if (Object.keys(archive.liveDays).length === 0) delete archive.liveDays;
+    }
   }
 
   // Presentation and sync windows are intentionally applied later by
@@ -309,7 +314,7 @@ function captureLiveDailyHistory(existingArchive, period, options = {}) {
   const incoming = periodLiveDay(period, date);
   if (!incoming) return archive;
   const previous = archive.liveDays?.[date];
-  if (!previous || liveDayIsGreater(incoming, previous)) {
+  if (!previous || previous.legacyVersion === 1 || liveDayIsGreater(incoming, previous)) {
     archive.liveDays = { ...(archive.liveDays || {}), [date]: incoming };
   }
   return archive;
@@ -342,6 +347,9 @@ function graphFromDailyHistoryArchive(graphs, archive, options = {}) {
   for (const [date, liveDay] of Object.entries(normalizedArchive.liveDays || {})) {
     if (hasTodayKey && date > todayKey) continue;
     const previous = currentDays.get(date);
+    // A v1 live snapshot came from pre-fix tokscale/reasoning semantics; never
+    // let it override a refreshed v2 day record for the same date.
+    if (liveDay.legacyVersion === 1 && previous && previous.legacyVersion !== 1) continue;
     if (!previous || liveDayIsGreater(liveDay, previous)) {
       currentDays.set(date, mergeLiveDayMetadata(liveDay, previous));
     }

@@ -51,7 +51,7 @@ function livePeriod(totalTokens, costUsd = 0) {
 
 test('normalizeDailyHistoryArchive rejects malformed days and observations', () => {
   assert.deepEqual(normalizeDailyHistoryArchive({ days: { nope: {}, '2026-07-18': { observations: [{}] } } }), {
-    version: 1,
+    version: 2,
     days: {}
   });
 });
@@ -66,7 +66,7 @@ test('capture preserves a larger prior observation as one coherent record', () =
   const [stored] = Object.values(next.days['2026-07-17'].observations);
   assert.deepEqual(stored, {
     client: 'claude', modelId: 'opus', providerId: 'anthropic',
-    tokens: 100, cost: 4, messages: 5, reasoningTokens: 7
+    tokens: 107, cost: 4, messages: 5, outputTokens: 7, tokenComponentsAvailable: true, reasoningTokens: 7
   });
 });
 
@@ -276,12 +276,13 @@ test('lazy write ownership is checked after the archive read', () => {
   assert.equal(writes, 0);
 });
 
-test('durable reconstruction never adds reasoning on top of output tokens', () => {
+test('durable reconstruction folds disjoint reasoning into output and total tokens', () => {
   const archive = captureDailyHistoryArchive({}, graph('2026-07-18', [
     client('codex', 'gpt', 100, 1, 1, { reasoning: 30 })
   ]), { todayKey: '2026-07-18' });
   const restored = historyFrom(graphFromDailyHistoryArchive([], archive, { todayKey: '2026-07-18' }));
-  assert.equal(restored.daily[0].tokens, 100);
+  assert.equal(restored.daily[0].tokens, 130);
+  assert.equal(restored.daily[0].outputTokens, 30);
 });
 
 test('clearDailyHistoryArchive removes persisted data and accepts a missing file', () => {
@@ -293,4 +294,178 @@ test('clearDailyHistoryArchive removes persisted data and accepts a missing file
     error.code = 'ENOENT';
     throw error;
   } }), false);
+});
+
+test('v1 archive migration replaces polluted scanned days once, preserves older days, and restores v2 high-water-mark', () => {
+  const legacyArchive = {
+    version: 1,
+    days: {
+      // Historical day no longer returned in a newer truncated scan: must survive v2 normalization.
+      '2025-01-15': {
+        observations: {
+          [JSON.stringify(['claude', 'opus'])]: {
+            client: 'claude',
+            modelId: 'opus',
+            tokens: 600,
+            outputTokens: 100,
+            tokenComponentsAvailable: true,
+            cost: 1.5,
+            messages: 3
+          }
+        }
+      },
+      // Polluted v1 tokscale 4.19.1 antigravity total (91.92M) vs fixed 4.22.1 scan (91.18M).
+      '2026-11-10': {
+        observations: {
+          [JSON.stringify(['antigravity', 'gemini-3-flash'])]: {
+            client: 'antigravity',
+            modelId: 'gemini-3-flash',
+            tokens: 91920000,
+            outputTokens: 800000,
+            reasoningTokens: 380000,
+            tokenComponentsAvailable: true,
+            cost: 40,
+            messages: 100
+          }
+        }
+      }
+    }
+  };
+
+  const normalized = normalizeDailyHistoryArchive(legacyArchive);
+  assert.equal(normalized.version, 2);
+  assert.equal(normalized.days['2025-01-15']?.legacyVersion, 1);
+  assert.equal(normalized.days['2026-11-10']?.legacyVersion, 1);
+  assert.equal(normalized.days['2026-11-10']?.observations[JSON.stringify(['antigravity', 'gemini-3-flash'])].tokens, 91920000);
+
+  // Incoming v2 graph scan returns the corrected lower antigravity count (with disjoint reasoning).
+  const refreshed = captureDailyHistoryArchive(legacyArchive, graph('2026-11-10', [{
+    client: 'antigravity',
+    modelId: 'gemini-3-flash',
+    tokens: { input: 90000000, output: 800000, cacheRead: 0, cacheWrite: 0, reasoning: 380000 },
+    cost: 39,
+    messages: 95
+  }]), { todayKey: '2026-11-14' });
+
+  assert.equal(refreshed.version, 2);
+  assert.equal(refreshed.days['2026-11-10'].legacyVersion, undefined);
+  assert.equal(refreshed.days['2025-01-15']?.observations[JSON.stringify(['claude', 'opus'])]?.tokens, 600);
+
+  const restored = historyFrom(graphFromDailyHistoryArchive([], refreshed, { todayKey: '2026-11-14' }), '2026-11-14');
+  const day = restored.daily.find((d) => d.date === '2026-11-10');
+  assert.equal(day?.perClient?.antigravity?.tokens, 91180000);
+  assert.equal(day?.outputTokens, 1180000);
+
+  // Once migrated to v2, subsequent lower scans cannot overwrite the higher v2 count.
+  const protectedArchive = captureDailyHistoryArchive(refreshed, graph('2026-11-10', [{
+    client: 'antigravity',
+    modelId: 'gemini-3-flash',
+    tokens: { input: 80000000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+    cost: 35,
+    messages: 80
+  }]), { todayKey: '2026-11-14' });
+  const afterDropAttempt = historyFrom(
+    graphFromDailyHistoryArchive([], protectedArchive, { todayKey: '2026-11-14' }),
+    '2026-11-14'
+  );
+  assert.equal(afterDropAttempt.daily.find((d) => d.date === '2026-11-10')?.perClient?.antigravity?.tokens, 91180000);
+});
+
+test('stale v1 liveDays cannot beat fresh v2 days even if live capture runs before history capture', () => {
+  let archive = {
+    version: 1,
+    days: {
+      '2026-11-14': {
+        observations: {
+          [JSON.stringify(['antigravity', 'gemini-3-flash'])]: {
+            client: 'antigravity',
+            modelId: 'gemini-3-flash',
+            tokens: 5000,
+            cost: 1,
+            messages: 5
+          }
+        }
+      }
+    },
+    liveDays: {
+      '2026-11-14': {
+        date: '2026-11-14',
+        activeTimeMs: 0,
+        observations: {
+          [JSON.stringify(['antigravity', 'gemini-3-flash'])]: {
+            client: 'antigravity',
+            modelId: 'gemini-3-flash',
+            tokens: 5000,
+            cost: 1,
+            messages: 0
+          }
+        }
+      }
+    }
+  };
+
+  // collectUsageOnce runs before collectHistoryOnce and refreshes legacy liveDays[date].
+  archive = captureLiveDailyHistory(archive, {
+    totalTokens: 3200,
+    costUsd: 0.8,
+    clients: { antigravity: 3200 },
+    clientCosts: { antigravity: 0.8 },
+    models: { 'gemini-3-flash': 3200 },
+    modelCosts: { 'gemini-3-flash': 0.8 },
+    clientModels: { antigravity: { 'gemini-3-flash': 3200 } },
+    clientModelCosts: { antigravity: { 'gemini-3-flash': 0.8 } }
+  }, { todayKey: '2026-11-14' });
+  assert.equal(archive.liveDays['2026-11-14'].legacyVersion, undefined);
+  assert.equal(archive.liveDays['2026-11-14'].observations[JSON.stringify(['antigravity', 'gemini-3-flash'])].tokens, 3200);
+  // Existing v1 days entry stayed untouched by captureLiveDailyHistory so captureDailyHistoryArchive still refreshes it.
+  assert.equal(archive.days['2026-11-14'].legacyVersion, 1);
+
+  // Even if an earlier v1 liveDays remained at 5000, a v2 scanned day at 3100 must win over it.
+  const staleLiveArchive = {
+    version: 2,
+    days: {
+      '2026-11-13': {
+        observations: {
+          [JSON.stringify(['antigravity', 'gemini-3-flash'])]: {
+            client: 'antigravity',
+            modelId: 'gemini-3-flash',
+            tokens: 3100,
+            cost: 0.7,
+            messages: 3
+          }
+        }
+      }
+    },
+    liveDays: {
+      '2026-11-13': {
+        date: '2026-11-13',
+        activeTimeMs: 0,
+        legacyVersion: 1,
+        observations: {
+          [JSON.stringify(['antigravity', 'gemini-3-flash'])]: {
+            client: 'antigravity',
+            modelId: 'gemini-3-flash',
+            tokens: 5000,
+            cost: 1,
+            messages: 0
+          }
+        }
+      }
+    }
+  };
+  const reconstructed = historyFrom(
+    graphFromDailyHistoryArchive([], staleLiveArchive, { todayKey: '2026-11-14' }),
+    '2026-11-14'
+  );
+  assert.equal(reconstructed.daily.find((d) => d.date === '2026-11-13')?.tokens, 3100);
+
+  // Capturing a v2 scanned day clears any untouched v1 liveDays for that same date.
+  const cleaned = captureDailyHistoryArchive(staleLiveArchive, graph('2026-11-13', [{
+    client: 'antigravity',
+    modelId: 'gemini-3-flash',
+    tokens: { input: 3100, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+    cost: 0.7,
+    messages: 3
+  }]), { todayKey: '2026-11-14' });
+  assert.equal(cleaned.liveDays?.['2026-11-13'], undefined);
 });

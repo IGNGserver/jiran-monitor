@@ -53,6 +53,7 @@ const cursorAuth = require('./cursorAuth');
 const clientSyncRunners = require('./clientSyncRunners');
 const { findSessionFiles, codexSessionFile } = require('./sessionFiles');
 const opencodeSession = require('./opencodeSession');
+const antigravitySession = require('./antigravitySession');
 const { buildPromaHistoryGraph, buildPromaPeriods, collectPromaRows } = require('./promaUsage');
 const {
   QODER_CLIENT_IDS,
@@ -674,8 +675,10 @@ function resetPromaPricingCache() {
 // Clients whose usage comes from a local adapter rather than the tokscale scan.
 // DeepSeek Harness is deliberately NOT here: tokscale 4.17+ reads its session
 // store natively (`--client dsh`), so it flows through the ordinary scan and the
-// local parser is gone. Both Qoder sites are here because tokscale's `--client`
-// value-enum has no Qoder entry at all — see QODER_SITE_BY_CLIENT_ID.
+// local parser is gone. Both Qoder sites and Proma stay on local adapters even
+// after tokscale added `qoder`/`proma` because tokscale does not distinguish
+// `qodercn` from `qoder` and does not collect Qoder native billing credits or
+// Linux WSL markers; filtering LOCAL_PARSED_CLIENTS out avoids double-counting.
 const LOCAL_PARSED_CLIENTS = new Set(LOCAL_USAGE_CLIENT_IDS);
 
 function collectionDate(now) {
@@ -914,13 +917,33 @@ function sessionTimestampMap(periods, home = os.homedir(), deps = {}) {
   const codexFiles = findSessionFiles(path.join(codexRoot, 'sessions'), missingCodexIds);
   for (const [sessionId, filePath] of codexFiles) applyFile('codex', sessionId, filePath);
 
+  const antigravityIds = byClient.get('antigravity') || new Set();
+  if (antigravityIds.size > 0) {
+    const geminiRoot = deps.scopedHome ? path.join(home, '.gemini') : geminiDataHome(home);
+    const conversationsDir = path.join(geminiRoot, 'antigravity-cli', 'conversations');
+    const readAntigravityMeta = deps.readAntigravityMeta
+      || ((ids) => antigravitySession.readSessionMeta(ids, conversationsDir, deps.antigravityDeps));
+    for (const [sessionId, meta] of readAntigravityMeta(antigravityIds)) {
+      const startedAt = meta.startedAt || '';
+      const lastUsedAt = meta.lastUsedAt || startedAt;
+      const identity = resolveProjects ? projectIdentity(meta.projectPath) : {};
+      if (startedAt || lastUsedAt || identity.projectId) {
+        metadata.set(`antigravity:${sessionId}`, {
+          ...(startedAt ? { startedAt } : {}),
+          ...(lastUsedAt ? { lastUsedAt } : {}),
+          ...identity
+        });
+      }
+    }
+  }
+
   for (const ref of refs.values()) {
     const key = `${ref.client}:${ref.sessionId}`;
     if (resolvedSessionKeys.has(key)) continue;
     if (metadata.has(key)) continue;
     const timestamp = timestampFromSessionId(ref.sessionId);
     if (timestamp) metadata.set(key, { startedAt: timestamp, lastUsedAt: timestamp });
-    if (!['claude', 'codex', 'opencode'].includes(ref.client)) resolvedSessionKeys.add(key);
+    if (!['claude', 'codex', 'opencode', 'antigravity'].includes(ref.client)) resolvedSessionKeys.add(key);
   }
   for (const ref of refs.values()) attemptedSessionKeys.add(`${ref.client}:${ref.sessionId}`);
 
@@ -2602,6 +2625,19 @@ function antigravityCliDataDir() {
   return path.join(geminiHome, 'antigravity-cli', 'conversations');
 }
 
+// When `agy` has initialized ~/.gemini or ~/.gemini/antigravity-cli before its
+// first conversation SQLite file creates `conversations/`, watch the nearest
+// existing Antigravity/Gemini parent so the first session still triggers live.
+function antigravityCliWatchPair() {
+  const source = path.resolve(antigravityCliDataDir());
+  if (dirExists(source)) return { source, watch: source };
+  const cliRoot = path.dirname(source);
+  if (dirExists(cliRoot)) return { source, watch: cliRoot };
+  const geminiHome = path.dirname(cliRoot);
+  if (dirExists(geminiHome)) return { source, watch: geminiHome };
+  return null;
+}
+
 // Watch roots that feed a self-sync, keyed by client. Antigravity's IDE cache is
 // written by our sync and must stay watch-excluded, but the native session roots
 // are read-only inputs to that sync (tokscale only ever readdir/stats them —
@@ -2642,9 +2678,9 @@ function watchClientRootsForClients(clientsCsv, options = {}) {
   // so it is also safe to watch and shares the umbrella client id. The filter
   // expands that id to antigravity-cli when the targeted scan runs.
   const enabled = new Set(String(clientsCsv || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean));
-  const antigravityCliDir = antigravityCliDataDir();
-  if (enabled.has('antigravity') && dirExists(antigravityCliDir)) {
-    rootsByClient.antigravity = [...new Set([...(rootsByClient.antigravity || []), antigravityCliDir])];
+  const antigravityCliPair = enabled.has('antigravity') ? antigravityCliWatchPair() : null;
+  if (antigravityCliPair) {
+    rootsByClient.antigravity = [...new Set([...(rootsByClient.antigravity || []), antigravityCliPair.watch])];
   }
   if (enabled.has('reasonix')) {
     const nativeRoots = reasonixNativeSessionWatchRoots();
@@ -2686,6 +2722,16 @@ function watchAttributionRootsForClients(clientsCsv, watchRoots = null, options 
       return [source, `${source}-wal`, `${source}-shm`];
     }))];
     if (sources.length > 0) attributionRoots = { ...attributionRoots, [client]: sources };
+  }
+  const antigravityPair = attributionRoots.antigravity ? antigravityCliWatchPair() : null;
+  if (antigravityPair && antigravityPair.watch !== antigravityPair.source) {
+    const ownedByAntigravity = new Set(
+      (clientWatchCandidates(clientsCsv, options).antigravity || []).map((dir) => path.resolve(dir))
+    );
+    const filtered = attributionRoots.antigravity
+      .filter((dir) => path.resolve(dir) !== antigravityPair.watch || ownedByAntigravity.has(antigravityPair.watch));
+    filtered.push(antigravityPair.source);
+    attributionRoots = { ...attributionRoots, antigravity: [...new Set(filtered)] };
   }
   const exporter = copilotExporterWatch(options.homeDir || os.homedir());
   if (!exporter || !attributionRoots.copilot) return attributionRoots;
@@ -2987,6 +3033,19 @@ function watchPolicyEntries(clientsCsv, options = {}) {
     }
   }
 
+  const antigravityCliPair = antigravityEnabled ? antigravityCliWatchPair() : null;
+  if (antigravityCliPair && antigravityCliPair.watch !== antigravityCliPair.source) {
+    const cliSource = canonicalRoot(antigravityCliPair.source);
+    bound('antigravity', [antigravityCliPair.watch], (_parts, resolved) => {
+      const current = path.resolve(canonicalWatchPath(resolved));
+      return !(
+        current === cliSource
+        || current.startsWith(cliSource + path.sep)
+        || cliSource.startsWith(current + path.sep)
+      );
+    });
+  }
+
   // Everything left is a recursive transcript tree: tokscale walks it, so every
   // path inside it is a potential source. Copilot is excluded wholesale because
   // each of its roots is bounded above, the Qoder clients because every one of
@@ -3000,7 +3059,7 @@ function watchPolicyEntries(clientsCsv, options = {}) {
         && !QODER_SITE_BY_CLIENT_ID[client]
         && !SELF_SYNCED_CLIENTS.has(client))
       .flatMap(([client, dirs]) => dirs.filter((dir) => !(claimed.get(client) || EMPTY_SET).has(dir))),
-    ...(antigravityEnabled && dirExists(antigravityCliDataDir()) ? [antigravityCliDataDir()] : [])
+    ...(antigravityCliPair && antigravityCliPair.watch === antigravityCliPair.source ? [antigravityCliPair.source] : [])
   ];
   for (const root of new Set(recursive.map(canonicalRoot))) {
     entries.push({ root, prefix: root + path.sep, policy: KEEP_EVERYTHING });
@@ -4746,6 +4805,7 @@ module.exports = {
   TOKSCALE_CLIENT_ALIASES,
   normalizeGraphClientIds,
   tokscaleClientFilter,
+  tokscaleClientsCsv,
   tokscaleCommand,
   tokscaleEnvironment,
   watcherOptions,
