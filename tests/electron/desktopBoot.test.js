@@ -82,6 +82,14 @@ test('the boot module points client icons at the shared UI asset tree', () => {
   assert.match(boot, /shared-ui\/icons\/clients/, 'icons resolve from the shared UI assets directory');
 });
 
+test('the boot module applies platform classes from URL query before async app info', () => {
+  const boot = read(path.join(rendererDir, 'boot.js'));
+  const queryIndex = boot.indexOf("urlParams.get('platform')");
+  const infoIndex = boot.indexOf('bridge.getAppInfo');
+  assert.ok(queryIndex >= 0, 'boot.js should read initial platform from URL search params');
+  assert.ok(infoIndex > queryIndex, 'platform class must apply synchronously before awaiting getAppInfo');
+});
+
 test('the desktop transport keeps hash routing and drops PWA surfaces', () => {
   const transport = read(path.join(sharedDir, 'transport', 'ipcTransport.js'));
   assert.match(transport, /routing: 'hash'/, 'file:// has no SPA fallback');

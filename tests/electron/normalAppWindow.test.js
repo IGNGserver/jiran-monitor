@@ -25,7 +25,13 @@ test('the main window is framed, resizable and present in the taskbar', () => {
     .replace(/^\s*\/\/.*$/gm, '');
 
   assert.doesNotMatch(body, /frame:\s*false/, 'a normal window keeps its frame');
-  assert.doesNotMatch(body, /transparent:\s*true/, 'a normal window is not transparent');
+  const transparentMatches = body.match(/transparent:\s*true/g) || [];
+  assert.equal(transparentMatches.length, 1, 'transparent: true is only permitted for macOS glass mode');
+  assert.match(
+    body,
+    /const macosGlass = process\.platform === 'darwin' && glass;[\s\S]*\.\.\.\(macosGlass \? \{ transparent: true, visualEffectState: 'active' \} : \{\}\),/,
+    'window transparency is scoped strictly to macOS glass mode'
+  );
   assert.doesNotMatch(body, /skipTaskbar/, 'a normal window appears in the taskbar/Dock');
   assert.doesNotMatch(body, /alwaysOnTop/, 'the window must not float above other apps');
   assert.doesNotMatch(body, /resizable:\s*false/, 'a normal window is resizable');

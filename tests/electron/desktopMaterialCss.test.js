@@ -57,5 +57,7 @@ test('every material mode still tints its persistent surfaces', () => {
       assert.ok(rule, `${surface} ${part} rule exists`);
       assert.match(rule.body, /background:\s*color-mix/, `${surface} ${part} keeps its translucent tint`);
     }
+    const strippedBreakdownRule = rules(css).find((entry) => entry.selector === `body[data-window-surface="${surface}"] .overview-breakdowns .panel`);
+    assert.equal(strippedBreakdownRule, undefined, `${surface} must not strip glass card containers from overview breakdown panels`);
   }
 });
