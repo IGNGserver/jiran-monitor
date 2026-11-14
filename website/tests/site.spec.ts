@@ -16,12 +16,18 @@ function collectErrors(page: Page) {
 
 for (const p of PAGES) {
   test.describe(p.path, () => {
-    test('加载无脚本错误，语言与标题正确', async ({ page }) => {
+    test('加载无脚本错误，语言、标题与章节顺序正确（功能概览先于在线体验）', async ({ page }) => {
       const errors = collectErrors(page);
       await page.goto(p.path);
       await expect(page).toHaveTitle(p.title);
       await expect(page.locator('html')).toHaveAttribute('lang', p.lang);
       await expect(page.locator('h1')).toHaveCount(1);
+
+      const sectionIds = await page.evaluate(() =>
+        [...document.querySelectorAll('main > section[id]')].map((el) => el.id),
+      );
+      expect(sectionIds).toEqual(['top', 'features', 'workbench', 'architecture', 'sources', 'install']);
+
       await page.waitForTimeout(1200);
       expect(errors).toEqual([]);
     });
@@ -37,22 +43,20 @@ for (const p of PAGES) {
       expect(await page.locator('img:not([alt])').count()).toBe(0);
     });
 
-    test('全局三维计量舞台与首屏实时读数启动（软件 WebGL2 + GLB）', async ({ page }) => {
-      await page.goto(p.path);
-      await expect(page.locator('[data-stage]')).toHaveClass(/is-live/, { timeout: 15_000 });
-      await expect(page.locator('[data-hero]')).toHaveClass(/is-live/, { timeout: 15_000 });
-      await expect(page.locator('[data-counter-n]')).not.toHaveText('0', { timeout: 10_000 });
-    });
-
-    test('五层爆炸解构区（#anatomy）：导轨点击可精确切换对应机芯层', async ({ page }) => {
+    test('四组 Token 词元主题三维视口按视口滚动依次懒加载启动（软件 WebGL2 + GLB）', async ({ page }) => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.goto(p.path);
-      await expect(page.locator('[data-stage]')).toHaveClass(/is-live/, { timeout: 15_000 });
 
-      await page.locator('#anatomy').scrollIntoViewIfNeeded();
-      await page.locator('[data-rail="2"]').click();
-      await expect(page.locator('[data-step="2"]')).toHaveClass(/is-active/, { timeout: 10_000 });
-      await expect(page.locator('[data-rail="2"]')).toHaveAttribute('aria-current', 'true');
+      await expect(page.locator('[data-model-stage]')).toHaveCount(4);
+      await expect(page.locator('[data-model-id="hero"]')).toHaveClass(/is-live/, { timeout: 15_000 });
+      await expect(page.locator('[data-hero]')).toHaveClass(/is-live/, { timeout: 15_000 });
+      await expect(page.locator('[data-counter-n]')).not.toHaveText('0', { timeout: 10_000 });
+
+      for (const id of ['mix', 'quota', 'hub']) {
+        const stage = page.locator(`[data-model-id="${id}"]`);
+        await stage.scrollIntoViewIfNeeded();
+        await expect(stage).toHaveClass(/is-live/, { timeout: 15_000 });
+      }
     });
 
     test('交互式工作台：场景切换、ISO 周一窗口、币种与亮暗主题均真实联动', async ({ page }) => {
@@ -78,14 +82,14 @@ for (const p of PAGES) {
       await wb.locator('[data-wb-csv-toggle]').click();
       await expect(wb.locator('.wb-csv-box')).toContainText('claude-opus-4-6');
 
-      // 切换至工具子页查看 Qoder 独立 Credits 与无波浪号诚实披露
+      // 切换至工具子页查看 Qoder 独立 Credits 与估算值来源说明
       await wb.locator('[data-wb-utab="tools"]').click();
       await wb.locator('[data-wb-tool="qoder"]').click();
       await expect(wb.locator('.wb-honest-note')).toBeVisible();
       await expect(wb.locator('.wb-main')).toContainText('120 Credits');
     });
 
-    test('零外泄拓扑沙盒（#architecture）：离线仅本机切换与 >10m Stale 模拟均联动', async ({ page }) => {
+    test('同步模式沙盒（#architecture）：离线仅本机切换与 >10m Stale 模拟均联动', async ({ page }) => {
       await page.goto(p.path);
       const flow = page.locator('[data-flow]');
       await flow.locator('[data-flow-mode="local"]').click();
@@ -107,15 +111,15 @@ for (const p of PAGES) {
   });
 }
 
-test('减少动态时不启动 WebGL，保留 Cycles 高清静帧海报与静态爆炸剖面图', async ({ browser }) => {
+test('减少动态时不启动 WebGL，四组视口均保留高清静态图像海报', async ({ browser }) => {
   const ctx = await browser.newContext({ reducedMotion: 'reduce' });
   const page = await ctx.newPage();
   await page.goto('/');
   await page.waitForTimeout(1500);
   await expect(page.locator('html')).toHaveClass(/no-gl/);
   await expect(page.locator('[data-hero]')).not.toHaveClass(/is-live/);
-  await expect(page.locator('.stage__poster img')).toBeVisible();
-  await expect(page.locator('.anat__static-fig img')).toBeVisible();
+  await expect(page.locator('.model-stage__poster img').first()).toBeVisible();
+  await expect(page.locator('.model-stage.is-live')).toHaveCount(0);
   await ctx.close();
 });
 
@@ -144,5 +148,5 @@ test('下载区：标签页支持键盘左右方向键切换', async ({ page }) 
 test('404 页面', async ({ page }) => {
   const res = await page.goto('/this-does-not-exist/');
   expect(res?.status()).toBe(404);
-  await expect(page.locator('h1')).toContainText('不在遥测索引中');
+  await expect(page.locator('h1')).toContainText('找不到这个页面');
 });

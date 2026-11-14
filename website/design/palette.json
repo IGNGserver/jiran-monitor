@@ -1,14 +1,18 @@
 {
-  "$comment": "计然官网与时序账本计量核 JR-01 的共享色板镜像（真源见 design/meter.json）。所有底色均为无彩消色差黑曜暗室灰阶；冰青仅用于 Token 遥测与配额圆弧，香槟金仅用于货币成本与独立原生 Credits。",
-  "palette": {
-    "void": "#050608",
-    "bg": "#050608",
-    "surface": "#0b0d12",
-    "elevated": "#11141a",
-    "ink": "#edf0f5",
-    "inkDim": "#9aa1ae",
-    "inkFaint": "#5e6572",
-    "cyan": "#56ccf2",
+  "$comment": "计然官网色彩令牌真源：深色石墨底板 + 铂白正文 + 冰青（Token 与配额）/ 暖金（成本与独立 Credits）双语义色。",
+  "surfaces": {
+    "void": "#090b10",
+    "ink1": "#0e1118",
+    "ink2": "#141923",
+    "ink3": "#1b2230"
+  },
+  "ink": {
+    "fg": "#eef1f6",
+    "dim": "#9ba3b2",
+    "faint": "#636c7d"
+  },
+  "signals": {
+    "cyan": "#4fc3f7",
     "brass": "#e5a94c",
     "danger": "#ef5a52"
   }

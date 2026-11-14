@@ -1,9 +1,8 @@
 ---
 import Base from '../layouts/Base.astro';
-import Stage from './Stage.astro';
 import Nav from './Nav.astro';
 import Hero from './Hero.astro';
-import Anatomy from './Anatomy.astro';
+import Features from './Features.astro';
 import Workbench from './Workbench.astro';
 import Flow from './Flow.astro';
 import Sources from './Sources.astro';
@@ -11,7 +10,7 @@ import Install from './Install.astro';
 import Footer from './Footer.astro';
 import { getRelease } from '../data/release';
 import type { Lang } from '../i18n/content';
-// 首屏无衬线正文与等宽遥测字体预加载；src/integrations/early-hints.mjs 会在构建完成后
+// 首屏无衬线正文与等宽数字字体预加载；src/integrations/early-hints.mjs 会在构建完成后
 // 自动将它们写入 dist/_headers，供 Cloudflare Pages 以 103 Early Hints 提前下发。
 import sansLatin from '../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2?url';
 import monoLatin from '../../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url';
@@ -26,11 +25,10 @@ const preloadFonts = [sansLatin, monoLatin];
 
 <Base lang={lang}>
   {preloadFonts.map((href) => <link slot="head" rel="preload" href={href} as="font" type="font/woff2" crossorigin />)}
-  <Stage lang={lang} />
   <Nav lang={lang} tag={release?.tag} />
   <main id="main">
     <Hero lang={lang} release={release} />
-    <Anatomy lang={lang} />
+    <Features lang={lang} />
     <Workbench lang={lang} />
     <Flow lang={lang} />
     <Sources lang={lang} />

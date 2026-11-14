@@ -15,7 +15,7 @@ const fmtSize = (bytes?: number) =>
   bytes ? `${(bytes / 1048576).toFixed(bytes > 1048576 * 10 ? 0 : 1)} MB` : '';
 ---
 
-<section class="section section--veil" id="install" data-idx={t.numeral} aria-labelledby="inst-title">
+<section class="section" id="install" aria-labelledby="inst-title">
   <div class="wrap">
     <header class="sec-head reveal">
       <div class="sec-head__left">
@@ -40,9 +40,9 @@ const fmtSize = (bytes?: number) =>
       </span>
       <span class="inst-meta__links">
         <a href={RELEASES_URL} rel="noopener">{t.allReleases} ↗</a>
-        <span>/</span>
+        <span>·</span>
         <a href={DOCS.signing} rel="noopener">{t.signingLink}</a>
-        <span>/</span>
+        <span>·</span>
         <a href={DOCS.updates} rel="noopener">{t.updatesLink}</a>
       </span>
     </div>
@@ -80,7 +80,6 @@ const fmtSize = (bytes?: number) =>
             >
               <div class="inst-panel__top mono">
                 <span class="inst-panel__badge">{p.badge}</span>
-                <span class="reg" aria-hidden="true"></span>
               </div>
 
               <div class="inst-assets">
@@ -114,7 +113,7 @@ const fmtSize = (bytes?: number) =>
         })}
       </div>
 
-      <!-- 右栏：CSS 3D 等距分层中枢架构栈 + Docker Compose 一键启动 -->
+      <!-- 右栏：Docker Compose Hub 构成说明与一键启动 -->
       <div class="inst-hub">
         <div class="inst-hub__head">
           <h3 class="inst-hub__title">{t.hubBoxTitle}</h3>
@@ -129,13 +128,12 @@ const fmtSize = (bytes?: number) =>
           </button>
         </div>
 
-        <!-- CSS 3D 等距透视三层容器堆栈 -->
-        <div class="iso-stack" aria-label={lang === 'zh' ? 'Hub 容器分层架构' : 'Hub layered container stack'}>
+        <div class="hub-layers" aria-label={lang === 'zh' ? 'Hub 服务构成' : 'Hub service layers'}>
           {t.stackLayers.map((layer, idx) => (
-            <div class:list={['iso-slab', idx === 1 && 'iso-slab--brass']} style={`--slab-i: ${idx}`}>
-              <span class="iso-slab__port mono">{layer.port}</span>
-              <strong class="iso-slab__name mono">{layer.name}</strong>
-              <span class="iso-slab__meta">{layer.meta}</span>
+            <div class:list={['hub-layer', idx === 1 && 'hub-layer--brass']}>
+              <span class="hub-layer__port mono">{layer.port}</span>
+              <strong class="hub-layer__name">{layer.name}</strong>
+              <span class="hub-layer__meta">{layer.meta}</span>
             </div>
           ))}
         </div>
@@ -160,9 +158,10 @@ const fmtSize = (bytes?: number) =>
     justify-content: space-between;
     gap: 10px 20px;
     padding: 11px 16px;
-    background: rgb(9 11 15 / 0.88);
+    border-radius: var(--radius-md);
+    background: var(--ink-1);
     border: 1px solid var(--line-2);
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     color: var(--fg-dim);
     margin-bottom: 18px;
   }
@@ -188,10 +187,8 @@ const fmtSize = (bytes?: number) =>
 
   .inst-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr);
-    background: var(--line-2);
-    border: 1px solid var(--line-2);
-    gap: 1px;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 18px;
     align-items: stretch;
   }
 
@@ -203,10 +200,10 @@ const fmtSize = (bytes?: number) =>
 
   .inst-downloads,
   .inst-hub {
-    background: rgb(9 11 15 / 0.92);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    padding: clamp(20px, 2.6vw, 30px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line-2);
+    background: var(--ink-1);
+    padding: clamp(20px, 2.6vw, 28px);
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -215,9 +212,11 @@ const fmtSize = (bytes?: number) =>
   .inst-tabs {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    background: var(--line);
+    padding: 3px;
+    border-radius: var(--radius-md);
+    background: var(--void);
     border: 1px solid var(--line-2);
-    gap: 1px;
+    gap: 3px;
   }
 
   @media (max-width: 560px) {
@@ -227,9 +226,10 @@ const fmtSize = (bytes?: number) =>
   }
 
   .inst-tab {
-    padding: 9px 8px;
+    padding: 8px 6px;
     border: 0;
-    background: var(--void);
+    border-radius: var(--radius-sm);
+    background: transparent;
     color: var(--fg-dim);
     font-size: 0.75rem;
     cursor: pointer;
@@ -259,15 +259,8 @@ const fmtSize = (bytes?: number) =>
     display: none;
   }
 
-  .inst-panel__top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
   .inst-panel__badge {
-    font-size: 0.69rem;
-    letter-spacing: 0.08em;
+    font-size: 0.72rem;
     color: var(--cyan);
   }
 
@@ -279,7 +272,7 @@ const fmtSize = (bytes?: number) =>
 
   .inst-asset {
     padding: 14px 16px;
-    border-radius: 2px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--line-2);
     background: var(--void);
     text-decoration: none;
@@ -306,17 +299,17 @@ const fmtSize = (bytes?: number) =>
 
   .inst-asset__title {
     font-size: 0.92rem;
-    font-weight: 560;
+    font-weight: 580;
     color: var(--fg);
   }
 
   .inst-asset__sub {
-    font-size: 0.79rem;
+    font-size: 0.8rem;
     color: var(--fg-dim);
   }
 
   .inst-asset__file {
-    font-size: 0.69rem;
+    font-size: 0.7rem;
     color: var(--cyan);
     overflow-wrap: anywhere;
   }
@@ -326,14 +319,14 @@ const fmtSize = (bytes?: number) =>
     align-items: center;
     gap: 10px;
     flex-shrink: 0;
-    font-size: 0.73rem;
+    font-size: 0.74rem;
     color: var(--fg-dim);
   }
 
   .inst-asset__dl {
     width: 28px;
     height: 28px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -344,7 +337,7 @@ const fmtSize = (bytes?: number) =>
 
   .inst-panel__note {
     margin-top: auto;
-    font-size: 0.79rem;
+    font-size: 0.8rem;
     line-height: 1.62;
     color: var(--fg-faint);
   }
@@ -358,17 +351,17 @@ const fmtSize = (bytes?: number) =>
 
   .inst-hub__title {
     font-family: var(--f-display);
-    font-size: 1rem;
-    font-weight: 460;
+    font-size: 1.02rem;
+    font-weight: 580;
   }
 
   .inst-copy {
     padding: 5px 11px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line-2);
     background: var(--void);
     color: var(--fg);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     cursor: pointer;
   }
 
@@ -377,71 +370,55 @@ const fmtSize = (bytes?: number) =>
     color: #ffffff;
   }
 
-  /* CSS 3D 等距分层架构板 */
-  .iso-stack {
-    perspective: 1100px;
+  .hub-layers {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 6px 0;
   }
 
-  .iso-slab {
+  .hub-layer {
     display: grid;
     grid-template-columns: 128px minmax(0, 1fr);
     gap: 2px 12px;
     align-items: baseline;
     padding: 10px 13px;
-    background: linear-gradient(90deg, rgb(86 204 242 / 0.08), rgb(14 17 23 / 0.92) 48%);
-    border: 1px solid rgb(86 204 242 / 0.32);
-    border-left: 2px solid var(--cyan);
-    transform: rotateX(12deg) translateZ(0);
-    transform-origin: center;
-    transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+    border-radius: var(--radius-sm);
+    background: var(--void);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--cyan);
   }
 
-  .iso-slab:hover {
-    transform: rotateX(4deg) translateY(-2px);
-    border-color: var(--cyan);
-  }
-
-  .iso-slab--brass {
-    background: linear-gradient(90deg, rgb(229 169 76 / 0.09), rgb(14 17 23 / 0.92) 48%);
-    border-color: rgb(229 169 76 / 0.34);
+  .hub-layer--brass {
     border-left-color: var(--brass);
   }
 
-  .iso-slab--brass:hover {
-    border-color: var(--brass);
-  }
-
-  .iso-slab__port {
-    font-size: 0.68rem;
+  .hub-layer__port {
+    font-size: 0.7rem;
     font-weight: 600;
     color: var(--cyan);
     grid-row: span 2;
   }
 
-  .iso-slab--brass .iso-slab__port {
+  .hub-layer--brass .hub-layer__port {
     color: var(--brass);
   }
 
-  .iso-slab__name {
-    font-size: 0.76rem;
+  .hub-layer__name {
+    font-size: 0.82rem;
+    font-weight: 580;
     color: var(--fg);
   }
 
-  .iso-slab__meta {
-    font-size: 0.71rem;
+  .hub-layer__meta {
+    font-size: 0.74rem;
     color: var(--fg-dim);
   }
 
   @media (max-width: 520px) {
-    .iso-slab {
+    .hub-layer {
       grid-template-columns: minmax(0, 1fr);
-      transform: none;
     }
-    .iso-slab__port {
+    .hub-layer__port {
       grid-row: auto;
     }
   }
@@ -449,10 +426,10 @@ const fmtSize = (bytes?: number) =>
   .inst-code {
     margin: 0;
     padding: 14px 16px;
-    border-radius: 2px;
-    background: #040507;
+    border-radius: var(--radius-md);
+    background: #06080c;
     border: 1px solid var(--line);
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     line-height: 1.68;
     color: var(--fg);
     overflow-x: auto;
@@ -460,7 +437,7 @@ const fmtSize = (bytes?: number) =>
 
   .inst-hub__doc {
     margin-top: auto;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
   }
 
   .inst-hub__doc a {
@@ -474,8 +451,8 @@ const fmtSize = (bytes?: number) =>
 
   .inst-verified {
     margin-top: 18px;
-    font-size: 0.78rem;
-    line-height: 1.62;
+    font-size: 0.79rem;
+    line-height: 1.64;
     color: var(--fg-faint);
   }
 </style>

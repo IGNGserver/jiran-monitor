@@ -18,7 +18,7 @@ const sw = LANGS[lang];
       <a class="site-foot__logo" href="#top">
         <Mark size={28} />
         <span>{nav.brand}</span>
-        <span class="site-foot__cal mono">CAL. JR-01</span>
+        <span class="site-foot__sub mono">{nav.sub}</span>
       </a>
       <p class="site-foot__tag">{t.tagline}</p>
       <p class="site-foot__meta mono">{t.mit}</p>
@@ -31,7 +31,7 @@ const sw = LANGS[lang];
     <div class="site-foot__col">
       <h3 class="mono">{t.colProduct}</h3>
       <ul>
-        <li><a href="#anatomy">{nav.anatomy}</a></li>
+        <li><a href="#features">{nav.features}</a></li>
         <li><a href="#workbench">{nav.workbench}</a></li>
         <li><a href="#architecture">{nav.architecture}</a></li>
         <li><a href="#sources">{nav.sources}</a></li>
@@ -69,8 +69,8 @@ const sw = LANGS[lang];
     position: relative;
     z-index: 2;
     border-top: 1px solid var(--line);
-    background: #040507;
-    padding-block: clamp(52px, 7vw, 84px);
+    background: #06080c;
+    padding-block: clamp(52px, 7vw, 80px);
   }
 
   .site-foot__grid {
@@ -99,19 +99,17 @@ const sw = LANGS[lang];
 
   .site-foot__logo {
     display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 560;
+    align-items: baseline;
+    gap: 9px;
+    font-weight: 600;
     font-size: 1.06rem;
     text-decoration: none;
   }
 
-  .site-foot__cal {
-    font-size: 0.62rem;
-    letter-spacing: 0.12em;
-    padding: 1px 6px;
-    border: 1px solid var(--line-2);
+  .site-foot__sub {
+    font-size: 0.74rem;
     color: var(--fg-faint);
+    font-weight: 450;
   }
 
   .site-foot__tag {
@@ -121,7 +119,7 @@ const sw = LANGS[lang];
   }
 
   .site-foot__meta {
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--fg-faint);
   }
 
@@ -135,9 +133,8 @@ const sw = LANGS[lang];
   }
 
   .site-foot__col h3 {
-    font-size: 0.68rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
     color: var(--fg-faint);
     margin-bottom: 12px;
   }

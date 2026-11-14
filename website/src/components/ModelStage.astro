@@ -1,0 +1,204 @@
+---
+import { getImage } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+import heroMaster from '../assets/renders/hero.webp';
+import heroPortraitMaster from '../assets/renders/hero-portrait.webp';
+import mixMaster from '../assets/renders/mix.webp';
+import quotaMaster from '../assets/renders/quota.webp';
+import hubMaster from '../assets/renders/hub.webp';
+import type { ModelId } from '../scripts/models/spec';
+
+interface Props {
+  id: ModelId;
+  alt: string;
+  caption?: string;
+  aspect?: 'hero' | 'card' | 'wide';
+  priority?: boolean;
+}
+
+const { id, alt, caption, aspect = 'card', priority = false } = Astro.props;
+
+const MASTERS: Record<ModelId, ImageMetadata> = {
+  hero: heroMaster,
+  mix: mixMaster,
+  quota: quotaMaster,
+  hub: hubMaster,
+};
+
+const master = MASTERS[id];
+const widths = id === 'hero' ? [640, 1080, 1600] : [560, 960, 1440];
+const sizes =
+  aspect === 'wide'
+    ? '(max-width: 960px) 94vw, 1240px'
+    : '(max-width: 960px) 94vw, 640px';
+
+const avif = await getImage({ src: master, widths, formats: ['avif'], quality: 62 });
+const webp = await getImage({ src: master, widths, formats: ['webp'], quality: 80 });
+const fallback = await getImage({ src: master, width: id === 'hero' ? 1280 : 1120, format: 'webp', quality: 80 });
+
+const portraitAvif =
+  id === 'hero'
+    ? await getImage({ src: heroPortraitMaster, widths: [540, 900], formats: ['avif'], quality: 62 })
+    : null;
+const portraitWebp =
+  id === 'hero'
+    ? await getImage({ src: heroPortraitMaster, widths: [540, 900], formats: ['webp'], quality: 80 })
+    : null;
+---
+
+<figure
+  class:list={['model-stage', `model-stage--${aspect}`]}
+  data-model-stage
+  data-model-id={id}
+>
+  <div class="model-stage__viewport">
+    <picture class="model-stage__poster">
+      {portraitAvif && (
+        <source
+          media="(max-width: 680px)"
+          type="image/avif"
+          srcset={portraitAvif.srcSet.attribute}
+          sizes="94vw"
+        />
+      )}
+      {portraitWebp && (
+        <source
+          media="(max-width: 680px)"
+          type="image/webp"
+          srcset={portraitWebp.srcSet.attribute}
+          sizes="94vw"
+        />
+      )}
+      <source type="image/avif" srcset={avif.srcSet.attribute} sizes={sizes} />
+      <source type="image/webp" srcset={webp.srcSet.attribute} sizes={sizes} />
+      <img
+        src={fallback.src}
+        width={fallback.attributes.width}
+        height={fallback.attributes.height}
+        alt={alt}
+        loading={priority ? 'eager' : 'lazy'}
+        fetchpriority={priority ? 'high' : undefined}
+        decoding={priority ? 'sync' : 'async'}
+      />
+    </picture>
+    <canvas class="model-stage__canvas" data-model-canvas aria-hidden="true"></canvas>
+  </div>
+
+  {caption && (
+    <figcaption class="model-stage__caption">
+      <span class="model-stage__dot" aria-hidden="true"></span>
+      <span>{caption}</span>
+    </figcaption>
+  )}
+</figure>
+
+<style>
+  .model-stage {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line-2);
+    background: var(--ink-1);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.05),
+      0 22px 54px -26px rgb(0 0 0 / 0.72);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .model-stage__viewport {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    background:
+      radial-gradient(62% 58% at 54% 44%, rgb(79 195 247 / 0.095) 0%, transparent 72%),
+      radial-gradient(48% 48% at 72% 62%, rgb(229 169 76 / 0.065) 0%, transparent 70%),
+      linear-gradient(180deg, #111622 0%, #090b10 100%);
+  }
+
+  .model-stage--hero .model-stage__viewport {
+    aspect-ratio: 16 / 11;
+  }
+
+  @media (max-width: 680px) {
+    .model-stage--hero .model-stage__viewport {
+      aspect-ratio: 6 / 5;
+    }
+  }
+
+  .model-stage--card .model-stage__viewport {
+    aspect-ratio: 32 / 21;
+  }
+
+  .model-stage--wide .model-stage__viewport {
+    aspect-ratio: 47 / 20;
+  }
+
+  @media (max-width: 720px) {
+    .model-stage--wide .model-stage__viewport {
+      aspect-ratio: 16 / 10;
+    }
+  }
+
+  .model-stage__poster,
+  .model-stage__poster img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .model-stage__poster {
+    transition: opacity 0.42s var(--ease);
+  }
+
+  .model-stage__canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 0.42s var(--ease);
+  }
+
+  .model-stage.is-live .model-stage__canvas {
+    opacity: 1;
+  }
+
+  .model-stage.is-live .model-stage__poster {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  :global(html.no-gl) .model-stage__canvas {
+    display: none;
+  }
+
+  :global(html.no-gl) .model-stage__poster {
+    opacity: 1 !important;
+  }
+
+  .model-stage__caption {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-top: 1px solid var(--line);
+    background: rgb(12 15 22 / 0.92);
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--fg-dim);
+  }
+
+  .model-stage__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--cyan);
+    box-shadow: 0 0 8px rgb(79 195 247 / 0.65);
+  }
+</style>
+
+<script>
+  import '../scripts/models/boot';
+</script>
