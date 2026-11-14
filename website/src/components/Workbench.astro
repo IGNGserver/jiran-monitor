@@ -1,5 +1,4 @@
 ---
-import SectionHead from './SectionHead.astro';
 import Mark from './Mark.astro';
 import { CONTENT, type Lang } from '../i18n/content';
 import { CLIENT_ICON_URLS } from '../data/icons';
@@ -10,9 +9,15 @@ const t = CONTENT[lang].workbench;
 const zh = lang === 'zh';
 ---
 
-<section class="section section--glow workbench-sec" id="workbench" aria-labelledby="workbench-title">
+<section class="section workbench-sec" id="workbench" data-idx={t.numeral} aria-labelledby="workbench-title">
   <div class="wrap">
-    <SectionHead id="workbench-title" index={t.index} title={t.title} lead={t.lead} />
+    <header class="sec-head reveal">
+      <div class="sec-head__left">
+        <span class="eyebrow">{t.index}</span>
+        <h2 class="sec-title" id="workbench-title">{t.title}</h2>
+      </div>
+      <p class="sec-lead">{t.lead}</p>
+    </header>
 
     <div class="wb-tour reveal" role="group" aria-label={t.scenariosLabel}>
       {t.scenarios.map((sc, idx) => (
@@ -121,8 +126,10 @@ const zh = lang === 'zh';
   .wb-tour {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    margin-bottom: 18px;
+    background: var(--line);
+    border: 1px solid var(--line-2);
+    gap: 1px;
+    margin-bottom: 16px;
   }
 
   @media (max-width: 980px) {
@@ -139,63 +146,59 @@ const zh = lang === 'zh';
 
   .wb-tour__btn {
     text-align: left;
-    padding: 13px 15px;
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: rgb(11 18 34 / 0.68);
+    padding: 14px 16px;
+    border-radius: 0;
+    border: 0;
+    background: var(--ink-1);
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 5px;
-    transition: border-color 0.2s, background 0.2s, transform 0.2s;
+    transition: background 0.18s var(--ease);
   }
 
   .wb-tour__btn:hover {
-    border-color: var(--line-2);
-    background: rgb(16 26 48 / 0.88);
+    background: var(--ink-2);
   }
 
   .wb-tour__btn.is-active {
-    border-color: var(--cyan);
-    background: linear-gradient(180deg, rgb(56 189 248 / 0.14), rgb(10 132 255 / 0.05));
-    box-shadow: 0 0 0 1px rgb(56 189 248 / 0.18) inset;
+    background: var(--ink-3);
+    box-shadow: 0 -2px 0 0 var(--cyan) inset;
   }
 
   .wb-tour__label {
-    font-size: 0.74rem;
-    font-weight: 650;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
     color: var(--cyan);
   }
 
   .wb-tour__desc {
-    font-size: 0.79rem;
-    line-height: 1.45;
+    font-size: 0.78rem;
+    line-height: 1.48;
     color: var(--fg-dim);
   }
 
   /* Fluent 2 真实令牌映射（支持深色与浅色一键切换） */
   .wb-frame {
-    --wb-bg: #141414;
-    --wb-elevated: #202022;
-    --wb-soft: #1a1a1c;
-    --wb-text: #f5f5f7;
-    --wb-muted: #a8afb8;
-    --wb-line: #34363c;
-    --wb-brand: #479ef5;
-    --wb-brand-bg: rgba(71, 158, 245, 0.14);
-    --wb-bar: #3b82f6;
-    --wb-good: #54b054;
-    --wb-warn: #faa06b;
-    --wb-bad: #dc626d;
+    --wb-bg: #121316;
+    --wb-elevated: #1b1d22;
+    --wb-soft: #16181d;
+    --wb-text: #f2f4f8;
+    --wb-muted: #9ca3af;
+    --wb-line: #2c3038;
+    --wb-brand: #56ccf2;
+    --wb-brand-bg: rgba(86, 204, 242, 0.13);
+    --wb-bar: #56ccf2;
+    --wb-good: #56ccf2;
+    --wb-warn: #e5a94c;
+    --wb-bad: #ef5a52;
 
-    border-radius: 16px;
-    border: 1px solid rgb(148 184 255 / 0.22);
+    border-radius: 2px;
+    border: 1px solid var(--line-2);
     background: var(--wb-bg);
     color: var(--wb-text);
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / 0.08) inset,
-      0 32px 80px -24px rgb(0 0 0 / 0.85),
-      0 0 60px -20px rgb(10 132 255 / 0.22);
+    box-shadow: 0 36px 90px -28px rgb(0 0 0 / 0.92);
     overflow: hidden;
   }
 
@@ -209,9 +212,9 @@ const zh = lang === 'zh';
     --wb-brand: #0f6cbd;
     --wb-brand-bg: #ebf3fc;
     --wb-bar: #0f6cbd;
-    --wb-good: #107c10;
-    --wb-warn: #bc4b09;
-    --wb-bad: #b10e1c;
+    --wb-good: #0f6cbd;
+    --wb-warn: #b45309;
+    --wb-bad: #b91c1c;
   }
 
   .wb-window-bar {
@@ -220,39 +223,41 @@ const zh = lang === 'zh';
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 10px 16px;
-    background: #0b0f19;
-    color: #cbd5e1;
-    border-bottom: 1px solid rgb(148 184 255 / 0.14);
+    padding: 9px 16px;
+    background: #080a0e;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--line-2);
   }
 
   .wb-traffic {
     display: inline-flex;
-    gap: 7px;
+    gap: 6px;
   }
 
   .wb-traffic span {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #334155;
+    width: 8px;
+    height: 8px;
+    border-radius: 1px;
+    background: #272b34;
+    border: 1px solid rgb(255 255 255 / 0.14);
   }
-  .wb-traffic span:nth-child(1) { background: #ef4444; }
-  .wb-traffic span:nth-child(2) { background: #f59e0b; }
-  .wb-traffic span:nth-child(3) { background: #10b981; }
+  .wb-traffic span:nth-child(1) { background: rgb(255 255 255 / 0.22); }
+  .wb-traffic span:nth-child(2) { background: rgb(229 169 76 / 0.45); }
+  .wb-traffic span:nth-child(3) { background: rgb(86 204 242 / 0.55); }
 
   .wb-demo-pill {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    font-size: 0.7rem;
-    color: #94a3b8;
+    gap: 8px;
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    color: var(--fg-dim);
   }
 
   .wb-demo-dot {
     width: 6px;
     height: 6px;
-    border-radius: 50%;
+    border-radius: 1px;
     background: var(--cyan);
     box-shadow: 0 0 8px var(--cyan);
   }
@@ -265,11 +270,11 @@ const zh = lang === 'zh';
 
   .wb-ctrl-btn {
     padding: 3px 9px;
-    border-radius: 5px;
-    border: 1px solid rgb(148 184 255 / 0.22);
-    background: rgb(15 23 42 / 0.9);
-    color: #e2e8f0;
-    font-size: 0.7rem;
+    border-radius: 2px;
+    border: 1px solid var(--line-2);
+    background: var(--ink-2);
+    color: var(--fg);
+    font-size: 0.69rem;
     cursor: pointer;
   }
 

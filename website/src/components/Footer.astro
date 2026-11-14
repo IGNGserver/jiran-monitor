@@ -3,7 +3,9 @@ import Mark from './Mark.astro';
 import { CONTENT, LANGS, type Lang } from '../i18n/content';
 import { DOCS, RELEASES_URL, REPO_URL } from '../data/product';
 
-interface Props { lang: Lang }
+interface Props {
+  lang: Lang;
+}
 const { lang } = Astro.props;
 const t = CONTENT[lang].footer;
 const nav = CONTENT[lang].nav;
@@ -14,8 +16,9 @@ const sw = LANGS[lang];
   <div class="wrap site-foot__grid">
     <div class="site-foot__brand">
       <a class="site-foot__logo" href="#top">
-        <Mark size={30} />
+        <Mark size={28} />
         <span>{nav.brand}</span>
+        <span class="site-foot__cal mono">CAL. JR-01</span>
       </a>
       <p class="site-foot__tag">{t.tagline}</p>
       <p class="site-foot__meta mono">{t.mit}</p>
@@ -28,10 +31,10 @@ const sw = LANGS[lang];
     <div class="site-foot__col">
       <h3 class="mono">{t.colProduct}</h3>
       <ul>
+        <li><a href="#anatomy">{nav.anatomy}</a></li>
         <li><a href="#workbench">{nav.workbench}</a></li>
-        <li><a href="#capabilities">{nav.capabilities}</a></li>
         <li><a href="#architecture">{nav.architecture}</a></li>
-        <li><a href="#principles">{nav.principles}</a></li>
+        <li><a href="#sources">{nav.sources}</a></li>
         <li><a href="#install">{nav.download}</a></li>
       </ul>
     </div>
@@ -63,8 +66,10 @@ const sw = LANGS[lang];
 
 <style>
   .site-foot {
+    position: relative;
+    z-index: 2;
     border-top: 1px solid var(--line);
-    background: #04070f;
+    background: #040507;
     padding-block: clamp(52px, 7vw, 84px);
   }
 
@@ -96,32 +101,44 @@ const sw = LANGS[lang];
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    font-weight: 750;
-    font-size: 1.12rem;
+    font-weight: 560;
+    font-size: 1.06rem;
     text-decoration: none;
   }
 
+  .site-foot__cal {
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+    padding: 1px 6px;
+    border: 1px solid var(--line-2);
+    color: var(--fg-faint);
+  }
+
   .site-foot__tag {
-    font-size: 0.88rem;
+    font-size: 0.86rem;
     color: var(--fg-dim);
     max-width: 34ch;
   }
 
   .site-foot__meta {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: var(--fg-faint);
   }
 
   .site-foot__credit {
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     color: var(--fg-faint);
   }
 
+  .site-foot__credit a {
+    color: var(--fg-dim);
+  }
+
   .site-foot__col h3 {
-    font-size: 0.72rem;
-    letter-spacing: 0.12em;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: var(--cyan);
+    color: var(--fg-faint);
     margin-bottom: 12px;
   }
 
@@ -129,7 +146,7 @@ const sw = LANGS[lang];
     display: flex;
     flex-direction: column;
     gap: 8px;
-    font-size: 0.85rem;
+    font-size: 0.84rem;
     color: var(--fg-dim);
   }
 

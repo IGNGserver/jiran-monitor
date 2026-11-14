@@ -1,20 +1,15 @@
 {
-  "name": "Jiran Computational Telemetry",
+  "$comment": "计然官网与时序账本计量核 JR-01 的共享色板镜像（真源见 design/meter.json）。所有底色均为无彩消色差黑曜暗室灰阶；冰青仅用于 Token 遥测与配额圆弧，香槟金仅用于货币成本与独立原生 Credits。",
   "palette": {
-    "void": "#04070f",
-    "bg": "#060a14",
-    "bg2": "#0a1020",
-    "surface": "#0d1527",
-    "ink": "#f1f5f9",
-    "inkDim": "#94a3b8",
-    "inkFaint": "#64748b",
-    "cyan": "#38bdf8",
-    "cobalt": "#0a84ff",
-    "cobaltDeep": "#0055d4",
-    "violet": "#a78bfa",
-    "teal": "#2dd4bf",
-    "amber": "#fbbf24",
-    "emerald": "#34d399",
-    "rose": "#fb7185"
+    "void": "#050608",
+    "bg": "#050608",
+    "surface": "#0b0d12",
+    "elevated": "#11141a",
+    "ink": "#edf0f5",
+    "inkDim": "#9aa1ae",
+    "inkFaint": "#5e6572",
+    "cyan": "#56ccf2",
+    "brass": "#e5a94c",
+    "danger": "#ef5a52"
   }
 }

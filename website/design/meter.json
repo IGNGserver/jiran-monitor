@@ -1,0 +1,143 @@
+{
+  "$comment": "计然「时序账本计量核 JR-01（Chrono-Ledger Core）」的唯一几何与配色真源。Blender 构建脚本（design/blender/build_meter.py）与站点 Three.js 舞台（src/scripts/meter/）共用本定义。单位：米。Blender 竖直轴为 Z，导出 glTF 后映射为 Three.js 的 Y：(x, y, z)_blender -> (x, z, -y)_three。",
+  "palette": {
+    "void": "#050608",
+    "graphite": "#11141a",
+    "anodized": "#20242c",
+    "steel": "#aeb6c2",
+    "platinum": "#edf0f5",
+    "cyan": "#56ccf2",
+    "brass": "#e5a94c",
+    "copper": "#b87a4b",
+    "danger": "#ef5a52"
+  },
+  "radius": 1.0,
+  "seam": 0.018,
+  "explode": 0.68,
+  "layers": [
+    {
+      "id": "ingest",
+      "code": "INGEST · ZERO-EGRESS IRIS",
+      "labelZh": "防抖采集与零外泄光阑",
+      "labelEn": "Debounce & Zero-Egress Iris",
+      "h": 0.24
+    },
+    {
+      "id": "prism",
+      "code": "5-WAY PRISM · PROVENANCE",
+      "labelZh": "五维分光棱镜与出处刻度",
+      "labelEn": "5-Way Token Prism & Provenance",
+      "h": 0.22
+    },
+    {
+      "id": "drum",
+      "code": "COAXIAL ODOMETER · FX",
+      "labelZh": "同轴双鼓里程表与单价差速轮",
+      "labelEn": "Coaxial Odometer & Cost Gear",
+      "h": 0.30
+    },
+    {
+      "id": "credits",
+      "code": "OFF-AXIS CREDITS · VAULT",
+      "labelZh": "偏心悬臂原生积分副盘",
+      "labelEn": "Off-Axis Native Credits Dial",
+      "h": 0.22
+    },
+    {
+      "id": "quota",
+      "code": "DUAL-ARC QUOTA CROWN",
+      "labelZh": "蓝宝石双弧配额表圈",
+      "labelEn": "Sapphire Dual-Arc Quota Crown",
+      "h": 0.16
+    }
+  ],
+  "clusters": [
+    {
+      "id": "mac",
+      "label": "MacBook-Pro-M4",
+      "nodes": [
+        [-3.4, 0.9, 1.0],
+        [-4.5, 2.0, 1.0]
+      ]
+    },
+    {
+      "id": "wsl",
+      "label": "Win11 + WSL2",
+      "nodes": [
+        [3.0, -0.8, 1.0],
+        [4.1, 0.2, 1.0],
+        [3.6, -1.8, 1.0]
+      ]
+    },
+    {
+      "id": "gpu",
+      "label": "Ubuntu-GPU-Node",
+      "nodes": [
+        [2.4, 3.4, 1.0],
+        [3.7, 4.3, 1.0],
+        [1.5, 4.5, 1.0]
+      ]
+    },
+    {
+      "id": "stale",
+      "label": "ThinkPad-Arch (>10m Stale)",
+      "nodes": [
+        [-2.4, 4.0, 0.45],
+        [-3.6, 4.9, 0.45]
+      ]
+    }
+  ],
+  "waves": {
+    "$comment": "84 日量化账本波面：h(x,y,t) = Σ amp·sin(k·(dir·p)+speed·t+phase) + 中心防抖采样涟漪。Blender 静帧取 t=0。",
+    "size": 32,
+    "res": 216,
+    "z": -1.42,
+    "components": [
+      {
+        "dir": [1.0, 0.32],
+        "k": 0.56,
+        "amp": 0.14,
+        "speed": 0.52,
+        "phase": 0.0
+      },
+      {
+        "dir": [-0.38, 1.0],
+        "k": 0.92,
+        "amp": 0.075,
+        "speed": 0.76,
+        "phase": 1.25
+      },
+      {
+        "dir": [0.72, -0.68],
+        "k": 1.65,
+        "amp": 0.032,
+        "speed": 1.18,
+        "phase": 2.15
+      }
+    ],
+    "ripple": {
+      "amp": 0.068,
+      "k": 2.45,
+      "speed": 1.55,
+      "decay": 0.18
+    }
+  },
+  "camera": {
+    "$comment": "Blender 坐标（Z 向上）。站点端换算为 Y 向上：(x, z, -y)。shiftX 正值表示模型在画面中偏右，Blender 中对应 camera.shift_x = -shiftX。",
+    "hero": {
+      "distance": 8.1,
+      "elevation": 16,
+      "azimuth": -26,
+      "lens": 40,
+      "target": [0, 0, 0.62],
+      "shiftX": 0.13
+    },
+    "explode": {
+      "distance": 10.4,
+      "elevation": 21,
+      "azimuth": -32,
+      "lens": 46,
+      "target": [0, 0, 1.95]
+    }
+  }
+}
