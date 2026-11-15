@@ -116,6 +116,8 @@ const {
 const {
   applyMacosGlass,
   clearMacosGlass,
+  syncMacosMinimizeBacking,
+  restoreMacosMinimizeBacking,
   macosLiquidGlassSupported
 } = require('./macosGlassNative');
 const { configureLinuxDisplayBackend } = require('./linuxDisplay');
@@ -1020,6 +1022,19 @@ function macosLiquidGlassIsAvailable() {
   }) && macosLiquidGlassSupported();
 }
 
+function macosMinimizeBackingOptions(win, source = settings) {
+  const overrideSource = source === settings ? null : source;
+  return {
+    fullScreen: Boolean(win.isFullScreen?.()),
+    getBackgroundHex: () => resolveNativeSurface(overrideSource || settings).background,
+    onRestore: () => {
+      if (win.isDestroyed?.()) return;
+      applyNativeTheme(win, settings);
+      applyNativeMaterialToWindow(win, settings);
+    }
+  };
+}
+
 function applyNativeMaterialToWindow(win, source = settings) {
   if (!win || win.isDestroyed?.()) return;
   const enabled = nativeBlurEnabled(source);
@@ -1027,11 +1042,15 @@ function applyNativeMaterialToWindow(win, source = settings) {
     const style = enabled ? macosGlassStyleFor(source) : null;
     if (style === MACOS_GLASS_LIQUID && applyMacosGlass(win, style)) {
       if (typeof win.setVibrancy === 'function') win.setVibrancy(null);
+      syncMacosMinimizeBacking(win, macosMinimizeBackingOptions(win, source));
       return;
     }
-    clearMacosGlass(win);
+    clearMacosGlass(win, { keepMinimizeBacking: enabled });
     if (typeof win.setVibrancy === 'function') {
       win.setVibrancy(enabled ? 'under-window' : null);
+    }
+    if (enabled) {
+      syncMacosMinimizeBacking(win, macosMinimizeBackingOptions(win, source));
     }
   }
   // Windows: backgroundMaterial is locked in at window creation. setBackgroundMaterial('none')
@@ -3153,6 +3172,13 @@ function createWindow(boundsOverride, options = {}) {
   });
   applyWindowSettings();
   applyNativeMaterial();
+  const restoreMinimizeBackingOnReveal = () => {
+    if (process.platform === 'darwin' && !win.isDestroyed?.() && !win.isMinimized?.()) {
+      restoreMacosMinimizeBacking(win);
+    }
+  };
+  win.on('show', restoreMinimizeBackingOnReveal);
+  win.on('restore', restoreMinimizeBackingOnReveal);
   win.on('show', replayDeferredStatsPush);
   win.on('restore', replayDeferredStatsPush);
   win.on('enter-full-screen', () => {
