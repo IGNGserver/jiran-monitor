@@ -61,7 +61,10 @@ function headlessPackageJson() {
     description: 'Headless Jiran collector: scans local AI tool usage and posts it to a Docker Compose Hub.',
     main: 'src/agent/agent.js',
     bin: { 'jiran-agent': 'src/agent/agent.js' },
-    scripts: { start: 'node src/agent/agent.js', once: 'node src/agent/agent.js --once' },
+    scripts: {
+      start: 'node --max-old-space-size=192 src/agent/agent.js',
+      once: 'node --max-old-space-size=192 src/agent/agent.js --once'
+    },
     dependencies,
     engines: packageJson.engines
   };

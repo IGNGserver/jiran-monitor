@@ -89,11 +89,24 @@ function createCollectorProcess({
     }
   }
 
+  // The live daily archive only reads today's scalar and client/model totals;
+  // omit sessions and projects so hundreds of KB are not structured-cloned back
+  // across the IPC port on every tick.
+  function slimTodayForAck(today) {
+    if (!today || typeof today !== 'object') return today ?? null;
+    const { sessions: _sessions, projects: _projects, ...rest } = today;
+    return rest;
+  }
+
   function onMessage(message) {
     if (!message || typeof message !== 'object') return;
     if (message.type === 'oneshotResult') {
       if (message.ok) settleOneshot(message.id, null, message.value);
       else settleOneshot(message.id, reviveError(message.error));
+      return;
+    }
+    if (message.type === 'log' && message.runtimeId == null) {
+      try { log(message.message); } catch (_) {}
       return;
     }
     const entry = runtimes.get(message.runtimeId);
@@ -106,7 +119,7 @@ function createCollectorProcess({
           .then(() => options.onUpdate?.(message.summary, message.reason))
           .then((transformed) => {
             const source = transformed && typeof transformed === 'object' ? transformed : message.summary;
-            visible = { updatedAt: source?.updatedAt ?? null, today: source?.today ?? null };
+            visible = { updatedAt: source?.updatedAt ?? null, today: slimTodayForAck(source?.today) };
           })
           .catch((error) => { try { options.onError?.(error, message.reason); } catch (_) {} })
           .finally(() => {
@@ -254,9 +267,18 @@ function createCollectorProcess({
     });
   }
 
+  function reloadSessionArchive() {
+    send({ type: 'reloadSessionArchive' });
+  }
+
+  function flushTransform() {
+    send({ type: 'flushTransform' });
+  }
+
   function dispose() {
     disposed = true;
     if (restartTimer) clearTimeoutFn(restartTimer);
+    send({ type: 'flushTransform' });
     for (const [runtimeId, entry] of runtimes) {
       settleCalls(entry, false);
       send({ type: 'stop', runtimeId, options: {} });
@@ -272,9 +294,15 @@ function createCollectorProcess({
   return {
     createUsageRuntime,
     dispose,
+    flushTransform,
+    reloadSessionArchive,
     run,
     get pid() { return child?.pid ?? null; }
   };
 }
 
-module.exports = { createCollectorProcess, serializableOptions };
+module.exports = { createCollectorProcess, serializableOptions, slimTodayForAck: (today) => {
+  if (!today || typeof today !== 'object') return today ?? null;
+  const { sessions: _sessions, projects: _projects, ...rest } = today;
+  return rest;
+} };

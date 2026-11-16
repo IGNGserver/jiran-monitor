@@ -13,6 +13,8 @@ function createAgentDeviceRuntime(options = {}, deps = {}, overrides = {}) {
     ? makeSyncUploadSink({
         upload: options.deliver,
         intervalMs: options.syncUploadIntervalMs,
+        watchIntervalMs: options.watchUploadIntervalMs,
+        dedupeWatchUnchanged: options.dedupeWatchUnchanged === true,
         flushTimeoutMs: options.uploadTimeoutMs,
         onError: options.uploadOnError
       })
@@ -22,6 +24,7 @@ function createAgentDeviceRuntime(options = {}, deps = {}, overrides = {}) {
     envelope: options.envelope,
     usageOptions: overrides.usageOptions || options.usageOptions,
     transformUsage: options.transformUsage,
+    retainSnapshot: overrides.retainSnapshot ?? options.retainSnapshot ?? false,
     sink,
     onRecord: overrides.onRecord || options.onRecord,
     onError: options.onError

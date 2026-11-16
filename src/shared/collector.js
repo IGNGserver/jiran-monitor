@@ -1952,12 +1952,30 @@ async function collectUsageOnce(options) {
   // record below. Probing twice cost a second pass over every client's roots —
   // including the per-workspace walk Copilot needs — and let one snapshot report
   // a directory as both present and absent when it appeared between the two.
-  const sourceChecks = clientSourceChecks(normalizedClients, {
-    homeDir: options.homeDir,
-    platform: platformValue,
-    env: options.env || process.env,
-    wslDetected: wslStatus?.detected
-  });
+  // On targeted watch ticks, re-probe only the changed clients and merge into
+  // the anchored map so unrelated roots (such as Copilot's workspaceStorage tree)
+  // are not walked every 1.5s.
+  const allTrackedClientIds = normalizedClients ? normalizedClients.split(',').filter(Boolean) : [];
+  const canReuseAnchoredSourceChecks = Boolean(
+    anchorUsed
+    && targetRequested
+    && !options.refreshWsl
+    && anchor?.sourceChecks
+    && typeof anchor.sourceChecks === 'object'
+    && allTrackedClientIds.every((id) => Object.prototype.hasOwnProperty.call(anchor.sourceChecks, id))
+  );
+  const probedSourceChecks = clientSourceChecks(
+    canReuseAnchoredSourceChecks ? targetClients.join(',') : normalizedClients,
+    {
+      homeDir: options.homeDir,
+      platform: platformValue,
+      env: options.env || process.env,
+      wslDetected: wslStatus?.detected
+    }
+  );
+  const sourceChecks = canReuseAnchoredSourceChecks
+    ? { ...anchor.sourceChecks, ...probedSourceChecks }
+    : probedSourceChecks;
 
   const summary = {
     deviceId,
@@ -2016,6 +2034,7 @@ async function collectUsageOnce(options) {
       qoderPeriods,
       wslBundle,
       wslStatus,
+      sourceChecks,
       ...(summary.nativeSessions ? { nativeSessions: summary.nativeSessions } : {}),
       ...(summary.nativeProjects ? { nativeProjects: summary.nativeProjects } : {})
     });
@@ -4005,6 +4024,7 @@ function startCollector(options) {
           allTime: captured.windowsPeriods.allTime,
           todayPartitions: captured.todayPartitions,
           qoderPeriods: captured.qoderPeriods,
+          ...(captured.sourceChecks ? { sourceChecks: captured.sourceChecks } : {}),
           ...(captured.nativeSessions ? { nativeSessions: captured.nativeSessions } : {}),
           ...(captured.nativeProjects ? { nativeProjects: captured.nativeProjects } : {})
         };
@@ -4053,6 +4073,7 @@ function startCollector(options) {
         // Keep the rolling per-client today partitions fresh for targeted
         // watch ticks. WSL stays independently frozen between interval ticks.
         if (captured.todayPartitions) anchor.todayPartitions = captured.todayPartitions;
+        if (captured.sourceChecks) anchor.sourceChecks = captured.sourceChecks;
         // Each client's own snapshot advances independently: one site's failed
         // read must not freeze the other site's month/allTime derivation, and
         // must not let a partial today partition become its delta base.

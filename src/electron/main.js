@@ -72,12 +72,12 @@ const { normalizeCurrency, resolveEffectiveRates, configureRates } = require('..
 const { fetchRates, isCacheStale } = require('../shared/exchangeRates');
 const { aggregateDevices, aggregateHistory } = require('../shared/usage');
 const { fetchBufferedWithTimeout, fetchWithTimeout } = require('../shared/http');
-const { postSyncPayload } = require('../shared/syncPayload');
+const { createSyncHistoryTracker, postSyncPayload } = require('../shared/syncPayload');
 const { renameDeviceOnHub, readDeviceIdentity, writeDeviceIdentity } = require('../shared/deviceIdentity');
 // Collection cadence is no longer configurable — see src/shared/collectorConfig.js.
 const { createSyncUploadSink } = require('../shared/syncUploadSink');
 const { createSyncSummaryTransformer } = require('../shared/syncSummary');
-const { learnFleetTimeZone, normalizeTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
+const { learnFleetTimeZone, localTodayKey, normalizeTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
 const { mergedLocalAllTimeSessions } = require('../shared/localSessions');
 const { historyPreview, historyRevision } = require('../shared/history');
 const { readSessionDetail } = require('../shared/sessionDetail');
@@ -193,6 +193,9 @@ const SSE_RETRY_BASE_MS = 1000;
 const SSE_RETRY_MAX_MS = 30 * 1000;
 const SYNC_REST_POLL_MS = 60 * 1000;
 const SYNC_RECOVERY_TIMEOUT_MS = 20 * 1000;
+const DEFAULT_WATCH_UPLOAD_INTERVAL_MS = 5000;
+const DEFAULT_HIDDEN_WINDOW_IDLE_MS = 5 * 60 * 1000;
+const MAX_CUSTOM_RANGE_CACHE = 16;
 // View ids the shared UI knows; the app menu navigates by these. `accounts` and
 // `management` stay accepted because they are still reachable from persisted
 // view state and older native calls — the renderer redirects both to `settings`.
@@ -209,6 +212,24 @@ let credentialStorageErrorShown = false;
 let deviceIdentity = null;
 let rendererViewState = normalizeInitialRendererViewState();
 let initialWindowCreated = false;
+let idleWindowParkedInTray = false;
+let hiddenWindowIdleTimer = null;
+const customRangeCache = new Map();
+const desktopSyncHistoryTracker = createSyncHistoryTracker();
+
+function resolveDesktopWatchUploadIntervalMs() {
+  const raw = process.env.TOKEN_MONITOR_SYNC_UPLOAD_INTERVAL_MS ?? process.env.JIRAN_SYNC_UPLOAD_INTERVAL_MS;
+  if (raw === undefined || String(raw).trim() === '') return DEFAULT_WATCH_UPLOAD_INTERVAL_MS;
+  return normalizeSyncUploadIntervalMs(raw);
+}
+
+function resolveHiddenWindowIdleMs() {
+  const raw = process.env.TOKEN_MONITOR_HIDDEN_WINDOW_IDLE_MS ?? process.env.JIRAN_HIDDEN_WINDOW_IDLE_MS;
+  if (raw === undefined || String(raw).trim() === '') return DEFAULT_HIDDEN_WINDOW_IDLE_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_HIDDEN_WINDOW_IDLE_MS;
+  return Math.trunc(parsed);
+}
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId('com.igng.tokenmonitor');
@@ -418,7 +439,7 @@ function normalizeDeviceIdValue(value, fallback = '') {
 
 
 function electronUsageConfig(errorPrefix) {
-  return usageConfigFromSettings(settings, {
+  const base = usageConfigFromSettings(settings, {
     agentVersion: appVersion(),
     agentRuntime: 'electron-widget',
     commandTimeoutMs: 120 * 1000,
@@ -427,6 +448,10 @@ function electronUsageConfig(errorPrefix) {
     onError: (error, reason) => console.log(`[${errorPrefix}] ${reason}: ${error.message}`),
     logger: (message) => console.log(`[${errorPrefix}] ${message}`)
   });
+  return {
+    ...base,
+    hostSyncTransform: Boolean(collectorRuntimeDeps().createUsageRuntime)
+  };
 }
 
 
@@ -914,6 +939,7 @@ function ensureDeviceIdentityLoaded() {
 
 const syncSummaryTransformer = createSyncSummaryTransformer({
   canWriteSessionUsageArchive: () => !isExternalAgentActive(),
+  writeThrottleMs: 30 * 1000,
   // The archive is keyed by the active fleet calendar; the transformer resolves
   // it per transform so a zone learned from the Hub takes effect without a
   // restart (a change also drops its in-memory copy).
@@ -922,6 +948,10 @@ const syncSummaryTransformer = createSyncSummaryTransformer({
 });
 
 function summaryForSync(summary, reason, meta) {
+  if (summary && typeof summary === 'object' && summary.__hostTransformed === true) {
+    const { __hostTransformed: _ignored, ...rest } = summary;
+    return rest;
+  }
   return syncSummaryTransformer.transform(summary, reason, meta);
 }
 
@@ -1062,7 +1092,30 @@ function applyNativeMaterial(source = settings) {
   applyNativeMaterialToWindow(mainWindow, source);
 }
 
+const singleDeviceHistoryPreviewCache = new WeakMap();
+
 function withHistoryPreview(stats, devices) {
+  if (Array.isArray(devices) && devices.length === 1 && devices[0]?.history && typeof devices[0].history === 'object') {
+    const historyObj = devices[0].history;
+    const zoneKey = String(normalizeTimeZone(devices[0]?.periodWindows?.timeZone) || '');
+    let byZone = singleDeviceHistoryPreviewCache.get(historyObj);
+    let cached = byZone?.get(zoneKey);
+    if (!cached) {
+      const aggregated = aggregateHistory(devices);
+      cached = {
+        preview: historyPreview(aggregated),
+        revision: historyRevision(aggregated)
+      };
+      if (!byZone) {
+        byZone = new Map();
+        singleDeviceHistoryPreviewCache.set(historyObj, byZone);
+      }
+      byZone.set(zoneKey, cached);
+    }
+    stats.historyPreview = cached.preview;
+    stats.historyRevision = cached.revision;
+    return stats;
+  }
   const history = aggregateHistory(devices);
   stats.historyPreview = historyPreview(history);
   stats.historyRevision = historyRevision(history);
@@ -1103,6 +1156,12 @@ let desktopSnapshotCacheWriteInFlight = false;
 let desktopSnapshotCacheWriteDirty = false;
 let desktopSnapshotCacheLastWriteAt = 0;
 
+function materializeLocalSnapshotCacheStats() {
+  if (desktopSnapshotCache?.local && !desktopSnapshotCache.local.stats && desktopSnapshotCache.local.device) {
+    desktopSnapshotCache.local.stats = buildLocalStatsForDevice(desktopSnapshotCache.local.device);
+  }
+}
+
 function queueDesktopSnapshotCacheWrite() {
   desktopSnapshotCacheWriteDirty = true;
   if (desktopSnapshotCacheWriteTimer !== null || desktopSnapshotCacheWriteInFlight) return;
@@ -1119,6 +1178,7 @@ async function runDesktopSnapshotCacheWrite() {
   desktopSnapshotCacheLastWriteAt = Date.now();
   try {
     ensureDesktopSnapshotCacheLoaded();
+    materializeLocalSnapshotCacheStats();
     await writeDesktopSnapshotCacheAsync(desktopSnapshotCachePath(), desktopSnapshotCache);
   } catch (error) {
     // Cache persistence is best effort. A permission failure must not stop
@@ -1138,6 +1198,7 @@ function flushDesktopSnapshotCache() {
   desktopSnapshotCacheWriteDirty = false;
   if (!desktopSnapshotCacheLoaded || !desktopSnapshotCache) return;
   try {
+    materializeLocalSnapshotCacheStats();
     desktopSnapshotCache = writeDesktopSnapshotCache(desktopSnapshotCachePath(), desktopSnapshotCache);
   } catch (error) {
     console.warn(`[snapshot-cache] final write failed: ${error.message}`);
@@ -1146,13 +1207,13 @@ function flushDesktopSnapshotCache() {
 
 function cacheLocalSnapshot({ history = null } = {}) {
   ensureDesktopSnapshotCacheLoaded();
-  if (!localStats && !lastCollectedDevice) return;
+  if (!localStats && !lastCollectedDevice && !localDevice) return;
   const capturedAt = new Date().toISOString();
   // References, not copies: the entry is serialized when it is written, and
-  // the objects are the same read model the renderer is being served.
+  // while the window is hidden `stats` stays null until the 30s write or reveal.
   desktopSnapshotCache.local = {
     capturedAt,
-    stats: localStats || localDeviceStats(lastCollectedDevice),
+    stats: localStats || null,
     device: lastCollectedDevice || localDevice || null,
     history: history || null
   };
@@ -1172,6 +1233,10 @@ function cacheHubSnapshot({ history = null } = {}) {
   queueDesktopSnapshotCacheWrite();
 }
 
+function isMainWindowHidden() {
+  return !mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized();
+}
+
 // Local-mode stats for one device (or none). The device's own periodWindows
 // names the calendar its today/month are keyed in — the fleet zone once this
 // device has aligned — so the renderer computes preset windows in the same one.
@@ -1185,17 +1250,21 @@ function localDeviceStats(device) {
   return stats;
 }
 
+function buildLocalStatsForDevice(device) {
+  if (!device) return emptyDesktopStats();
+  return reattachLocalNativeView(localDeviceStats(device), device);
+}
+
 function emptyDesktopStats() {
   return localDeviceStats(null);
 }
 
 function localFallbackStats() {
   if (localStats) return localStats;
-  if (lastCollectedDevice) {
-    return reattachLocalNativeView(
-      localDeviceStats(lastCollectedDevice),
-      lastCollectedDevice
-    );
+  const sourceDevice = localDevice || lastCollectedDevice;
+  if (sourceDevice) {
+    localStats = buildLocalStatsForDevice(sourceDevice);
+    return localStats;
   }
   return emptyDesktopStats();
 }
@@ -1452,6 +1521,8 @@ async function postToHub(summary, context = {}) {
   const { response } = await postSyncPayload(fetch, url, {
     headers: { 'content-type': 'application/json', ...(secret ? { authorization: `Bearer ${secret}` } : {}) },
     summary,
+    historyTracker: desktopSyncHistoryTracker,
+    gzip: latestHubStats?.capabilities?.gzipIngest === true ? true : undefined,
     signal: context.signal,
     timeoutMs: HUB_REQUEST_TIMEOUT_MS,
     logger: (message) => console.log(`[sync] ${message}`)
@@ -1530,6 +1601,8 @@ function startSyncCollector(options) {
     .catch((error) => ({ ok: false, code: stableSyncFailureCode(error, 'hub_connectivity_failed') }));
   const syncUploadSink = createSyncUploadSink({
     intervalMs: normalizeSyncUploadIntervalMs(),
+    watchIntervalMs: resolveDesktopWatchUploadIntervalMs(),
+    dedupeWatchUnchanged: true,
     flushTimeoutMs: HUB_REQUEST_TIMEOUT_MS,
     upload: async (summary, context) => {
       await startupProbe;
@@ -1558,13 +1631,11 @@ function startSyncCollector(options) {
     beforeEnqueue: (visibleSummary) => {
       if (isExternalAgentActive()) {
         syncSummaryTransformer.reloadSessionUsageArchive();
+        collectorProcess?.reloadSessionArchive?.();
         return false;
       }
       lastCollectedDevice = { ...visibleSummary, receivedAt: new Date().toISOString() };
-      localStats = reattachLocalNativeView(
-        localDeviceStats(lastCollectedDevice),
-        lastCollectedDevice
-      );
+      localStats = isMainWindowHidden() ? null : buildLocalStatsForDevice(lastCollectedDevice);
       localStatsLive = true;
       cacheLocalSnapshot();
       if (latestHubStats || lastCollectedDevice) {
@@ -1856,16 +1927,16 @@ function startLocalCollector() {
       const visibleSummary = summary;
       localDevice = { ...visibleSummary, receivedAt: new Date().toISOString() };
       lastCollectedDevice = localDevice;
-      // aggregateDevices() drops the Reasonix native view (it is a wire-record
-      // whitelist), so reattach it here — otherwise local mode, the default, has
-      // no Reasonix sessions or projects at all while sync mode does.
-      localStats = reattachLocalNativeView(
-        localDeviceStats(localDevice),
-        localDevice
-      );
+      // Defer aggregateDevices() + native-view reattachment while hidden in the
+      // tray; the thunk builds localStats once when the window returns.
+      localStats = isMainWindowHidden() ? null : reattachLocalNativeView(localDeviceStats(localDevice), localDevice);
       localStatsLive = true;
       cacheLocalSnapshot();
-      sendPush({ event: 'stats', data: { type: 'stats', reason, stats: localStats, at: new Date().toISOString() } });
+      sendPush({
+        event: 'stats',
+        data: { type: 'stats', reason, at: new Date().toISOString() },
+        composeStats: () => localFallbackStats()
+      });
       updateSyncHealth('local', { state: 'ok', lastSuccessAt: new Date().toISOString(), failureCode: null });
       sendStatus(true, { reason });
     },
@@ -2219,13 +2290,49 @@ async function startStatsStream(options = {}) {
 
 
 
+function clearHiddenWindowIdleTeardown() {
+  if (hiddenWindowIdleTimer !== null) {
+    clearTimeout(hiddenWindowIdleTimer);
+    hiddenWindowIdleTimer = null;
+  }
+}
+
+function armHiddenWindowIdleTeardown(win = mainWindow) {
+  clearHiddenWindowIdleTeardown();
+  const idleMs = resolveHiddenWindowIdleMs();
+  if (idleMs <= 0) return;
+  if (!win || win.isDestroyed?.() || win.isVisible?.()) return;
+  if (quitRequested || settings?.closeToTray === false) return;
+  if (!applicationTray || applicationTray.isDestroyed?.()) return;
+  hiddenWindowIdleTimer = setTimeout(() => {
+    hiddenWindowIdleTimer = null;
+    if (quitRequested || !win || win.isDestroyed?.() || win !== mainWindow) return;
+    if (win.isVisible?.() || settings?.closeToTray === false) return;
+    if (!applicationTray || applicationTray.isDestroyed?.()) return;
+    if (deriveAppUpdateState().installBusy) {
+      armHiddenWindowIdleTeardown(win);
+      return;
+    }
+    idleWindowParkedInTray = true;
+    statsPushDeferred = false;
+    deferredStatsCompose = null;
+    mainWindow = null;
+    clearMacosGlass(win);
+    try { win.destroy(); } catch (_) {}
+  }, idleMs);
+  hiddenWindowIdleTimer.unref?.();
+}
+
 function focusExistingWindow() {
+  idleWindowParkedInTray = false;
+  clearHiddenWindowIdleTeardown();
   if (!mainWindow || mainWindow.isDestroyed()) {
-    createWindow();
+    createWindow(undefined, { waitForContent: true });
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
+  mainWindow.focus?.();
 }
 
 
@@ -2280,7 +2387,6 @@ function pushSettingsToRenderer() {
 
 
 
-
 function sendMainWindowEvent(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const send = () => {
@@ -2314,6 +2420,7 @@ function openSharedUiView(viewId) {
 function startMode() {
   // Tear down collectors synchronously so they can't double-run while the
   // async reconciliation below is queued.
+  customRangeCache.clear();
   stopLocalCollector();
   stopStatsStream();
   stopRestBootstrap();
@@ -2326,6 +2433,7 @@ function startMode() {
       return { ok: false, superseded: true, generation: requestedGeneration };
     }
     if (settings.hubMode === 'client') {
+      startSyncNetworkMonitor();
       // Existing installs still hold the owner secret. Exchange it for a
       // revocable device session in the background; requests can keep using the
       // secret on the old Hub or until the exchange completes.
@@ -2353,6 +2461,7 @@ function startMode() {
         generation: requestedGeneration
       };
     } else {
+      stopSyncNetworkMonitor();
       startLocalCollector();
       return { ok: true, mode: 'local', generation: requestedGeneration };
     }
@@ -2402,8 +2511,11 @@ const updateInstallQuit = createUpdateInstallQuitGuard({
 function performQuit() {
   if (quitInProgress) return;
   quitInProgress = true;
+  clearHiddenWindowIdleTeardown();
   try { stopAll(); }
   catch (error) { console.log(`[quit] stopAll failed: ${error?.message || error}`); }
+  try { syncSummaryTransformer.stop(); } catch (_) {}
+  try { collectorProcess?.flushTransform?.(); } catch (_) {}
   try { collectorProcess?.dispose(); } catch (_) {}
   app.exit(0);
 }
@@ -3071,6 +3183,7 @@ function loadWindowFile(target, options = {}) {
     // path can all still bring the window up, so nothing is lost by not showing it.
     if (options.startHidden === true && settings.startHidden !== false) {
       cleanup();
+      armHiddenWindowIdleTeardown(target);
       return;
     }
     revealWindow(target, { inactive: options.inactive === true });
@@ -3159,6 +3272,7 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   mainWindow = win;
+  idleWindowParkedInTray = false;
   applyNativeTheme(win);
   applyMacosNativeWindowButtons(win);
   applyWindowsChrome(win, { round: true });
@@ -3177,6 +3291,9 @@ function createWindow(boundsOverride, options = {}) {
       restoreMacosMinimizeBacking(win);
     }
   };
+  win.on('show', clearHiddenWindowIdleTeardown);
+  win.on('restore', clearHiddenWindowIdleTeardown);
+  win.on('hide', () => armHiddenWindowIdleTeardown(win));
   win.on('show', restoreMinimizeBackingOnReveal);
   win.on('restore', restoreMinimizeBackingOnReveal);
   win.on('show', replayDeferredStatsPush);
@@ -3189,6 +3306,7 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.once('closed', () => {
     clearMacosGlass(win);
+    if (win === mainWindow) clearHiddenWindowIdleTeardown();
   });
   win.on('resized', persistBoundsSoon);
   win.on('moved', persistBoundsSoon);
@@ -3565,7 +3683,8 @@ const desktopRouter = createRequestRouter({
 });
 
 function rebuildWindow() {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  clearHiddenWindowIdleTeardown();
   const bounds = mainWindow.getBounds();
   const wasFocused = mainWindow.isFocused();
   const old = mainWindow;
@@ -3607,6 +3726,40 @@ async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
       coversFullDays: range.coversFullDays
     };
 
+    const isEmptyCustomRangePeriod = (period) => {
+      if (!period || typeof period !== 'object') return true;
+      if (Math.round(Number(period.totalTokens) || 0) > 0) return false;
+      if (Object.keys(period.clients || {}).some((key) => Number(period.clients[key]) > 0)) return false;
+      if (Object.keys(period.models || {}).some((key) => Number(period.models[key]) > 0)) return false;
+      return true;
+    };
+
+    const activeTodayKey = localTodayKey(new Date(), resolveFleetTimeZone());
+    const isCompletedHistoricalWindow = Boolean(
+      range.coversFullDays
+      && range.endDate
+      && range.endDate < activeTodayKey
+    );
+    const cacheKey = isCompletedHistoricalWindow
+      ? `${mode}:${String(settings?.hubUrl || '')}:${String(settings?.deviceId || defaultDeviceId())}:${range.startDate}:${range.endDate}:${range.startHour}:${range.endHour}`
+      : '';
+    if (cacheKey && customRangeCache.has(cacheKey)) {
+      return {
+        ...customRangeCache.get(cacheKey),
+        updatedAt: new Date().toISOString()
+      };
+    }
+    const rememberCompletedRange = (result) => {
+      if (cacheKey && result?.ok && !isEmptyCustomRangePeriod(result.period)) {
+        if (!customRangeCache.has(cacheKey) && customRangeCache.size >= MAX_CUSTOM_RANGE_CACHE) {
+          const oldest = customRangeCache.keys().next().value;
+          if (oldest !== undefined) customRangeCache.delete(oldest);
+        }
+        customRangeCache.set(cacheKey, result);
+      }
+      return result;
+    };
+
     const collectLocalCustomRange = async () => {
       const clients = TRACKED_CLIENTS;
       const commandTimeoutMs = Number(process.env.TOKEN_MONITOR_COMMAND_TIMEOUT_MS) || 120000;
@@ -3628,32 +3781,9 @@ async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
       return { ok: true, ...result };
     };
 
-    const isEmptyCustomRangePeriod = (period) => {
-      if (!period || typeof period !== 'object') return true;
-      if (Math.round(Number(period.totalTokens) || 0) > 0) return false;
-      if (Object.keys(period.clients || {}).some((key) => Number(period.clients[key]) > 0)) return false;
-      if (Object.keys(period.models || {}).some((key) => Number(period.models[key]) > 0)) return false;
-      return true;
-    };
-
-    const mergeCustomRangeDetails = (aggregatePeriod, localPeriod) => {
-      const aggregate = aggregatePeriod && typeof aggregatePeriod === 'object' ? aggregatePeriod : {};
-      const local = localPeriod && typeof localPeriod === 'object' ? localPeriod : {};
-      return {
-        ...aggregate,
-        // /api/usage/range currently returns aggregate totals but deliberately
-        // omits unbounded session/project detail. The desktop process already
-        // has the authoritative local detail, so keep Hub totals and restore
-        // the detail needed by the desktop breakdown views.
-        projects: local.projects && typeof local.projects === 'object' ? local.projects : aggregate.projects || {},
-        sessions: local.sessions && typeof local.sessions === 'object' ? local.sessions : aggregate.sessions || {}
-      };
-    };
-
-    // Hub modes prefer /api/usage/range so multi-device totals match mobile/web.
-    // When hub history/events are empty (common before graph history is warm) or
-    // the hub call fails, fall back to a local tokscale scan so the desktop
-    // app still shows the same data as the Day tab.
+    // Hub modes prefer /api/usage/range so multi-device totals match mobile/web
+    // without spawning a redundant local tokscale scan on every Yesterday/Week click.
+    // Fall back to a local tokscale scan only when Hub history is empty or unavailable.
     if (mode !== 'local') {
       let hubError = null;
       try {
@@ -3710,30 +3840,15 @@ async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
           projects: Object.create(null),
           sessions: {}
         };
-        let local = null;
-        try {
-          local = await collectLocalCustomRange();
-        } catch (localError) {
-          if (isEmptyCustomRangePeriod(hubPeriod)) throw localError;
-        }
         if (!isEmptyCustomRangePeriod(hubPeriod)) {
-          const localPeriod = local?.period || {};
-          return {
+          return rememberCompletedRange({
             ok: true,
             range: rangeMeta,
-            period: mergeCustomRangeDetails(hubPeriod, localPeriod),
-            devices: localPeriod && !isEmptyCustomRangePeriod(localPeriod)
-              ? [{
-                deviceId: settings.deviceId || defaultDeviceId(),
-                periods: { custom: localPeriod },
-                updatedAt: new Date().toISOString()
-              }]
-              : [],
-            source: local && !isEmptyCustomRangePeriod(localPeriod)
-              ? `${body.source || 'history_daily'}+local-details`
-              : (body.source || 'history_daily'),
+            period: hubPeriod,
+            devices: [],
+            source: body.source || 'history_daily',
             updatedAt: new Date().toISOString()
-          };
+          });
         }
       } catch (error) {
         if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || error;
@@ -3749,10 +3864,10 @@ async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
       try {
         const local = await collectLocalCustomRange();
         if (!isEmptyCustomRangePeriod(local.period) || !hubError) {
-          return {
+          return rememberCompletedRange({
             ...local,
             source: local.source || (hubError ? 'local_fallback_after_hub_error' : 'local_fallback_empty_hub')
-          };
+          });
         }
       } catch (localError) {
         if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || localError;
@@ -3780,7 +3895,7 @@ async function fetchCustomRangeStats(rangeInput, requestOptions = {}) {
     }
 
     try {
-      return await collectLocalCustomRange();
+      return rememberCompletedRange(await collectLocalCustomRange());
     } catch (error) {
       if (requestOptions.signal?.aborted) throw requestOptions.signal.reason || error;
       return {
@@ -3895,12 +4010,12 @@ app.whenReady().then(() => {
       }
     });
   });
-  createWindow();
   try {
     const trayHandle = createApplicationTray({
       iconPath: APP_ICON_PATH,
       templateIconPath: TRAY_ICON_PATH,
       getWindow: () => mainWindow,
+      onShowWindow: focusExistingWindow,
       onOpenSettings: () => openSharedUiView('settings'),
       onOpenView: openSharedUiView,
       onQuit: () => app.quit(),
@@ -3917,6 +4032,16 @@ app.whenReady().then(() => {
     // case close behaves like a normal quit because there is no safe recovery
     // surface to leave the user with.
     console.log(`[tray] unavailable: ${error?.message || error}`);
+  }
+  const startParkedInTray = hiddenLaunchRequested()
+    && settings.startHidden !== false
+    && Boolean(applicationTray && !applicationTray.isDestroyed?.());
+  if (startParkedInTray) {
+    initialWindowCreated = true;
+    idleWindowParkedInTray = true;
+    resolveNativeSurface(settings);
+  } else {
+    createWindow();
   }
   syncLoginItemSettingFromOs();
   cleanupStaleStaging().catch((error) => console.log(`[tokscale] staging cleanup failed: ${error.message}`));
@@ -4239,34 +4364,31 @@ app.whenReady().then(() => {
   ipcMain.handle('history:get', () => getDashboardHistory());
   // Register the renderer/state surface before starting any collector. A fast
   // local tick or REST bootstrap must never race the initial IPC handlers.
-  powerMonitor?.on?.('resume', () => {
-    if (settings?.hubMode === 'client') {
-      void recoverNow({ forceStream: true }).catch((error) => console.log(`[sync] resume recovery failed: ${error.message}`));
-    }
-  });
   powerMonitor?.on?.('unlock-screen', () => {
     if (settings?.hubMode === 'client') {
       void recoverNow({ forceStream: true }).catch((error) => console.log(`[sync] unlock recovery failed: ${error.message}`));
     }
   });
   startMode();
-  startSyncNetworkMonitor();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    else focusExistingWindow();
+    focusExistingWindow();
   });
   maybeRunBackgroundUpdateCheck();
   startAppUpdateBackgroundChecks();
 });
 
 app.on('second-instance', focusExistingWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  if (idleWindowParkedInTray && !quitRequested && applicationTray && !applicationTray.isDestroyed?.()) return;
+  if (process.platform !== 'darwin') app.quit();
+});
 app.on('before-quit', () => {
   quitRequested = true;
   flushDesktopSnapshotCache();
   // Deliver a queued push before tearing down so the final numbers reach the
   // renderer instead of being dropped with the timer.
   flushPendingPush();
+  clearHiddenWindowIdleTeardown();
   if (rateRefreshTimer) clearInterval(rateRefreshTimer);
   if (appUpdateBackgroundTimer) clearInterval(appUpdateBackgroundTimer);
   stopSyncNetworkMonitor();

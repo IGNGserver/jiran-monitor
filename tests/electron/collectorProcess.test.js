@@ -216,3 +216,62 @@ test('one-shot deadline and caller abort both settle and notify the host', async
   assert.equal(forks.length, 1);
   processHandle.dispose();
 });
+
+test('hostSyncTransform runs in the utility process and updateAck strips sessions and projects', async () => {
+  const collectors = [];
+  const startCollector = (options) => {
+    const collector = {
+      options,
+      async tick(reason) {
+        const visible = await options.onUpdate({
+          updatedAt: '2026-11-16T00:00:00.000Z',
+          projectsEnabled: true,
+          today: {
+            totalTokens: 120,
+            costUsd: 0.12,
+            sessions: {
+              'codex:s1': {
+                client: 'codex',
+                sessionId: 's1',
+                totalTokens: 120,
+                costUsd: 0.12,
+                projectKey: 'proj-a',
+                projectLabel: 'Project A'
+              }
+            }
+          },
+          month: { totalTokens: 120, sessions: {} },
+          allTime: { totalTokens: 120, sessions: {} }
+        }, reason);
+        collector.lastVisible = visible;
+        return true;
+      },
+      stop() {},
+      getDiagnostics: () => ({ state: 'idle' })
+    };
+    collectors.push(collector);
+    return collector;
+  };
+  const { fork } = fakeFork(startCollector);
+  const processHandle = createCollectorProcess({ fork, log: () => {} });
+  let received = null;
+  const runtime = processHandle.createUsageRuntime({
+    hostSyncTransform: true,
+    onUpdate: (summary) => {
+      received = summary;
+      return summary;
+    }
+  });
+  await settle();
+  assert.equal(collectors[0].options.hostSyncTransform, undefined, 'hostSyncTransform is consumed by collectorHost');
+  await runtime.tick('watch');
+  assert.equal(received.__hostTransformed, true);
+  assert.ok(received.today.projects['project a'], 'project rollup computed inside host process');
+  assert.equal(collectors[0].lastVisible.today.totalTokens, 120);
+  assert.equal(collectors[0].lastVisible.today.sessions, undefined, 'updateAck strips sessions');
+  assert.equal(collectors[0].lastVisible.today.projects, undefined, 'updateAck strips projects');
+  processHandle.flushTransform();
+  processHandle.reloadSessionArchive();
+  await settle();
+  processHandle.dispose();
+});

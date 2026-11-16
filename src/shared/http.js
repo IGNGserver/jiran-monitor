@@ -289,7 +289,7 @@ function corsHeaders(extraHeaders = {}) {
   return {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'authorization,content-type,prefer,x-jiran-secret,x-token-monitor-secret',
+    'access-control-allow-headers': 'authorization,content-encoding,content-type,prefer,x-jiran-secret,x-token-monitor-secret',
     ...extraHeaders
   };
 }
@@ -348,10 +348,20 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES, timeoutMs = DEFAULT_J
       return Promise.reject(bodyError('payload_too_large', 'Request body too large', 413, true));
     }
   }
+  const rawEncoding = String(
+    req.headers?.['content-encoding'] ?? req.headers?.['Content-Encoding'] ?? ''
+  ).trim().toLowerCase();
+  if (rawEncoding && rawEncoding !== 'identity' && rawEncoding !== 'gzip' && rawEncoding !== 'x-gzip') {
+    return Promise.reject(bodyError('unsupported_encoding', `Unsupported Content-Encoding: ${rawEncoding}`, 415, true));
+  }
+  const isGzip = rawEncoding === 'gzip' || rawEncoding === 'x-gzip';
 
   return new Promise((resolve, reject) => {
     let body = '';
     let bytes = 0;
+    let decodedBytes = 0;
+    const decodedChunks = isGzip ? [] : null;
+    const gunzip = isGzip ? zlib.createGunzip({ maxOutputLength: maxBytes + 1 }) : null;
     let settled = false;
     const cleanup = () => {
       clearTimeout(timer);
@@ -359,18 +369,65 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES, timeoutMs = DEFAULT_J
       req.off('end', onEnd);
       req.off('aborted', onAborted);
       req.off('error', onError);
+      if (gunzip) {
+        gunzip.removeAllListeners();
+        gunzip.on('error', () => {});
+        try { gunzip.destroy(); } catch (_) {}
+      }
     };
     const fail = (error) => {
       if (settled) return;
       settled = true;
+      if (decodedChunks) decodedChunks.length = 0;
       cleanup();
       // A late socket error must not become an uncaught EventEmitter error after
       // the request has already been answered. The response closes this socket.
       if (error.closeConnection) req.on('error', () => {});
       reject(error);
     };
+    const parseAndResolve = (text) => {
+      if (!text.trim()) return resolve({});
+      try { resolve(JSON.parse(text)); }
+      catch (error) { reject(bodyError('invalid_json', `Invalid JSON body: ${error.message}`, 400)); }
+    };
+    if (gunzip) {
+      gunzip.on('data', (outChunk) => {
+        if (settled) return;
+        decodedBytes += outChunk.length;
+        if (decodedBytes > maxBytes) {
+          fail(bodyError('payload_too_large', 'Request body too large', 413, true));
+          return;
+        }
+        decodedChunks.push(outChunk);
+      });
+      gunzip.on('end', () => {
+        if (settled) return;
+        settled = true;
+        const text = Buffer.concat(decodedChunks, decodedBytes).toString('utf8');
+        decodedChunks.length = 0;
+        cleanup();
+        parseAndResolve(text);
+      });
+      gunzip.on('error', (error) => {
+        if (error?.code === 'ERR_BUFFER_TOO_LARGE') {
+          fail(bodyError('payload_too_large', 'Request body too large', 413, true));
+          return;
+        }
+        fail(bodyError('invalid_json', `Invalid gzip JSON body: ${error.message}`, 400, true));
+      });
+    }
     const onData = (chunk) => {
       if (settled) return;
+      if (gunzip) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += buf.length;
+        if (bytes > maxBytes) {
+          fail(bodyError('payload_too_large', 'Request body too large', 413, true));
+          return;
+        }
+        gunzip.write(buf);
+        return;
+      }
       bytes += Buffer.byteLength(chunk, 'utf8');
       if (bytes > maxBytes) {
         body = '';
@@ -381,11 +438,19 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES, timeoutMs = DEFAULT_J
     };
     const onEnd = () => {
       if (settled) return;
+      if (gunzip) {
+        if (bytes === 0) {
+          settled = true;
+          cleanup();
+          resolve({});
+          return;
+        }
+        gunzip.end();
+        return;
+      }
       settled = true;
       cleanup();
-      if (!body.trim()) return resolve({});
-      try { resolve(JSON.parse(body)); }
-      catch (error) { reject(bodyError('invalid_json', `Invalid JSON body: ${error.message}`, 400)); }
+      parseAndResolve(body);
     };
     const onAborted = () => fail(bodyError('body_read_failed', 'Request body was aborted', 400, true));
     const onError = () => fail(bodyError('body_read_failed', 'Could not read request body', 400, true));
@@ -393,7 +458,7 @@ function readJsonBody(req, maxBytes = MAX_JSON_BODY_BYTES, timeoutMs = DEFAULT_J
       () => fail(bodyError('body_timeout', 'Request body timed out', 408, true)),
       timeoutMs
     );
-    req.setEncoding('utf8');
+    if (!gunzip) req.setEncoding('utf8');
     req.on('data', onData);
     req.once('end', onEnd);
     req.once('aborted', onAborted);

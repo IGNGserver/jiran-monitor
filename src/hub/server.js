@@ -1759,7 +1759,7 @@ function createHub({
          sessionIdleDays: resolvedSessionIdleDays,
          ...(resolvedFleetTimeZone ? { fleetTimeZone: resolvedFleetTimeZone } : {}),
          now: new Date().toISOString()
-      });
+      }, { 'x-jiran-accept-ingest-encoding': 'gzip' });
     }
 
     // Web UI / PWA assets share the hub port so Docker only needs one publish.
@@ -1934,7 +1934,7 @@ function createHub({
          apiVersion: HUB_API_VERSION,
          capabilities,
          authenticated: true
-      });
+      }, { 'x-jiran-accept-ingest-encoding': 'gzip' });
     }
     // Update metadata is read through the Hub so the phone never has to reach
     // GitHub itself and every client shares one cached release lookup. The
@@ -2402,8 +2402,9 @@ function createHub({
         const minimalResponse = /(?:^|,)\s*return=minimal\s*(?:,|$)/i.test(String(req.headers.prefer || ''));
         const result = await ingest(payload, { includeStats: !minimalResponse });
         const fleetField = resolvedFleetTimeZone ? { fleetTimeZone: resolvedFleetTimeZone } : {};
-        if (minimalResponse) return sendJson(res, 200, { ok: true, deviceId: result.deviceId, ...fleetField });
-        return sendJson(res, 200, { ok: true, deviceId: result.record.deviceId, stats: result.stats, ...fleetField });
+        const ingestHeaders = { 'x-jiran-accept-ingest-encoding': 'gzip' };
+        if (minimalResponse) return sendJson(res, 200, { ok: true, deviceId: result.deviceId, ...fleetField }, ingestHeaders);
+        return sendJson(res, 200, { ok: true, deviceId: result.record.deviceId, stats: result.stats, ...fleetField }, ingestHeaders);
       } catch (error) {
         const bodyError = sendRequestBodyError(res, error);
         if (bodyError) return bodyError;

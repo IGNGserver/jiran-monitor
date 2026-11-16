@@ -85,12 +85,18 @@ function fullJitterDelay(attempt, {
   return Math.max(jittered, Math.min(maxMs, Math.max(0, Number(retryAfterMs) || 0)));
 }
 
+function isWatchReason(meta) {
+  const reason = typeof meta?.reason === 'string' ? meta.reason : '';
+  return reason === 'watch' || reason.startsWith('watch:');
+}
+
 // The scheduler owns only one latest snapshot. A failed snapshot stays pending
 // until a later snapshot replaces it, a bounded flush delivers it, or the
 // scheduler is stopped. This is deliberately independent from file-watch events:
 // an upload failure must recover even when no new usage event arrives.
 function createSyncUploadScheduler(options = {}) {
   const intervalMs = normalizeSyncUploadIntervalMs(options.intervalMs);
+  const watchIntervalMs = normalizeSyncUploadIntervalMs(options.watchIntervalMs, 0);
   const now = options.now || Date.now;
   const setTimer = options.setTimer || options.setTimeout || setTimeout;
   const clearTimer = options.clearTimer || options.clearTimeout || clearTimeout;
@@ -178,14 +184,21 @@ function createSyncUploadScheduler(options = {}) {
     updateState();
   }
 
-  function shouldThrottle() {
-    return lastUploadAt !== null && Number(now()) - lastUploadAt < intervalMs;
+  function effectiveIntervalMs(isWatch = false) {
+    return isWatch ? Math.max(intervalMs, watchIntervalMs) : intervalMs;
   }
 
-  function replacePending(summary, revision = null) {
+  function shouldThrottle(isWatch = false) {
+    const cadence = effectiveIntervalMs(isWatch);
+    return cadence > 0 && lastUploadAt !== null && Number(now()) - lastUploadAt < cadence;
+  }
+
+  function replacePending(summary, revision = null, meta = null) {
     pending = {
       summary,
-      revision: revision ?? ++sequence
+      revision: revision ?? ++sequence,
+      meta: meta && typeof meta === 'object' ? meta : null,
+      isWatch: isWatchReason(meta)
     };
     return pending;
   }
@@ -227,7 +240,8 @@ function createSyncUploadScheduler(options = {}) {
         signal: controller.signal,
         revision: item.revision,
         reason,
-        attempt: retryAttempt + 1
+        attempt: retryAttempt + 1,
+        meta: item.meta
       }));
     } catch (error) {
       attempt = Promise.reject(error);
@@ -242,7 +256,7 @@ function createSyncUploadScheduler(options = {}) {
         // the abort path below: clear the active slot and retain the item for a
         // bounded manual retry when this generation is still alive.
         if (!stopped && currentGeneration === generation && !pending) {
-          replacePending(item.summary, item.revision);
+          replacePending(item.summary, item.revision, item.meta);
         }
         updateState();
         return { ok: false, superseded: true, result };
@@ -265,8 +279,9 @@ function createSyncUploadScheduler(options = {}) {
       if (active?.item === item) active = null;
       updateState();
       if (pending) {
-        if (intervalMs === 0 || !shouldThrottle()) void startUpload(pending, 'trailing').catch(() => {});
-        else schedule(intervalMs - (Number(now()) - lastUploadAt), 'trailing');
+        const cadence = effectiveIntervalMs(pending.isWatch);
+        if (cadence === 0 || !shouldThrottle(pending.isWatch)) void startUpload(pending, 'trailing').catch(() => {});
+        else schedule(cadence - (Number(now()) - lastUploadAt), 'trailing');
       }
       return { ok: true, delivered: true, revision: item.revision, result };
     } catch (error) {
@@ -278,7 +293,7 @@ function createSyncUploadScheduler(options = {}) {
         // immediately issue a bounded replacement attempt. A stopped or
         // superseded generation must still discard its private snapshot.
         if (!stopped && currentGeneration === generation && !pending) {
-          replacePending(item.summary, item.revision);
+          replacePending(item.summary, item.revision, item.meta);
         }
         updateState();
         return { ok: false, superseded: true, error };
@@ -289,7 +304,7 @@ function createSyncUploadScheduler(options = {}) {
       failureRetryable = isRetryableUploadFailure(error);
       consecutiveFailures += 1;
       const hadNewerPending = Boolean(pending);
-      if (!pending) replacePending(item.summary, item.revision);
+      if (!pending) replacePending(item.summary, item.revision, item.meta);
       if (failureRetryable) {
         const delay = retryDelayFor(error);
         // A newer snapshot replaces the pending payload, but never cancels the
@@ -314,10 +329,10 @@ function createSyncUploadScheduler(options = {}) {
     }
   }
 
-  function enqueue(summary, revision = null) {
+  function enqueue(summary, revision = null, meta = null) {
     if (stopped) return Promise.reject(Object.assign(new Error('upload scheduler stopped'), { code: 'scheduler_stopped' }));
     if (!summary || typeof summary !== 'object') return Promise.reject(new TypeError('summary must be an object'));
-    const item = replacePending(summary, revision);
+    const item = replacePending(summary, revision, meta);
     // New data is an explicit supersession boundary, but it must not turn a
     // retryable transport failure into a rapid retry loop. Replace the pending
     // payload while preserving the existing backoff; manual retry/flush remains
@@ -343,10 +358,11 @@ function createSyncUploadScheduler(options = {}) {
       updateState();
       return Promise.resolve({ queued: true, revision: item.revision });
     }
-    if (canStartAutomatically && (lastUploadAt === null || !shouldThrottle() || failureRetryable)) {
+    if (canStartAutomatically && (lastUploadAt === null || !shouldThrottle(item.isWatch) || failureRetryable)) {
       return startUpload(item, 'enqueue');
     }
-    schedule(intervalMs - (Number(now()) - lastUploadAt), 'interval');
+    const cadence = effectiveIntervalMs(item.isWatch);
+    schedule(cadence - (Number(now()) - lastUploadAt), 'interval');
     return Promise.resolve({ queued: true, revision: item.revision });
   }
 

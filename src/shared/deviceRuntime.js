@@ -25,6 +25,8 @@ function createDeviceRuntime(options = {}, deps = {}) {
   const deviceState = makeDeviceState({
     epoch,
     envelope: options.envelope,
+    retainSnapshot: options.retainSnapshot !== false,
+    emitReturn: false,
     onRecord(record, meta) {
       if (!active) return;
       try {
@@ -37,7 +39,7 @@ function createDeviceRuntime(options = {}, deps = {}) {
         }
       }
       if (sink?.enqueue) {
-        Promise.resolve(sink.enqueue(record, meta.revision)).catch((error) => {
+        Promise.resolve(sink.enqueue(record, meta.revision, meta)).catch((error) => {
           options.onError?.(error, 'sink');
         });
       }

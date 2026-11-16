@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
+const zlib = require('node:zlib');
 const { readJsonBody } = require('../../src/shared/http');
 
 function request(headers = {}) {
@@ -78,4 +79,72 @@ test('readJsonBody still parses ordinary JSON and empty bodies', async () => {
   const emptyReading = readJsonBody(empty, 1024);
   empty.end();
   assert.deepEqual(await emptyReading, {});
+});
+
+test('readJsonBody decodes gzip and x-gzip JSON bodies and tolerates empty gzip streams', async () => {
+  const payload = { deviceId: 'dev-gzip', value: '计然', tokens: 12345 };
+  const compressed = zlib.gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+
+  const gzipReq = request({
+    'content-encoding': 'gzip',
+    'content-length': String(compressed.length)
+  });
+  const gzipReading = readJsonBody(gzipReq, 4096);
+  gzipReq.end(compressed);
+  assert.deepEqual(await gzipReading, payload);
+  assert.equal(gzipReq.listenerCount('data'), 0);
+
+  const xGzipReq = request({ 'Content-Encoding': 'x-gzip' });
+  const xGzipReading = readJsonBody(xGzipReq, 4096);
+  xGzipReq.end(compressed);
+  assert.deepEqual(await xGzipReading, payload);
+
+  const emptyGzip = request({ 'content-encoding': 'gzip', 'content-length': '0' });
+  const emptyReading = readJsonBody(emptyGzip, 4096);
+  emptyGzip.end();
+  assert.deepEqual(await emptyReading, {});
+});
+
+test('readJsonBody aborts a gzip bomb when decompressed output exceeds maxBytes', async () => {
+  const largeJson = JSON.stringify({ pad: 'a'.repeat(32 * 1024) });
+  const compressed = zlib.gzipSync(Buffer.from(largeJson, 'utf8'));
+  assert.ok(compressed.length < 512, 'compressed wire size should sit well below maxBytes');
+
+  const req = request({
+    'content-encoding': 'gzip',
+    'content-length': String(compressed.length)
+  });
+  const rejected = assert.rejects(
+    readJsonBody(req, 1024),
+    (error) => error.code === 'payload_too_large'
+      && error.statusCode === 413
+      && error.closeConnection === true
+  );
+  req.end(compressed);
+  await rejected;
+  assert.equal(req.listenerCount('data'), 0);
+  req.destroy();
+});
+
+test('readJsonBody rejects malformed gzip bytes and unsupported Content-Encoding headers', async () => {
+  const corrupt = request({ 'content-encoding': 'gzip' });
+  const corruptRejected = assert.rejects(
+    readJsonBody(corrupt, 1024),
+    (error) => error.code === 'invalid_json'
+      && error.statusCode === 400
+      && error.closeConnection === true
+  );
+  corrupt.end(Buffer.from('not-a-gzip-stream', 'utf8'));
+  await corruptRejected;
+  corrupt.destroy();
+
+  const deflateReq = request({ 'content-encoding': 'deflate' });
+  await assert.rejects(
+    readJsonBody(deflateReq, 1024),
+    (error) => error.code === 'unsupported_encoding'
+      && error.statusCode === 415
+      && error.closeConnection === true
+  );
+  assert.equal(deflateReq.listenerCount('data'), 0);
+  deflateReq.destroy();
 });

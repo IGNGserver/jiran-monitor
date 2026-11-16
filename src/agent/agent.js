@@ -16,13 +16,16 @@ const {
   renameDeviceOnHub,
   writeDeviceIdentity
 } = require('../shared/deviceIdentity');
-const { postSyncPayload } = require('../shared/syncPayload');
+const { createSyncHistoryTracker, postSyncPayload } = require('../shared/syncPayload');
 const { createSyncSummaryTransformer } = require('../shared/syncSummary');
+const { normalizeSyncUploadIntervalMs } = require('../shared/syncUploadScheduler');
 const { withSyncUploadMetadata } = require('../shared/syncUploadSink');
 const { requireSafeHubTransport } = require('../shared/hubTransport');
 const { learnFleetTimeZone, resolveFleetTimeZone } = require('../shared/fleetTimeZone');
 const { runAgent, runAgentOnce } = require('./runtime');
 const { createAgentShutdown } = require('./processLifecycle');
+
+const DEFAULT_HEADLESS_WATCH_UPLOAD_INTERVAL_MS = 5000;
 
 loadDotEnv();
 // Merge the pre-rename `<appData>/Token Monitor` shared directory forward before
@@ -42,6 +45,16 @@ const secret = String(args.secret || process.env.TOKEN_MONITOR_SECRET || '').tri
 const deviceId = String(args.device || args.deviceId || process.env.TOKEN_MONITOR_DEVICE_ID || defaultDeviceId());
 const once = Boolean(args.once);
 const dryRun = Boolean(args['dry-run'] || args.dryRun);
+const rawUploadInterval = args.syncUploadInterval
+  ?? args['sync-upload-interval']
+  ?? process.env.TOKEN_MONITOR_SYNC_UPLOAD_INTERVAL_MS
+  ?? process.env.JIRAN_SYNC_UPLOAD_INTERVAL_MS;
+const configuredUploadIntervalMs = rawUploadInterval !== undefined
+  ? normalizeSyncUploadIntervalMs(rawUploadInterval, 0)
+  : 0;
+const watchUploadIntervalMs = rawUploadInterval !== undefined
+  ? configuredUploadIntervalMs
+  : (once ? 0 : DEFAULT_HEADLESS_WATCH_UPLOAD_INTERVAL_MS);
 
 // Every supported tool is always tracked; the old per-agent selection is gone.
 // Warn instead of failing so an existing service file or shell script keeps
@@ -50,16 +63,15 @@ if (args.clients !== undefined || process.env.TOKEN_MONITOR_CLIENTS !== undefine
   console.warn('[config] TOKEN_MONITOR_CLIENTS/--clients is no longer supported; all supported tools are tracked.');
 }
 
-// Only identity and the tokscale timeout are still per-invocation inputs. The
-// cadence knobs (mode / interval / watch / history / archive / projects / WSL /
-// all-time anchor / upload interval) left with the settings surface that carried
-// them; src/shared/collectorConfig.js fixes them for every runtime now.
+// Only identity, tokscale timeout, and optional upload coalescing interval are
+// per-invocation inputs. The remaining cadence knobs left with the settings
+// surface that carried them; src/shared/collectorConfig.js fixes them for every runtime.
 for (const [flag, env] of [
   ['--since', 'TOKEN_MONITOR_ALL_TIME_SINCE'], ['--collectionMode', 'TOKEN_MONITOR_COLLECTION_MODE'],
   ['--interval', 'TOKEN_MONITOR_INTERVAL_MS'], ['--watch', 'TOKEN_MONITOR_WATCH'],
   ['--watchDebounceMs', 'TOKEN_MONITOR_WATCH_DEBOUNCE_MS'], ['--history', 'TOKEN_MONITOR_HISTORY_ENABLED'],
   ['--projects', 'TOKEN_MONITOR_PROJECTS_ENABLED'], ['--sessionArchive', 'TOKEN_MONITOR_SESSION_USAGE_ARCHIVE_ENABLED'],
-  ['--wslScan', 'TOKEN_MONITOR_WSL_SCAN'], ['--syncUploadInterval', 'TOKEN_MONITOR_SYNC_UPLOAD_INTERVAL_MS']
+  ['--wslScan', 'TOKEN_MONITOR_WSL_SCAN']
 ]) {
   const name = flag.slice(2);
   if (args[name] !== undefined || process.env[env] !== undefined) {
@@ -77,8 +89,11 @@ const usageOptions = usageConfigFromSource(usageSource, {
   ...usageSourceExtra,
   agentVersion: appVersion(),
   agentRuntime: 'headless-agent',
-  reasonixNativeSessionsEnabled: true,
+  // Reasonix synthetic sessions are local-only UI artifacts stripped by syncPayload;
+  // skipping them in headless avoids scanning, retaining, and filtering dead data.
+  reasonixNativeSessionsEnabled: false,
   dailyHistoryArchiveWriteEnabled: !dryRun,
+  syncUploadIntervalMs: configuredUploadIntervalMs,
   uploadTimeoutMs: 15 * 1000,
   onError: (error, reason) => console.error(`[${new Date().toISOString()}] (${reason}) ${error.message}`),
   logger: (message) => (dryRun ? console.error(message) : console.log(message))
@@ -86,6 +101,8 @@ const usageOptions = usageConfigFromSource(usageSource, {
 
 const syncSummaryTransformer = createSyncSummaryTransformer({
   canWriteSessionUsageArchive: !dryRun,
+  projectsScope: 'allTime',
+  writeThrottleMs: once || dryRun ? 0 : 30_000,
   // The archive is keyed by the active fleet calendar; the transformer resolves
   // it per transform so a zone learned from the Hub takes effect without a
   // restart (a change also drops its in-memory copy).
@@ -98,6 +115,7 @@ function summaryForSync(summary, reason, meta) {
 }
 
 let deviceIdentity = readDeviceIdentity();
+const historyTracker = createSyncHistoryTracker();
 
 async function postUsage(summary, context = {}) {
   const previousDeviceId = deviceIdentity.lastPostedDeviceId;
@@ -111,21 +129,32 @@ async function postUsage(summary, context = {}) {
       { signal: context.signal, timeoutMs: usageOptions.uploadTimeoutMs }
     );
   }
-  const { response } = await postSyncPayload(fetch, `${hubUrl}/api/ingest`, {
-    headers: { 'content-type': 'application/json', ...(secret ? { authorization: `Bearer ${secret}` } : {}) },
-    summary,
-    signal: context.signal,
-    timeoutMs: usageOptions.uploadTimeoutMs,
-    logger: (message) => console.warn(`[sync] ${message}`)
-  });
+  const tracked = historyTracker.prepare(summary, { targetKey: hubUrl });
+  let response;
+  try {
+    ({ response } = await postSyncPayload(fetch, `${hubUrl}/api/ingest`, {
+      headers: { 'content-type': 'application/json', ...(secret ? { authorization: `Bearer ${secret}` } : {}) },
+      summary: tracked.summary,
+      signal: context.signal,
+      timeoutMs: usageOptions.uploadTimeoutMs,
+      logger: (message) => console.warn(`[sync] ${message}`)
+    }));
+  } catch (error) {
+    tracked.handleFailure(error);
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(`Hub responded ${response.status}: ${(await response.text()).slice(0, 300)}`);
     error.status = response.status;
+    tracked.handleFailure(error);
     throw error;
   }
-  deviceIdentity = { version: 1, lastPostedDeviceId: summary.deviceId };
-  try { writeDeviceIdentity(summary.deviceId); }
-  catch (error) { console.warn(`[identity] state write failed: ${error.message}`); }
+  tracked.commitAck();
+  if (previousDeviceId !== summary.deviceId) {
+    deviceIdentity = { version: 1, lastPostedDeviceId: summary.deviceId };
+    try { writeDeviceIdentity(summary.deviceId); }
+    catch (error) { console.warn(`[identity] state write failed: ${error.message}`); }
+  }
   const payload = await response.json();
   // The Hub is the one place the fleet calendar is configured; remember what it
   // advertised so the next collector tick buckets in it. A local state-write
@@ -147,13 +176,17 @@ async function deliver(summary, context = {}) {
 
 function registerPidFile(getRuntime) {
   const owner = claimAgentPidFile();
+  const releaseResources = () => {
+    try { syncSummaryTransformer.stop(); } catch (_) { /* best effort flush */ }
+    owner.release();
+  };
   const shutdown = createAgentShutdown({
     getRuntime,
-    release: owner.release,
+    release: releaseResources,
     timeoutMs: Math.max(1000, Number(usageOptions.uploadTimeoutMs) + 1000 || 16_000),
     logger: console
   });
-  process.on('exit', owner.release);
+  process.on('exit', releaseResources);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(sig, () => { void shutdown(sig); });
   }
@@ -161,7 +194,7 @@ function registerPidFile(getRuntime) {
 }
 
 async function main() {
-  const startupMessage = `Jiran agent device=${deviceId} hub=${hubUrl} intervalMs=${usageOptions.intervalMs} uploadIntervalMs=${usageOptions.syncUploadIntervalMs} watch=${usageOptions.watchEnabled} projects=${usageOptions.projectsEnabled ? 'on' : 'off'} history=${usageOptions.historyEnabled ? 'on' : 'off'} sessionArchive=${usageOptions.dailyHistoryArchiveEnabled ? 'on' : 'off'} limits=hub`;
+  const startupMessage = `Jiran agent device=${deviceId} hub=${hubUrl} intervalMs=${usageOptions.intervalMs} uploadIntervalMs=${usageOptions.syncUploadIntervalMs} watchUploadIntervalMs=${watchUploadIntervalMs} watch=${usageOptions.watchEnabled} projects=${usageOptions.projectsEnabled ? 'on' : 'off'} history=${usageOptions.historyEnabled ? 'on' : 'off'} sessionArchive=${usageOptions.dailyHistoryArchiveEnabled ? 'on' : 'off'} limits=hub`;
   if (dryRun) console.error(startupMessage);
   else console.log(startupMessage);
   if (!secret) console.warn('Warning: TOKEN_MONITOR_SECRET is not set. Posting without authorization header.');
@@ -174,6 +207,8 @@ async function main() {
     usageOptions,
     transformUsage: summaryForSync,
     syncUploadIntervalMs: usageOptions.syncUploadIntervalMs,
+    watchUploadIntervalMs,
+    dedupeWatchUnchanged: !once && !dryRun,
     uploadTimeoutMs: usageOptions.uploadTimeoutMs,
     deliver,
     dryRun,
@@ -182,6 +217,7 @@ async function main() {
   };
   if (once) {
     await runAgentOnce(runtimeOptions);
+    syncSummaryTransformer.stop();
     return;
   }
   runtimeHandle = runAgent(runtimeOptions);

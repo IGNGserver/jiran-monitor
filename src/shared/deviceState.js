@@ -19,24 +19,35 @@ const PARTIAL_USAGE_CARRY_FIELDS = Object.freeze([
   'syncUploadIntervalMs'
 ]);
 
-function cloneValue(value, seen = new Map()) {
-  if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) return seen.get(value);
-  if (Array.isArray(value)) {
-    const copy = [];
-    seen.set(value, copy);
-    for (const entry of value) copy.push(cloneValue(entry, seen));
-    return copy;
-  }
-  const copy = Object.create(Object.getPrototypeOf(value) === null ? null : Object.prototype);
-  seen.set(value, copy);
-  for (const [key, entry] of Object.entries(value)) {
-    Object.defineProperty(copy, key, {
-      value: cloneValue(entry, seen),
+function setSafeProperty(target, key, value) {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
       enumerable: true,
       configurable: true,
       writable: true
     });
+  } else {
+    target[key] = value;
+  }
+}
+
+function cloneValue(value, seen = null) {
+  if (value === null || typeof value !== 'object') return value;
+  const visited = seen || new Map();
+  if (visited.has(value)) return visited.get(value);
+  if (Array.isArray(value)) {
+    const copy = new Array(value.length);
+    visited.set(value, copy);
+    for (let index = 0; index < value.length; index += 1) {
+      copy[index] = cloneValue(value[index], visited);
+    }
+    return copy;
+  }
+  const copy = Object.getPrototypeOf(value) === null ? Object.create(null) : {};
+  visited.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    setSafeProperty(copy, key, cloneValue(entry, visited));
   }
   return copy;
 }
@@ -45,45 +56,45 @@ function normalizedEnvelope(value) {
   const envelope = {};
   for (const [key, entry] of Object.entries(value || {})) {
     if (entry !== undefined) {
-      Object.defineProperty(envelope, key, {
-        value: cloneValue(entry),
-        enumerable: true,
-        configurable: true,
-        writable: true
-      });
+      setSafeProperty(envelope, key, cloneValue(entry));
     }
   }
   return envelope;
 }
 
-function sanitizeUsagePeriods(value) {
-  const next = cloneValue(value || {});
+function sanitizeUsagePeriods(value, { copy = true } = {}) {
+  const next = copy ? cloneValue(value || {}) : { ...(value || {}) };
+  if (!copy && next.periods && typeof next.periods === 'object') {
+    next.periods = { ...next.periods };
+  }
   const periods = next?.periods && typeof next.periods === 'object' ? next.periods : next;
   for (const periodName of ['today', 'month', 'allTime']) {
     const period = periods?.[periodName];
     if (period && typeof period === 'object' && hasOwn(period, 'sessions')) {
-      period.sessions = filterReasonixSyntheticSessions(period.sessions);
+      const filtered = filterReasonixSyntheticSessions(period.sessions);
+      if (filtered !== period.sessions) {
+        periods[periodName] = copy ? period : { ...period, sessions: filtered };
+        if (copy) period.sessions = filtered;
+      }
     }
   }
   return next;
 }
 
 function mergeUsagePart(previous, incoming) {
-  const next = sanitizeUsagePeriods(incoming || {});
+  const next = sanitizeUsagePeriods(incoming || {}, { copy: true });
   delete next.limits;
   if (!previous) return next;
 
   if (!hasOwn(next, 'history') && hasOwn(previous, 'history')) {
-    next.history = cloneValue(previous.history);
+    next.history = previous.history;
   }
 
   const partial = !hasOwn(next, 'month') || !hasOwn(next, 'allTime');
   if (partial) {
     for (const field of PARTIAL_USAGE_CARRY_FIELDS) {
       if (!hasOwn(next, field) && hasOwn(previous, field)) {
-        next[field] = field === 'month' || field === 'allTime'
-          ? sanitizeUsagePeriods(previous[field])
-          : cloneValue(previous[field]);
+        next[field] = previous[field];
       }
     }
   }
@@ -94,6 +105,8 @@ function createDeviceState(options = {}) {
   const epoch = options.epoch ?? 0;
   const envelope = normalizedEnvelope(options.envelope);
   const onRecord = typeof options.onRecord === 'function' ? options.onRecord : null;
+  const retainSnapshot = options.retainSnapshot !== false;
+  const emitReturn = options.emitReturn !== false;
   let usagePart = null;
   let limitsPart = hasOwn(options, 'initialLimits') ? cloneValue(options.initialLimits) : undefined;
   let currentRecord = null;
@@ -108,17 +121,29 @@ function createDeviceState(options = {}) {
 
   function publish(source, reason) {
     if (!usagePart || stopped) return null;
-    const record = { ...cloneValue(usagePart), ...cloneValue(envelope) };
-    if (limitsPart !== undefined) record.limits = cloneValue(limitsPart);
-    currentRecord = record;
+    const record = { ...usagePart, ...envelope };
+    if (limitsPart !== undefined) record.limits = limitsPart;
+    currentRecord = retainSnapshot ? record : null;
     revision += 1;
     const meta = { revision, source, reason, epoch };
-    if (onRecord) onRecord(cloneValue(record), meta);
-    return cloneValue(record);
+    if (onRecord) {
+      onRecord(retainSnapshot ? cloneValue(record) : record, meta);
+    }
+    if (!retainSnapshot) {
+      usagePart = null;
+      return emitReturn ? record : null;
+    }
+    return emitReturn ? cloneValue(record) : null;
   }
 
   function updateUsage(summary, reason = 'usage', meta = {}) {
     if (!accepts(meta)) return null;
+    if (!retainSnapshot) {
+      if (meta.preview === true) return null;
+      usagePart = sanitizeUsagePeriods(summary || {}, { copy: false });
+      delete usagePart.limits;
+      return publish('usage', reason);
+    }
     usagePart = mergeUsagePart(usagePart, summary);
     if (hasOwn(usagePart, 'month') && hasOwn(usagePart, 'allTime')) {
       hasCompleteUsageBaseline = true;
@@ -139,6 +164,10 @@ function createDeviceState(options = {}) {
 
   function stop() {
     stopped = true;
+    if (!retainSnapshot) {
+      usagePart = null;
+      currentRecord = null;
+    }
   }
 
   return {
@@ -150,5 +179,6 @@ function createDeviceState(options = {}) {
 }
 
 module.exports = {
+  cloneValue,
   createDeviceState
 };

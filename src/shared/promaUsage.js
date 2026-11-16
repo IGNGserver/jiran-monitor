@@ -155,9 +155,20 @@ function jsonlFiles(root) {
   }
 }
 
-// Read every session exactly once per collection tick. The caller can then
-// derive several windows (and history) from the same immutable snapshot rather
-// than reopening every JSONL file once for each period.
+const MAX_CACHE_ENTRIES = 2048;
+const promaFileRowCache = new Map();
+
+function setBoundedCache(map, key, value) {
+  if (!map.has(key) && map.size >= MAX_CACHE_ENTRIES) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+}
+
+// Read every session once per changed file, reusing parsed rows across ticks when
+// mtime and size are unchanged. The caller can then derive several windows (and
+// history) from the same snapshot rather than reopening unchanged JSONL files.
 function collectPromaRows(options = {}) {
   const roots = Array.isArray(options.roots) ? options.roots : [PROMA_ROOT];
   const rows = [];
@@ -165,7 +176,22 @@ function collectPromaRows(options = {}) {
     const sourceId = sourceNamespace(root);
     for (const filePath of jsonlFiles(root)) {
       try {
-        rows.push(...collectSessionRows(filePath, { sourceId }));
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
+        const cacheKey = path.normalize(filePath);
+        const cached = promaFileRowCache.get(cacheKey);
+        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.sourceId === sourceId) {
+          rows.push(...cached.rows);
+          continue;
+        }
+        const parsedRows = collectSessionRows(filePath, { sourceId });
+        setBoundedCache(promaFileRowCache, cacheKey, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          sourceId,
+          rows: parsedRows
+        });
+        rows.push(...parsedRows);
       } catch (_) {
         // skip unreadable files
       }
