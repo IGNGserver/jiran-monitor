@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const { PERIODS, normalizePeriod } = require('./usage');
+const { PERIODS, normalizePeriod, normalizeSession } = require('./usage');
 const { filterReasonixSyntheticSessions, isReasonixSyntheticSession } = require('./reasonixSessionGuard');
 const { readJson, sharedDataDir, writeJsonAtomic } = require('./config');
 const { dayKeyOf, monthKeyOf, normalizeTimeZone } = require('./fleetTimeZone');
@@ -20,12 +20,31 @@ function hasOwn(object, key) {
 // it can never leak into the serialized file, and is immune to JSON round trips
 // resurrecting it.
 const normalizedArchives = new WeakSet();
+// Tracks in-place mutations made by captureSessionUsageArchive so callers never
+// have to JSON.stringify the archive twice (or compare a mutated reference to
+// itself) just to know whether persistence is needed.
+const dirtyArchives = new WeakSet();
 
 function markSessionArchiveNormalized(archive) {
   if (archive && typeof archive === 'object' && archive.sessions && typeof archive.sessions === 'object') {
     normalizedArchives.add(archive.sessions);
   }
   return archive;
+}
+
+function markSessionArchiveDirty(archive) {
+  if (archive && typeof archive === 'object' && archive.sessions && typeof archive.sessions === 'object') {
+    dirtyArchives.add(archive.sessions);
+  }
+}
+
+function consumeSessionArchiveDirty(archive) {
+  if (!archive || typeof archive !== 'object' || !archive.sessions || typeof archive.sessions !== 'object') {
+    return false;
+  }
+  const dirty = dirtyArchives.has(archive.sessions);
+  if (dirty) dirtyArchives.delete(archive.sessions);
+  return dirty;
 }
 
 function mapNumber(map, key) {
@@ -65,14 +84,6 @@ function localMonth(dateValue, timeZone = '') {
   return monthKeyOf(toDate(dateValue), normalizeTimeZone(timeZone));
 }
 
-// Every caller feeds this function a session that has already been through
-// normalizePeriod(), so `client` is a canonical client id and `sessionId` is a
-// trimmed non-empty string. Rebuilding a synthetic period here just to read two
-// strings back out cost a full normalizePeriod per session per period, which
-// dominated the whole archive pipeline (~90% of the per-tick transform) and grew
-// linearly with the archive. Keep the validity rule identical to the old path:
-// the normalization boundary yields null for either half, or for an all-empty
-// key, and such entries were dropped.
 function sessionKey(client, sessionId) {
   const name = String(client || '');
   const id = String(sessionId || '');
@@ -81,22 +92,39 @@ function sessionKey(client, sessionId) {
   return key === ':' ? null : key;
 }
 
+function clonePlain(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(clonePlain);
+  const copy = Object.getPrototypeOf(value) === null ? Object.create(null) : {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === '__proto__') {
+      Object.defineProperty(copy, key, {
+        value: clonePlain(entry),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    } else {
+      copy[key] = clonePlain(entry);
+    }
+  }
+  return copy;
+}
+
 function clone(value) {
-  return JSON.parse(JSON.stringify(value || {}));
+  return clonePlain(value || {});
 }
 
 function sameJson(left, right) {
   return isDeepStrictEqual(left || null, right || null);
 }
 
-function periodFor(record, periodName) {
-  return normalizePeriod(record?.periods?.[periodName] || record?.[periodName]);
-}
-
 function normalizedSessionFrom(value, fallbackKey) {
   if (isReasonixSyntheticSession(value, fallbackKey)) return null;
-  const period = normalizePeriod({ sessions: { [fallbackKey || 'session']: value } });
-  return Object.values(period.sessions)[0] || null;
+  const session = normalizeSession(value, fallbackKey);
+  if (!session) return null;
+  delete session.archived;
+  return session;
 }
 
 function hasSessionUsage(session) {
@@ -152,50 +180,80 @@ function normalizeSessionUsageArchive(value, options = {}) {
   return markSessionArchiveNormalized(normalized);
 }
 
+function extractSessionsForCapture(record, periodName) {
+  const rawPeriod = record?.periods?.[periodName] || record?.[periodName];
+  const rawSessions = rawPeriod?.sessions;
+  if (!rawSessions || typeof rawSessions !== 'object') return [];
+  const entries = Object.entries(rawSessions);
+  if (entries.length === 0) return [];
+
+  const byKey = new Map();
+  let collided = false;
+  for (const [rawKey, rawSession] of entries) {
+    const normalized = normalizedSessionFrom(rawSession, rawKey);
+    if (!normalized || isReasonixSyntheticSession(normalized, rawKey) || !hasSessionUsage(normalized)) continue;
+    const key = sessionKey(normalized.client, normalized.sessionId);
+    if (!key) continue;
+    if (byKey.has(key)) {
+      collided = true;
+      break;
+    }
+    byKey.set(key, normalized);
+  }
+  if (collided) {
+    return Object.values(normalizePeriod({ sessions: rawSessions }).sessions || {});
+  }
+  return Array.from(byKey.values());
+}
+
 function captureSessionUsageArchive(existingArchive, deviceRecord, capturedAt = new Date(), options = {}) {
   const timeZone = normalizeTimeZone(options.timeZone);
   const archive = normalizeSessionUsageArchive(existingArchive, { timeZone });
   if (!deviceRecord || typeof deviceRecord !== 'object') return archive;
 
   const captureDate = toDate(capturedAt);
+  const captureIso = captureDate.toISOString();
+  const captureDay = localDay(captureDate, timeZone);
+  const captureMonth = localMonth(captureDate, timeZone);
+
   for (const periodName of PERIODS) {
-    const period = periodFor(deviceRecord, periodName);
-    for (const session of Object.values(period.sessions || {})) {
-      if (isReasonixSyntheticSession(session) || !hasSessionUsage(session)) continue;
-      const archiveKey = sessionKey(session.client, session.sessionId);
+    const sessions = extractSessionsForCapture(deviceRecord, periodName);
+    for (const nextSession of sessions) {
+      if (isReasonixSyntheticSession(nextSession) || !hasSessionUsage(nextSession)) continue;
+      const archiveKey = sessionKey(nextSession.client, nextSession.sessionId);
       if (!archiveKey) continue;
       const entry = archive.sessions[archiveKey] || {
-        client: session.client,
-        sessionId: session.sessionId,
-        capturedAt: captureDate.toISOString(),
-        day: localDay(captureDate, timeZone),
-        month: localMonth(captureDate, timeZone),
+        client: nextSession.client,
+        sessionId: nextSession.sessionId,
+        capturedAt: captureIso,
+        day: captureDay,
+        month: captureMonth,
         periodWindows: {},
         periods: {}
       };
-      const nextSession = clone(session);
       const window = entry.periodWindows?.[periodName] || {};
       const sameWindow = periodName === 'today'
-        ? window.day === localDay(captureDate, timeZone)
+        ? window.day === captureDay
         : periodName === 'month'
-          ? window.month === localMonth(captureDate, timeZone)
+          ? window.month === captureMonth
           : true;
       if (sameJson(entry.periods[periodName], nextSession) && sameWindow) continue;
-      entry.client = session.client;
-      entry.sessionId = session.sessionId;
-      entry.capturedAt = captureDate.toISOString();
-      entry.day = localDay(captureDate, timeZone);
-      entry.month = localMonth(captureDate, timeZone);
+      entry.client = nextSession.client;
+      entry.sessionId = nextSession.sessionId;
+      entry.capturedAt = captureIso;
+      entry.day = captureDay;
+      entry.month = captureMonth;
       entry.periods[periodName] = nextSession;
       entry.periodWindows = entry.periodWindows || {};
-      entry.periodWindows[periodName] = { capturedAt: captureDate.toISOString() };
-      if (periodName === 'today') entry.periodWindows[periodName].day = localDay(captureDate, timeZone);
-      if (periodName === 'month') entry.periodWindows[periodName].month = localMonth(captureDate, timeZone);
+      entry.periodWindows[periodName] = { capturedAt: captureIso };
+      if (periodName === 'today') entry.periodWindows[periodName].day = captureDay;
+      if (periodName === 'month') entry.periodWindows[periodName].month = captureMonth;
       archive.sessions[archiveKey] = entry;
+      markSessionArchiveDirty(archive);
     }
   }
 
-  // Entries added above come straight out of normalizePeriod(), so the archive is
+  // Entries added above come straight out of normalizeSession(), so the archive is
   // still canonical and the next pass can skip the full re-normalization.
   return markSessionArchiveNormalized(archive);
 }
@@ -336,35 +394,57 @@ function addArchivedSession(period, session) {
   applySessionContribution(period, computeSessionContribution(archived));
 }
 
-function shouldApplyPeriod(periodName, entry, now, timeZone = '') {
-  const window = entry?.periodWindows?.[periodName] || {};
-  if (periodName === 'today') return (window.day || entry.day) === localDay(now, timeZone);
-  if (periodName === 'month') return (window.month || entry.month) === localMonth(now, timeZone);
-  return periodName === 'allTime';
+function cloneSummaryPeriodsForTransform(summary) {
+  if (!summary || typeof summary !== 'object') return {};
+  const next = { ...summary };
+  const hasNestedPeriods = next.periods && typeof next.periods === 'object';
+  if (hasNestedPeriods) next.periods = { ...next.periods };
+  const periodContainer = hasNestedPeriods ? next.periods : next;
+  for (const periodName of PERIODS) {
+    const period = periodContainer?.[periodName];
+    if (!period || typeof period !== 'object') continue;
+    const periodCopy = { ...period };
+    if (hasOwn(periodCopy, 'sessions') && periodCopy.sessions && typeof periodCopy.sessions === 'object') {
+      const filtered = filterReasonixSyntheticSessions(periodCopy.sessions);
+      periodCopy.sessions = filtered === periodCopy.sessions ? { ...filtered } : filtered;
+    }
+    periodContainer[periodName] = periodCopy;
+  }
+  return next;
 }
 
 function applySessionUsageArchive(summary, archive, options = {}) {
   const timeZone = normalizeTimeZone(options.timeZone);
   const normalizedArchive = normalizeSessionUsageArchive(archive, { timeZone });
   const now = toDate(options.now);
-  const next = clone(summary);
+  const next = cloneSummaryPeriodsForTransform(summary);
   const periodContainer = next.periods && typeof next.periods === 'object' ? next.periods : next;
-  for (const periodName of PERIODS) {
-    const period = periodContainer?.[periodName];
-    if (period && typeof period === 'object' && Object.prototype.hasOwnProperty.call(period, 'sessions')) {
-      period.sessions = filterReasonixSyntheticSessions(period.sessions);
-    }
-  }
   const targetPeriods = new Map();
   const targetFor = (periodName) => {
     if (!targetPeriods.has(periodName)) targetPeriods.set(periodName, targetPeriod(next, periodName));
     return targetPeriods.get(periodName);
   };
 
+  const todayKey = localDay(now, timeZone);
+  const monthKey = localMonth(now, timeZone);
+
   for (const entry of Object.values(normalizedArchive.sessions)) {
     for (const periodName of PERIODS) {
       const session = entry.periods?.[periodName];
-      if (!session || !hasSessionUsage(session) || !shouldApplyPeriod(periodName, entry, now, timeZone)) continue;
+      if (!session || !hasSessionUsage(session)) continue;
+      const window = entry.periodWindows?.[periodName] || {};
+      const inWindow = periodName === 'today'
+        ? (window.day || entry.day) === todayKey
+        : periodName === 'month'
+          ? (window.month || entry.month) === monthKey
+          : periodName === 'allTime';
+      if (!inWindow) continue;
+      const key = sessionKey(session.client, session.sessionId);
+      if (!key) continue;
+      // Fast skip before normalizing the entire target period when the session is
+      // already live under its canonical key.
+      const existingSessions = periodContainer?.[periodName]?.sessions;
+      if (existingSessions && hasOwn(existingSessions, key)) continue;
       addArchivedSession(targetFor(periodName), session);
     }
   }
@@ -430,6 +510,7 @@ module.exports = {
   applySessionUsageArchive,
   captureSessionUsageArchive,
   clearSessionUsageArchive,
+  consumeSessionArchiveDirty,
   normalizeSessionUsageArchive,
   readSessionUsageArchive,
   sessionUsageArchiveDate,

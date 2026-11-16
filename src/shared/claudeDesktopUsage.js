@@ -53,14 +53,6 @@ function dirExists(dir) {
   }
 }
 
-function fileExists(filePath) {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch (_) {
-    return false;
-  }
-}
-
 // Cost is an estimate from a model-price catalog, never a provider invoice.
 // Return null rather than silently undercount when a row uses a token category
 // whose rate is unavailable (notably cache writes for some custom prices).
@@ -237,13 +229,41 @@ function sessionHomeFromJsonl(filePath) {
   return path.dirname(dir);
 }
 
+const MAX_CACHE_ENTRIES = 2048;
+const sessionMetaFileCache = new Map();
+const transcriptRowCache = new Map();
+
+function setBoundedCache(map, key, value) {
+  if (!map.has(key) && map.size >= MAX_CACHE_ENTRIES) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+}
+
 function loadSessionMeta(sessionHome) {
   if (!sessionHome) return null;
   const metaPath = `${sessionHome}.json`;
-  if (!fileExists(metaPath)) return null;
+  let stat;
+  try {
+    stat = fs.statSync(metaPath);
+  } catch (_) {
+    sessionMetaFileCache.delete(metaPath);
+    return null;
+  }
+  if (!stat.isFile()) {
+    sessionMetaFileCache.delete(metaPath);
+    return null;
+  }
+  const cached = sessionMetaFileCache.get(metaPath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.value;
+  }
   try {
     const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    return raw && typeof raw === 'object' ? raw : null;
+    const value = raw && typeof raw === 'object' ? raw : null;
+    setBoundedCache(sessionMetaFileCache, metaPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+    return value;
   } catch (_) {
     return null;
   }
@@ -362,6 +382,8 @@ function collectClaudeDesktopRows(options = {}) {
       if (seenFiles.has(key)) continue;
       seenFiles.add(key);
       try {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
         const sessionHome = sessionHomeFromJsonl(filePath);
         let meta = null;
         if (sessionHome) {
@@ -369,10 +391,27 @@ function collectClaudeDesktopRows(options = {}) {
           meta = metaCache.get(sessionHome);
         }
         const projectLabel = projectLabelFromMeta(meta, null);
-        rows.push(...collectSessionRows(filePath, {
-          sessionId: path.basename(filePath, path.extname(filePath)),
-          projectLabel
-        }));
+        const sessionId = path.basename(filePath, path.extname(filePath));
+        const cached = transcriptRowCache.get(key);
+        if (
+          cached
+          && cached.mtimeMs === stat.mtimeMs
+          && cached.size === stat.size
+          && cached.projectLabel === projectLabel
+          && cached.sessionId === sessionId
+        ) {
+          rows.push(...cached.rows);
+          continue;
+        }
+        const parsedRows = collectSessionRows(filePath, { sessionId, projectLabel });
+        setBoundedCache(transcriptRowCache, key, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          projectLabel,
+          sessionId,
+          rows: parsedRows
+        });
+        rows.push(...parsedRows);
       } catch (_) {
         // skip unreadable files
       }

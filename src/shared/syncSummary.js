@@ -3,16 +3,23 @@
 const {
   applySessionUsageArchive,
   captureSessionUsageArchive,
+  consumeSessionArchiveDirty,
   normalizeSessionUsageArchive,
   readSessionUsageArchive,
   sessionUsageArchiveDate,
   writeSessionUsageArchive
 } = require('./sessionUsageArchive');
-const { applyProjectRollups } = require('./usage');
+const { PERIODS, applyProjectRollups } = require('./usage');
 const { normalizeTimeZone } = require('./fleetTimeZone');
 
 function resolveOption(value, ...args) {
   return typeof value === 'function' ? value(...args) : value;
+}
+
+function projectTargetPeriods(scope) {
+  if (scope === 'allTime') return ['allTime'];
+  if (Array.isArray(scope) && scope.length > 0) return scope;
+  return PERIODS;
 }
 
 function applySyncSummaryTransform(summary, options = {}) {
@@ -27,7 +34,9 @@ function applySyncSummaryTransform(summary, options = {}) {
       { now, timeZone: normalizeTimeZone(options.timeZone) }
     );
   }
-  if (options.projectsEnabled !== false) applyProjectRollups(visibleSummary);
+  if (options.projectsEnabled !== false) {
+    applyProjectRollups(visibleSummary, projectTargetPeriods(options.projectsScope));
+  }
   return visibleSummary;
 }
 
@@ -38,6 +47,11 @@ function applySyncSummaryTransform(summary, options = {}) {
  */
 function createSyncSummaryTransformer(options = {}) {
   const initialTimeZone = normalizeTimeZone(options.timeZone);
+  const writeThrottleMs = Math.max(0, Number(options.writeThrottleMs) || 0);
+  const nowMs = typeof options.nowMs === 'function' ? options.nowMs : Date.now;
+  const setTimer = options.setTimer || setTimeout;
+  const clearTimer = options.clearTimer || clearTimeout;
+
   let sessionArchive = options.initialSessionUsageArchive === undefined
     ? null
     : normalizeSessionUsageArchive(options.initialSessionUsageArchive, { timeZone: initialTimeZone });
@@ -47,6 +61,57 @@ function createSyncSummaryTransformer(options = {}) {
   // clears the file, but this copy would otherwise be written back on the next
   // capture), so drop it and reload from disk.
   let lastTimeZone = initialTimeZone;
+  let pendingWrite = false;
+  let lastWriteAt = 0;
+  let writeTimer = null;
+
+  function clearWriteTimer() {
+    if (writeTimer !== null) {
+      clearTimer(writeTimer);
+      writeTimer = null;
+    }
+  }
+
+  function persistArchiveNow() {
+    clearWriteTimer();
+    if (!pendingWrite || !sessionArchive) return false;
+    pendingWrite = false;
+    lastWriteAt = Number(nowMs());
+    try {
+      if (typeof options.writeSessionUsageArchive === 'function') {
+        options.writeSessionUsageArchive(sessionArchive);
+      } else {
+        writeSessionUsageArchive(sessionArchive, {
+          ...(options.archivePath ? { path: options.archivePath } : {}),
+          timeZone: lastTimeZone
+        });
+      }
+      return true;
+    } catch (error) {
+      try { options.onArchiveError?.(error, 'write'); } catch (_) {}
+      return false;
+    }
+  }
+
+  function schedulePersist() {
+    if (!pendingWrite) return;
+    if (writeThrottleMs <= 0) {
+      persistArchiveNow();
+      return;
+    }
+    const elapsed = lastWriteAt > 0 ? Number(nowMs()) - lastWriteAt : writeThrottleMs;
+    if (elapsed >= writeThrottleMs) {
+      persistArchiveNow();
+      return;
+    }
+    if (writeTimer !== null) return;
+    const delay = Math.max(1, writeThrottleMs - elapsed);
+    writeTimer = setTimer(() => {
+      writeTimer = null;
+      persistArchiveNow();
+    }, delay);
+    writeTimer?.unref?.();
+  }
 
   function loadSessionArchive() {
     if (sessionArchiveLoaded) return sessionArchive;
@@ -71,6 +136,8 @@ function createSyncSummaryTransformer(options = {}) {
     const now = sessionUsageArchiveDate(summary);
     const timeZone = normalizeTimeZone(resolveOption(options.timeZone, summary, reason, meta));
     if (timeZone !== lastTimeZone) {
+      clearWriteTimer();
+      pendingWrite = false;
       lastTimeZone = timeZone;
       sessionArchive = null;
       sessionArchiveLoaded = false;
@@ -79,22 +146,12 @@ function createSyncSummaryTransformer(options = {}) {
     const archiveEnabled = resolveOption(options.sessionUsageArchiveEnabled, summary, reason, meta) !== false;
     if (archiveEnabled) {
       nextArchive = captureSessionUsageArchive(nextArchive, summary, now, { timeZone });
-      const changed = JSON.stringify(nextArchive) !== JSON.stringify(sessionArchive);
+      const changed = consumeSessionArchiveDirty(nextArchive);
       sessionArchive = nextArchive;
+      if (changed) pendingWrite = true;
       const writeAllowed = resolveOption(options.canWriteSessionUsageArchive, summary, reason, meta) !== false;
-      if (changed && writeAllowed && meta.preview !== true) {
-        try {
-          if (typeof options.writeSessionUsageArchive === 'function') {
-            options.writeSessionUsageArchive(nextArchive);
-          } else {
-            writeSessionUsageArchive(nextArchive, {
-              ...(options.archivePath ? { path: options.archivePath } : {}),
-              timeZone
-            });
-          }
-        } catch (error) {
-          try { options.onArchiveError?.(error, 'write'); } catch (_) {}
-        }
+      if (pendingWrite && writeAllowed && meta.preview !== true) {
+        schedulePersist();
       }
     }
 
@@ -102,18 +159,29 @@ function createSyncSummaryTransformer(options = {}) {
       sessionUsageArchiveEnabled: archiveEnabled,
       sessionUsageArchive: nextArchive,
       projectsEnabled: resolveOption(options.projectsEnabled, summary, reason, meta),
+      projectsScope: resolveOption(options.projectsScope, summary, reason, meta),
       now,
       timeZone
     });
   }
 
   return {
+    flush() {
+      return persistArchiveNow();
+    },
+    stop() {
+      clearWriteTimer();
+    },
     getSessionUsageArchive: () => sessionArchive,
     resetSessionUsageArchive(value = {}) {
+      clearWriteTimer();
+      pendingWrite = false;
       sessionArchive = normalizeSessionUsageArchive(value, { timeZone: lastTimeZone });
       sessionArchiveLoaded = true;
     },
     reloadSessionUsageArchive() {
+      clearWriteTimer();
+      pendingWrite = false;
       sessionArchive = null;
       sessionArchiveLoaded = false;
     },

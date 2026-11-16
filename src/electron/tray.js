@@ -121,6 +121,10 @@ function createApplicationTray(options = {}) {
   }));
 
   const showWindow = () => {
+    if (typeof options.onShowWindow === 'function') {
+      options.onShowWindow();
+      return;
+    }
     const window = typeof options.getWindow === 'function' ? options.getWindow() : null;
     if (!window || window.isDestroyed?.()) return;
     if (window.isMinimized?.()) window.restore();

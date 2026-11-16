@@ -30,8 +30,6 @@
 const fs = require('node:fs');
 const { isProcessAlive, parseAgentPidRecord } = require('../shared/agentPidFile');
 
-const DIAGNOSTICS_INTERVAL_MS = 2000;
-
 function serializeError(error) {
   return {
     message: String(error?.message || error || 'collector error'),
@@ -59,14 +57,26 @@ function runCollectorHost(port, deps = {}) {
     collectCustomRangeOnce: (args, control = {}) => require('../shared/collector').collectCustomRangeOnce({ ...args, ...control })
   };
   const pidPaths = deps.pidPaths || require('../shared/config').pidFileCandidates();
-  const setIntervalFn = deps.setInterval || setInterval;
-  const clearIntervalFn = deps.clearInterval || clearInterval;
   const runtimes = new Map();
   const oneshotControllers = new Map();
+  let hostTransformer = null;
 
   const post = (message) => {
     try { port.postMessage(message); } catch (_) { /* parent gone */ }
   };
+
+  function ensureHostTransformer() {
+    if (hostTransformer) return hostTransformer;
+    const { createSyncSummaryTransformer } = require('../shared/syncSummary');
+    const { resolveFleetTimeZone } = require('../shared/fleetTimeZone');
+    hostTransformer = createSyncSummaryTransformer({
+      canWriteSessionUsageArchive: () => !externalAgentActive(pidPaths),
+      writeThrottleMs: 30_000,
+      timeZone: () => resolveFleetTimeZone(),
+      onArchiveError: (error, operation) => post({ type: 'log', runtimeId: null, message: `[session-archive] ${operation} failed: ${error.message}` })
+    });
+    return hostTransformer;
+  }
 
   function publishDiagnostics(runtimeId) {
     const entry = runtimes.get(runtimeId);
@@ -76,37 +86,56 @@ function runCollectorHost(port, deps = {}) {
 
   function start(runtimeId, options = {}) {
     stop(runtimeId);
+    const { hostSyncTransform, ...collectorOptions } = options;
     let seq = 0;
     const pendingAcks = new Map();
-    const entry = { collector: null, pendingAcks, timer: null };
+    const entry = { collector: null, pendingAcks, hostSyncTransform: hostSyncTransform === true };
     runtimes.set(runtimeId, entry);
     const collector = startCollector({
-      ...options,
-      // The transformation lives in the main process; the collector only needs
-      // the visible `updatedAt`/`today` back for its live daily archive.
+      ...collectorOptions,
+      // When hostSyncTransform is enabled, session archive & project rollups run
+      // here in the utility process instead of blocking the main window thread;
+      // the collector still receives visible `updatedAt`/`today` back via ack.
       onUpdate: (summary, reason) => new Promise((resolve) => {
         if (!runtimes.has(runtimeId)) return resolve(summary);
+        let outgoing = summary;
+        if (entry.hostSyncTransform) {
+          const transformed = ensureHostTransformer().transform(summary, reason, { progressive: false });
+          outgoing = transformed && typeof transformed === 'object'
+            ? { ...transformed, __hostTransformed: true }
+            : summary;
+        }
         seq += 1;
         pendingAcks.set(seq, resolve);
-        post({ type: 'update', runtimeId, seq, summary, reason });
+        post({ type: 'update', runtimeId, seq, summary: outgoing, reason });
       }).then((visible) => {
         publishDiagnostics(runtimeId);
         return visible;
       }),
-      onPreview: (summary, reason) => post({ type: 'preview', runtimeId, summary, reason }),
+      onPreview: (summary, reason) => {
+        let outgoing = summary;
+        if (entry.hostSyncTransform) {
+          const transformed = ensureHostTransformer().transform(summary, reason, { progressive: true });
+          outgoing = transformed && typeof transformed === 'object'
+            ? { ...transformed, __hostTransformed: true }
+            : summary;
+        }
+        post({ type: 'preview', runtimeId, summary: outgoing, reason });
+      },
       onError: (error, reason) => {
         post({ type: 'error', runtimeId, error: serializeError(error), reason: reason ?? null });
         publishDiagnostics(runtimeId);
       },
-      onDiagnosticEvent: (event) => post({ type: 'diagnostic', runtimeId, event }),
+      onDiagnosticEvent: (event) => {
+        post({ type: 'diagnostic', runtimeId, event });
+        publishDiagnostics(runtimeId);
+      },
       logger: (message) => post({ type: 'log', runtimeId, message: String(message) }),
-      ...(options.dailyHistoryArchiveWriteEnabled === 'unless-external-agent'
+      ...(collectorOptions.dailyHistoryArchiveWriteEnabled === 'unless-external-agent'
         ? { dailyHistoryArchiveWriteEnabled: () => !externalAgentActive(pidPaths) }
         : {})
     });
     entry.collector = collector;
-    entry.timer = setIntervalFn(() => publishDiagnostics(runtimeId), DIAGNOSTICS_INTERVAL_MS);
-    entry.timer?.unref?.();
     publishDiagnostics(runtimeId);
   }
 
@@ -114,7 +143,7 @@ function runCollectorHost(port, deps = {}) {
     const entry = runtimes.get(runtimeId);
     if (!entry) return;
     runtimes.delete(runtimeId);
-    if (entry.timer) clearIntervalFn(entry.timer);
+    try { hostTransformer?.flush?.(); } catch (_) {}
     // Release a tick waiting on an ack so the stopped collector can unwind.
     for (const resolve of entry.pendingAcks.values()) resolve(null);
     entry.pendingAcks.clear();
@@ -164,6 +193,8 @@ function runCollectorHost(port, deps = {}) {
     const { type, runtimeId } = message;
     if (type === 'cancelOneshot') { oneshotControllers.get(message.id)?.abort(); return; }
     if (type === 'oneshot') { void oneshot(message.id, message.method, message.args, message); return; }
+    if (type === 'reloadSessionArchive') { try { hostTransformer?.reloadSessionUsageArchive?.(); } catch (_) {} return; }
+    if (type === 'flushTransform') { try { hostTransformer?.stop?.(); } catch (_) {} return; }
     if (type === 'start') start(runtimeId, message.options);
     else if (type === 'stop') stop(runtimeId, message.options);
     else if (type === 'call') void call(runtimeId, message.id, message.method, message.args);

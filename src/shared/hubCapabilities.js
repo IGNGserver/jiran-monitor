@@ -30,7 +30,8 @@ function hubCapabilities(runtime, options = {}) {
     // `/api/updates` resolves the newest installable Android release through the
     // Hub. Older Hubs omit the flag and the client must fall back to the release
     // page rather than treating a 404 as "no update".
-    updateCheck: true
+    updateCheck: true,
+    gzipIngest: true
   });
 }
 

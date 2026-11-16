@@ -456,19 +456,24 @@ function retainDailyHistory(graphs, options = {}) {
 }
 
 function retainLiveDailyHistory(period, options = {}) {
+  // Watch ticks explicitly pass `writeEnabled: false` to maintain the in-memory
+  // high-water mark without touching disk. Reading and parsing the entire
+  // historical archive file every 1.5s was pure overhead because only `liveDays`
+  // is consumed by the caller until the next full/history tick persists it.
+  if (options.writeEnabled === false) {
+    const inMemory = options.liveDays && typeof options.liveDays === 'object'
+      ? normalizeDailyHistoryArchive({ liveDays: options.liveDays })
+      : { version: ARCHIVE_VERSION, days: {} };
+    return captureLiveDailyHistory(inMemory, period, options);
+  }
   const previous = readDailyHistoryArchive(options);
-  const capture = (archive) => captureLiveDailyHistory(
-    mergeLiveDaysIntoArchive(archive, options.liveDays),
+  const next = captureLiveDailyHistory(
+    mergeLiveDaysIntoArchive(previous, options.liveDays),
     period,
     options
   );
-  let next = capture(previous);
   if (archiveWriteEnabled(options) && !isDeepStrictEqual(previous, next)) {
-    const latest = readDailyHistoryArchive(options);
-    next = capture(latest);
-    if (archiveWriteEnabled(options) && !isDeepStrictEqual(latest, next)) {
-      writeDailyHistoryArchive(next, options);
-    }
+    writeDailyHistoryArchive(next, options);
   }
   return next;
 }

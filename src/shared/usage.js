@@ -368,9 +368,9 @@ function projectRollupFromSessions(sessions) {
   return projects;
 }
 
-function applyProjectRollups(summary) {
+function applyProjectRollups(summary, targetPeriods = PERIODS) {
   if (!summary || typeof summary !== 'object') return summary;
-  for (const periodName of PERIODS) {
+  for (const periodName of targetPeriods) {
     const period = summary.periods?.[periodName] || summary[periodName];
     if (!period || typeof period !== 'object') continue;
     period.projects = projectRollupFromSessions(period.sessions);
@@ -2010,17 +2010,22 @@ function deltaValue(base, fresh, anchor, key) {
     const keys = new Set([...Object.keys(base || {}), ...Object.keys(fresh || {}), ...Object.keys(anchor || {})]);
     const result = Object.getPrototypeOf(sample) === null ? Object.create(null) : {};
     for (const childKey of keys) {
-      Object.defineProperty(result, childKey, {
-        value: deltaValue(
-          base ? base[childKey] : undefined,
-          fresh ? fresh[childKey] : undefined,
-          anchor ? anchor[childKey] : undefined,
-          childKey
-        ),
-        enumerable: true,
-        configurable: true,
-        writable: true
-      });
+      const childVal = deltaValue(
+        base ? base[childKey] : undefined,
+        fresh ? fresh[childKey] : undefined,
+        anchor ? anchor[childKey] : undefined,
+        childKey
+      );
+      if (childKey === '__proto__') {
+        Object.defineProperty(result, childKey, {
+          value: childVal,
+          enumerable: true,
+          configurable: true,
+          writable: true
+        });
+      } else {
+        result[childKey] = childVal;
+      }
     }
     return result;
   }
@@ -2047,6 +2052,7 @@ module.exports = {
   normalizeModelNameForClient,
   normalizeDeviceRecord,
   normalizePeriod,
+  normalizeSession,
   projectDeviceForNow,
   projectRollupFromSessions,
   summarizeStats
