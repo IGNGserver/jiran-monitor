@@ -110,7 +110,7 @@ test('mac release scripts build native Apple Silicon and Intel artifacts', () =>
   assert.match(rootPackage.scripts['dist:mac:x64'], /--x64/);
 
   const workflow = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8');
-  assert.match(workflow, /os: macos-15\s+target: mac\s+arch: arm64/);
+  assert.match(workflow, /os: macos-latest\s+target: mac\s+arch: arm64/);
   assert.match(workflow, /os: macos-15-intel\s+target: mac\s+arch: x64/);
   assert.match(workflow, /artifacts\/jiran-mac-arm64\/latest-mac\.yml \\\s+artifacts\/jiran-mac-x64\/latest-mac\.yml/);
   assert.doesNotMatch(workflow, /latest-mac-(?:arm64|x64)\.yml/);
