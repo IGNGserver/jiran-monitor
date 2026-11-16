@@ -85,7 +85,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15
+          - os: macos-latest
             target: mac
             arch: arm64
             dist_script: dist:mac
