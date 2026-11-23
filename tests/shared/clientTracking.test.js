@@ -91,15 +91,17 @@ test('normalizeClientsCsv trims, lowercases, and drops empty entries', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The Android read client renders the same 55 harnesses, and it keeps its own
-// copy of the brand table (there is no shared code between the surfaces). With
-// every harness collected on every surface, an id missing there is not a hidden
-// row any more — it is a row with a hashed colour and a fallback name.
+// The Android read client renders the same tracked harnesses and quota
+// providers, and keeps its own copy of the brand table. Every tracked client
+// AND every limit provider must have a label, brand colour, and resolved icon
+// drawable on Android, synchronized from src/shared-ui/icons/manifest.json via
+// `npm run sync:icons`.
 // ---------------------------------------------------------------------------
-test('Android branding covers every tracked client with the shared-UI values', async () => {
+test('Android branding covers every tracked client and limit provider with the shared-UI values', async () => {
   const { pathToFileURL } = require('node:url');
   const fs = require('node:fs');
   const path = require('node:path');
+  const { LIMIT_PROVIDER_IDS } = require('../../src/shared/limitProviders');
   const dataPath = path.join(__dirname, '..', '..', 'src', 'shared-ui', 'core', 'data.js');
   const data = await import(pathToFileURL(dataPath).href);
   const brandPath = path.join(__dirname, '..', '..', 'android', 'app', 'src', 'main', 'java',
@@ -126,34 +128,36 @@ test('Android branding covers every tracked client with the shared-UI values', a
 
   const labels = mapEntries('val labels');
   const colors = mapEntries('val colors');
-  for (const client of TRACKED_CLIENTS.split(',')) {
-    // Labels are the same string on every surface.
-    assert.equal(labels.get(client), data.CLIENT_LABELS[client],
+  const allIds = new Set([...TRACKED_CLIENTS.split(','), ...LIMIT_PROVIDER_IDS]);
+  for (const client of allIds) {
+    const expectedLabel = data.CLIENT_LABELS[client] || data.PROVIDER_LABELS[client];
+    assert.equal(labels.get(client), expectedLabel,
       `Android label for "${client}" is missing or differs from the shared UI`);
-    // Colours are presence-checked only: the pitch-dark theme replaces a brand's
-    // pure black with a visible near-black, and
-    // `npm run verify:android-fluent-contrast` owns that rule. A missing entry
-    // here would silently fall back to the hashed colour instead.
     assert.ok(
       colors.has(client),
       `Android has no colour for "${client}", so it renders with the hashed fallback instead of the brand mark`
     );
+    assert.ok(
+      Boolean(data.CLIENT_COLORS[client]),
+      `Shared UI CLIENT_COLORS is missing "${client}"`
+    );
   }
 });
 
-// A brand mark shared by two ids is an alias, not duplicate artwork, and an id
-// with no mark at all has to be a written decision rather than drift.
-test('Android client marks resolve through aliases with documented gaps', async () => {
+test('Android client marks cover every tracked client and limit provider with zero gaps and match manifest.json', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
-  const iconsPath = path.join(__dirname, '..', '..', 'android', 'app', 'src', 'main', 'java',
+  const { LIMIT_PROVIDER_IDS } = require('../../src/shared/limitProviders');
+  const rootDir = path.join(__dirname, '..', '..');
+  const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'src', 'shared-ui', 'icons', 'manifest.json'), 'utf8'));
+  const iconsPath = path.join(rootDir, 'android', 'app', 'src', 'main', 'java',
     'com', 'igng', 'tokenmonitor', 'android', 'ui', 'components', 'ClientIcons.kt');
   const kt = fs.readFileSync(iconsPath, 'utf8');
 
-  function mapBody(marker) {
+  function collectionBody(marker, opener) {
     const start = kt.indexOf(marker);
     assert.ok(start > 0, `${marker} must exist in ClientIcons.kt`);
-    const open = kt.indexOf('mapOf(', start);
+    const open = kt.indexOf(opener, start);
     let depth = 0;
     for (let i = kt.indexOf('(', open); i < kt.length; i += 1) {
       if (kt[i] === '(') depth += 1;
@@ -162,32 +166,103 @@ test('Android client marks resolve through aliases with documented gaps', async 
     throw new Error(`${marker} is unbalanced`);
   }
 
-  const drawables = mapBody('val drawables');
-  const aliasBody = mapBody('val aliases');
+  const drawables = collectionBody('val drawables', 'mapOf(');
+  const aliasBody = collectionBody('val aliases', 'mapOf(');
+  const multicolorBody = collectionBody('val multicolorIds', 'setOf(');
   const drawableIds = new Set(Array.from(drawables.matchAll(/"([a-z0-9_-]+)"\s+to\s+R\.drawable\./g), (m) => m[1]));
-  const aliases = new Map(Array.from(aliasBody.matchAll(/"([a-z0-9_-]+)"\s+to\s+"([a-z0-9_-]+)"/g), (m) => [m[1], m[2]]));
+  const aliases = Object.fromEntries(Array.from(aliasBody.matchAll(/"([a-z0-9_-]+)"\s+to\s+"([a-z0-9_-]+)"/g), (m) => [m[1], m[2]]));
+  const multicolorIds = Array.from(multicolorBody.matchAll(/"([a-z0-9_-]+)"/g), (m) => m[1]).sort();
 
-  for (const [id, target] of aliases) {
+  assert.deepEqual(aliases, manifest.aliases, 'ClientIcons.kt aliases must mirror manifest.json');
+  assert.deepEqual(multicolorIds, [...manifest.colorIcons].sort(), 'ClientIcons.kt multicolorIds must mirror manifest.json');
+
+  for (const [id, target] of Object.entries(aliases)) {
     assert.ok(drawableIds.has(target), `alias "${id}" points at "${target}", which has no drawable`);
     assert.ok(!drawableIds.has(id), `"${id}" has its own drawable, so the alias entry is dead weight`);
   }
 
-  // openclaw / antigravity are the documented filter-and-gradient skips; proma is
-  // simply not vendored yet. Anything else that appears here is a regression.
-  const NO_MARK = {
-    openclaw: 'its SVG needs a filter/transform, so the vector is skipped by design',
-    antigravity: 'its SVG needs a filter/transform, so the vector is skipped by design',
-    proma: 'not vendored as a vector yet; the monogram is the fallback'
-  };
-  for (const client of TRACKED_CLIENTS.split(',')) {
-    const resolved = drawableIds.has(client) || (aliases.has(client) && drawableIds.has(aliases.get(client)));
-    if (!resolved) {
-      assert.ok(NO_MARK[client], `Android has no mark for "${client}" and no written reason`);
-    } else {
-      assert.ok(
-        !NO_MARK[client] || client === 'proma',
-        `"${client}" now has a mark — drop it from the documented-gap list`
-      );
-    }
+  for (const client of new Set([...TRACKED_CLIENTS.split(','), ...LIMIT_PROVIDER_IDS])) {
+    const resolved = drawableIds.has(client) || (aliases[client] && drawableIds.has(aliases[client]));
+    assert.ok(resolved, `Android has no mark for "${client}" — add its SVG and run npm run sync:icons`);
   }
+});
+
+test('canonical client SVGs, Android drawables, website mirror, app.css and legacy assets stay normalized and synchronized', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const rootDir = path.join(__dirname, '..', '..');
+  const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'src', 'shared-ui', 'icons', 'manifest.json'), 'utf8'));
+  const clientsDir = path.join(rootDir, 'src', 'shared-ui', 'icons', 'clients');
+  const androidDir = path.join(rootDir, 'android', 'app', 'src', 'main', 'res', 'drawable');
+  const websiteDir = path.join(rootDir, 'website', 'src', 'assets', 'icons', 'clients');
+  const legacyDir = path.join(rootDir, 'assets', 'icons');
+  const colorSet = new Set(manifest.colorIcons);
+
+  const svgs = fs.readdirSync(clientsDir).filter((f) => f.endsWith('.svg')).sort();
+  assert.ok(svgs.length >= 60, `expected canonical SVG set, found ${svgs.length}`);
+
+  const expectedAndroidXmls = new Set();
+  for (const file of svgs) {
+    const slug = file.replace(/\.svg$/, '');
+    const svgText = fs.readFileSync(path.join(clientsDir, file), 'utf8');
+    const titleCount = (svgText.match(/<title>/g) || []).length;
+    assert.ok(titleCount <= 1, `${file} has duplicate <title> elements`);
+    assert.match(svgText, /viewBox="0 0 24 24"/, `${file} must be normalized to viewBox="0 0 24 24"`);
+    assert.doesNotMatch(svgText, /\btransform=/, `${file} must not contain unbaked transform attributes`);
+    if (!colorSet.has(slug)) {
+      assert.match(svgText, /currentColor/, `monochrome ${file} must use currentColor`);
+      assert.doesNotMatch(svgText, /fill\s*[:=]\s*["']?#(?:fff|ffffff)\b/i, `monochrome ${file} must not hardcode white fill`);
+    }
+
+    // Android drawable parity
+    const xmlName = `client_${slug.replace(/-/g, '_')}.xml`;
+    expectedAndroidXmls.add(xmlName);
+    const xmlPath = path.join(androidDir, xmlName);
+    assert.ok(fs.existsSync(xmlPath), `missing Android drawable ${xmlName} — run npm run sync:icons`);
+    const xmlText = fs.readFileSync(xmlPath, 'utf8');
+    assert.match(xmlText, /android:viewportWidth="24"/, `${xmlName} viewportWidth must be 24`);
+    assert.match(xmlText, /android:viewportHeight="24"/, `${xmlName} viewportHeight must be 24`);
+    if (/fill-rule\s*[:=]\s*["']?evenodd/i.test(svgText)) {
+      assert.match(xmlText, /android:fillType="evenOdd"/, `${xmlName} lost fillType="evenOdd"`);
+    }
+    if (/fill-opacity\s*[:=]/i.test(svgText)) {
+      assert.match(xmlText, /android:fillAlpha=/, `${xmlName} lost fillAlpha`);
+    }
+
+    // Website mirror byte parity
+    const webPath = path.join(websiteDir, file);
+    assert.ok(fs.existsSync(webPath), `missing website icon mirror ${file} — run npm run sync:icons`);
+    assert.deepEqual(fs.readFileSync(webPath), fs.readFileSync(path.join(clientsDir, file)),
+      `website icon ${file} drifted from src/shared-ui/icons/clients/${file}`);
+  }
+
+  // No stale Android client_*.xml or website SVGs
+  const actualAndroidXmls = fs.readdirSync(androidDir).filter((f) => f.startsWith('client_') && f.endsWith('.xml')).sort();
+  assert.deepEqual(actualAndroidXmls, [...expectedAndroidXmls].sort(), 'Android drawable/ has stale client_*.xml files');
+  const actualWebsiteSvgs = fs.readdirSync(websiteDir).filter((f) => f.endsWith('.svg')).sort();
+  assert.deepEqual(actualWebsiteSvgs, svgs, 'website/src/assets/icons/clients/ has stale SVG files');
+
+  // Shared-UI app.css dark-mode color exclusions, data.js ICON_ALIASES, and website COLOR_SLUGS stay aligned
+  const dataJs = fs.readFileSync(path.join(rootDir, 'src', 'shared-ui', 'core', 'data.js'), 'utf8');
+  const aliasBlock = dataJs.match(/const ICON_ALIASES = \{([\s\S]*?)\n\};/)[1];
+  const jsAliases = Object.fromEntries(
+    [...aliasBlock.matchAll(/^\s*'?([a-z0-9-]+)'?:\s*'([a-z0-9-]+)'/gm)].map((m) => [m[1], m[2]])
+  );
+  assert.deepEqual(jsAliases, manifest.aliases, 'data.js ICON_ALIASES must mirror manifest.json');
+
+  const appCss = fs.readFileSync(path.join(rootDir, 'src', 'shared-ui', 'styles', 'app.css'), 'utf8');
+  const darkRule = appCss.match(/html\[data-theme="dark"\] \.client-icon([^\n{]+)\{/);
+  assert.ok(darkRule, 'app.css dark-mode .client-icon rule must exist');
+  const cssColorSlugs = [...darkRule[1].matchAll(/:not\(\[src\$="\/([a-z0-9-]+)\.svg"\]\)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(cssColorSlugs, [...manifest.colorIcons].sort(), 'app.css dark-mode exclusions must match manifest.json colorIcons');
+
+  const websiteIconsTs = fs.readFileSync(path.join(rootDir, 'website', 'src', 'data', 'icons.ts'), 'utf8');
+  const webColorBlock = websiteIconsTs.match(/const COLOR_SLUGS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(webColorBlock, 'website/src/data/icons.ts COLOR_SLUGS must exist');
+  const webColorSlugs = [...webColorBlock[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(webColorSlugs, [...manifest.colorIcons].sort(), 'website COLOR_SLUGS must match manifest.json colorIcons');
+
+  // Legacy assets/icons/ holds only macOS tray templates, no retired client SVGs
+  const legacySvgs = fs.readdirSync(legacyDir).filter((f) => f.endsWith('.svg'));
+  assert.deepEqual(legacySvgs, [], `retired SVGs remain in assets/icons/: ${legacySvgs.join(', ')}`);
 });

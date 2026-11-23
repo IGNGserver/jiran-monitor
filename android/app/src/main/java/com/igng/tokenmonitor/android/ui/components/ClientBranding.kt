@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import com.igng.tokenmonitor.android.ui.theme.FluentShapeDefaults
 import com.igng.tokenmonitor.android.ui.theme.FluentTypeRamp
+import com.igng.tokenmonitor.android.ui.theme.LocalFluentColors
 import com.igng.tokenmonitor.android.ui.theme.LocalFluentDark
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Icon
@@ -58,19 +59,21 @@ object ClientBranding {
     "deepseek" to "DeepSeek",
     "xiaomi" to "Xiaomi",
     "mimo" to "MiMo",
-    "minimax" to "MiniMax",
+    "minimax" to "Minimax",
     "doubao" to "Doubao",
     "ollama" to "Ollama",
     "moonshot" to "Moonshot",
     "xai" to "xAI",
     "meta" to "Meta",
     "mistral" to "Mistral",
-    "zai" to "Z.ai",
-    "zaiteam" to "Z.ai Team",
+    "zai" to "GLM",
+    "zaiteam" to "GLM Team",
     "cohere" to "Cohere",
     "volcengine" to "Volcengine",
     "qoder" to "Qoder",
     "openrouter" to "OpenRouter",
+    "sakana" to "Sakana (Fugu)",
+    "thirdparty" to "Third-party",
 
     // Every remaining wired harness. These mirror CLIENT_LABELS /
     // CLIENT_COLORS in src/shared-ui/core/data.js one-for-one; a new tracked id
@@ -179,7 +182,9 @@ object ClientBranding {
     "fx" to Color(0xFF3B82F6),
     "lmstudio" to Color(0xFF5A67D8),
     "unsloth" to Color(0xFF22D3EE),
-    "hindsight" to Color(0xFFA855F7)
+    "hindsight" to Color(0xFFA855F7),
+    "sakana" to Color(0xFFDC2626),
+    "thirdparty" to Color(0xFF6B57FF)
   )
 
   private val fallbacks = listOf(
@@ -197,34 +202,83 @@ object ClientBranding {
     return labels[key] ?: id
   }
 
-  fun color(id: String): Color {
+  private fun rawColor(id: String): Color {
     val key = id.trim().lowercase()
     if (key == "其他" || key.equals("other", true)) return colors.getValue("default")
-    colors[key]?.let { return liftDark(it) }
+    colors[key]?.let { return it }
     // stable hash
     var hash = 0
     for (ch in key) hash = (hash * 31 + ch.code)
     return fallbacks[abs(hash) % fallbacks.size]
   }
 
+  fun color(id: String): Color = liftDark(rawColor(id))
+
   /**
    * Brand colour usable as a *foreground* on this client's own quiet tile.
-   * Several marks are near-black by brand (Kimi, Grok, Copilot, Cursor); on the dark
-   * theme that is invisible, so the same lift the monogram path uses applies here too.
+   * Near-black monochrome marks (Kimi, Grok, Copilot, Cursor, Proma, ZCode, Cline, …)
+   * use neutral foreground on dark surfaces, saturated dark hues lift toward white,
+   * and ultra-bright yellow marks (Kilo) flip to dark ink on light surfaces.
    */
   @Composable
   fun liftDarkTinted(clientId: String): Color {
-    val base = color(clientId)
+    val raw = rawColor(clientId)
+    val lum = relativeLuminance(raw)
+    val chroma = colorChroma(raw)
+    val fluent = LocalFluentColors.current
     // The *resolved* theme, not `isSystemInDarkTheme()`: the client lets a user pin dark
     // while the platform stays light, and asking the system here made the lifted colour
     // and the tile alpha disagree with the surface they were painted on.
-    return if (LocalFluentDark.current) liftDark(base) else base
+    return if (LocalFluentDark.current) {
+      when {
+        lum < 0.14f && chroma < 0.14f -> fluent.neutralForeground1
+        lum < 0.14f -> blend(raw, Color.White, 0.45f)
+        else -> raw
+      }
+    } else {
+      if (lum > 0.65f) fluent.neutralForeground1 else raw
+    }
   }
 
-  /** Slightly lighten near-black brand colors so they stay visible on dark surfaces. */
+  internal fun isNeutralDarkBrand(clientId: String): Boolean {
+    val raw = rawColor(clientId)
+    return relativeLuminance(raw) < 0.14f && colorChroma(raw) < 0.14f
+  }
+
+  internal fun isHighLuminanceBrand(clientId: String): Boolean =
+    relativeLuminance(rawColor(clientId)) > 0.65f
+
+  private fun linearizeChannel(v: Float): Float =
+    if (v <= 0.03928f) v / 12.92f else Math.pow((v + 0.055) / 1.055, 2.4).toFloat()
+
+  private fun relativeLuminance(c: Color): Float =
+    0.2126f * linearizeChannel(c.red) +
+      0.7152f * linearizeChannel(c.green) +
+      0.0722f * linearizeChannel(c.blue)
+
+  private fun colorChroma(c: Color): Float =
+    maxOf(c.red, c.green, c.blue) - minOf(c.red, c.green, c.blue)
+
+  private fun blend(a: Color, b: Color, t: Float): Color = Color(
+    red = a.red + (b.red - a.red) * t,
+    green = a.green + (b.green - a.green) * t,
+    blue = a.blue + (b.blue - a.blue) * t,
+    alpha = a.alpha
+  )
+
+  /** Slightly lighten near-black brand colors so chart bars stay visible on dark surfaces. */
   private fun liftDark(c: Color): Color {
-    val lum = 0.2126f * c.red + 0.7152f * c.green + 0.0722f * c.blue
-    return if (lum < 0.12f) c.copy(red = 0.45f, green = 0.45f, blue = 0.48f) else c
+    return if (relativeLuminance(c) < 0.05f) c.copy(red = 0.45f, green = 0.45f, blue = 0.48f) else c
+  }
+
+  fun platformIconId(platform: String?): String? {
+    val value = platform?.trim()?.lowercase().orEmpty()
+    return when {
+      value.contains("darwin") || value.contains("mac") -> "os-apple"
+      value.contains("win") -> "os-windows"
+      value.contains("linux") -> "os-linux"
+      else -> null
+    }
   }
 
   fun monogram(id: String): String {
@@ -254,27 +308,39 @@ fun ClientMonogram(
   }
   val mark = ClientIcons.drawable(clientId)
   if (mark != 0) {
-    // The brand mark the web and desktop render, tinted with the same brand colour
-    // the monogram used.  `ClientBranding.liftDark` already keeps near-black marks
-    // legible on a dark surface.  4 dp corners, matching every other tile in the
-    // client, rather than the circular Material avatar.
-    val tileBg = if (isDark) {
-      bg.copy(alpha = 0.22f)
-    } else {
-      bg.copy(alpha = 0.12f)
+    val colors = LocalFluentColors.current
+    val isMulticolor = ClientIcons.isMulticolor(clientId)
+    val iconTint = if (isMulticolor) Color.Unspecified else ClientBranding.liftDarkTinted(clientId)
+    val useNeutralTile = isMulticolor || (isDark && ClientBranding.isNeutralDarkBrand(clientId))
+    val useWarmLightTile = !isMulticolor && !isDark && ClientBranding.isHighLuminanceBrand(clientId)
+    // Multicolor marks keep their authored brand palette (`Color.Unspecified`) on a
+    // quiet neutral tile so layered colours and gradients are never flattened into a
+    // single silhouette. Near-black monochrome brands on dark theme also use the
+    // neutral tile with neutralForeground1 for reliable contrast.
+    val tileBg = when {
+      useNeutralTile -> colors.neutralBackground3
+      useWarmLightTile -> bg.copy(alpha = 0.45f)
+      isDark -> iconTint.copy(alpha = 0.20f)
+      else -> bg.copy(alpha = 0.12f)
+    }
+    val tileBorder = when {
+      useNeutralTile -> colors.neutralStroke2
+      useWarmLightTile -> bg.copy(alpha = 0.85f)
+      isDark -> iconTint.copy(alpha = 0.34f)
+      else -> bg.copy(alpha = 0.18f)
     }
     Box(
       modifier = modifier
         .size(size)
         .clip(FluentShapeDefaults.controlCorner)
         .background(tileBg)
-        .border(0.5.dp, bg.copy(alpha = if (isDark) 0.35f else 0.18f), FluentShapeDefaults.controlCorner),
+        .border(0.5.dp, tileBorder, FluentShapeDefaults.controlCorner),
       contentAlignment = Alignment.Center
     ) {
       Icon(
         painter = painterResource(mark),
         contentDescription = ClientBranding.label(clientId),
-        tint = ClientBranding.liftDarkTinted(clientId),
+        tint = iconTint,
         modifier = Modifier.size(size * 0.65f)
       )
     }
@@ -295,4 +361,23 @@ fun ClientMonogram(
       style = FluentTypeRamp.caption2.copy(fontSize = (size.value * 0.36f).sp)
     )
   }
+}
+
+@Composable
+fun PlatformOsIcon(
+  platform: String?,
+  modifier: Modifier = Modifier,
+  size: Dp = 16.dp
+) {
+  val iconId = ClientBranding.platformIconId(platform) ?: return
+  val mark = ClientIcons.drawable(iconId)
+  if (mark == 0) return
+  val colors = LocalFluentColors.current
+  val isMulticolor = ClientIcons.isMulticolor(iconId)
+  Icon(
+    painter = painterResource(mark),
+    contentDescription = null,
+    tint = if (isMulticolor) Color.Unspecified else colors.neutralForeground2,
+    modifier = modifier.size(size)
+  )
 }

@@ -665,9 +665,16 @@ object WidgetRenderer {
     barWidthDp: Float
   ) {
     views.setViewVisibility(ids.row, View.VISIBLE)
-    val icon = providerIcon(row.provider)
+    val providerKey = canonicalProviderId(row.provider)
+    val icon = ClientIcons.drawable(providerKey)
     if (icon != 0) {
-      views.setImageViewResource(ids.icon, icon)
+      val tint = if (ClientIcons.isMulticolor(providerKey)) null else palette.fg1
+      val rendered = bitmaps.clientIcon(icon, 16f, tint)
+      if (rendered != null) {
+        views.image(ids.icon, rendered)
+      } else {
+        views.setImageViewResource(ids.icon, icon)
+      }
     } else {
       views.image(ids.icon, bitmaps.monogram(16f, row.providerName, palette))
     }
@@ -794,15 +801,12 @@ object WidgetRenderer {
     }.getOrDefault("")
   }
 
-  private fun providerIcon(provider: String): Int = ClientIcons.drawable(
-    when (provider) {
-      "zaiteam" -> "zai"
-      "anthropic" -> "claude"
-      "openai" -> "codex"
-      "google" -> "gemini"
-      else -> provider
-    }
-  )
+  private fun canonicalProviderId(provider: String): String = when (provider.trim().lowercase()) {
+    "anthropic" -> "claude"
+    "openai" -> "codex"
+    "google" -> "gemini"
+    else -> provider
+  }
 
   private fun sizeOf(
     manager: AppWidgetManager,

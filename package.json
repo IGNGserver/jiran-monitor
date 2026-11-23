@@ -35,7 +35,8 @@
     "verify:android-fluent-contrast": "node scripts/verify-android-fluent-contrast.js",
     "verify:android-fluent-boundary": "node scripts/verify-android-fluent-boundary.js",
     "verify:android": "npm run verify:android-fluent-contrast && npm run verify:android-fluent-boundary",
-    "update:fluent-assets": "node scripts/update-fluent-assets.js"
+    "update:fluent-assets": "node scripts/update-fluent-assets.js",
+    "sync:icons": "node scripts/sync-client-icons.js"
   },
   "build": {
     "appId": "com.igng.tokenmonitor",

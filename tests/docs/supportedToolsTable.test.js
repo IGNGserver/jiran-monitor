@@ -179,3 +179,28 @@ test('limit provider order follows the supported-tools matrix', () => {
     .flatMap((icon) => MATRIX_ICON_TO_LIMIT_PROVIDERS[icon] || [icon]);
   assert.deepEqual(fromMatrix, [...LIMIT_PROVIDER_IDS], 'LIMIT_PROVIDER_IDS no longer matches the matrix order');
 });
+
+test(`${MATRIX_FILE} icon paths resolve relative to docs/ to compact PNGs with zero orphans`, () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const rootDir = path.join(__dirname, '..', '..');
+  const docsDir = path.join(rootDir, 'docs');
+  const toolsIconDir = path.join(rootDir, '.github', 'assets', 'tools-icon');
+  const text = readMatrix();
+  const srcs = [...text.matchAll(/<img\s+src="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(srcs.length, supportedToolIdOrder.length);
+
+  const referenced = new Set();
+  for (const src of srcs) {
+    assert.ok(src.startsWith('../.github/assets/tools-icon/'), `${MATRIX_FILE}: icon path must resolve from docs/: ${src}`);
+    assert.ok(src.endsWith('.png'), `${MATRIX_FILE}: icon must be a PNG badge, saw ${src}`);
+    const fullPath = path.resolve(docsDir, src);
+    assert.ok(fs.existsSync(fullPath), `${MATRIX_FILE}: broken relative image link ${src}`);
+    const size = fs.statSync(fullPath).size;
+    assert.ok(size > 200 && size <= 50 * 1024, `${src}: expected compact PNG (<=50 KB), saw ${size} B`);
+    referenced.add(path.basename(fullPath));
+  }
+
+  const shipped = fs.readdirSync(toolsIconDir).sort();
+  assert.deepEqual(shipped, [...referenced].sort(), '.github/assets/tools-icon/ has unreferenced orphan files');
+});
