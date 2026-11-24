@@ -3,11 +3,11 @@
  * SVG 文件与产品共享界面 `src/shared-ui/icons/clients/` 字节级同源，经 Astro 构建为带内容哈希的静态资源，
  * 享受一年 immutable 缓存且不膨胀首屏内联 HTML 体积。
  *
- * 与 `src/shared-ui/styles/app.css` 一致：单色 `currentColor`/`#000` 图标在深色背景上提亮反白，
- * 自带品牌彩色的图标保持原色，`#fff` 单色图标在浅色工作台主题下反黑。
+ * 与 `src/shared-ui/styles/app.css` 一致：单色 `currentColor` 图标在深色背景上提亮反白，
+ * 自带品牌彩色的图标保持原色。
  */
 
-export type IconTone = 'color' | 'mono-dark' | 'mono-light';
+export type IconTone = 'color' | 'mono-dark';
 
 const rawIcons = import.meta.glob<string>('../assets/icons/clients/*.svg', {
   eager: true,
@@ -24,20 +24,18 @@ for (const [path, url] of Object.entries(rawIcons)) {
 const COLOR_SLUGS = new Set([
   'antigravity',
   'doubao',
+  'openclaw',
   'os-linux',
   'os-windows',
   'qoder',
-  'qodercn',
+  'unsloth',
   'volcengine',
   'xiaomi',
   'zed',
 ]);
 
-const MONO_LIGHT_SLUGS = new Set(['pi', 'proma']);
-
 export function iconToneForSlug(slug: string): IconTone {
   if (COLOR_SLUGS.has(slug)) return 'color';
-  if (MONO_LIGHT_SLUGS.has(slug)) return 'mono-light';
   return 'mono-dark';
 }
 
@@ -66,7 +64,7 @@ const TOOL_SLUG_MAP: Record<string, string> = {
   'CodeBuddy': 'codebuddy',
   'WorkBuddy': 'workbuddy',
   'Proma': 'proma',
-  'DeepSeek Harness': 'deepseek-harness',
+  'DeepSeek Harness': 'deepseek',
   'Qoder / Qoder CN': 'qoder',
   'Reasonix': 'reasonix',
   'Gemini CLI': 'gemini',

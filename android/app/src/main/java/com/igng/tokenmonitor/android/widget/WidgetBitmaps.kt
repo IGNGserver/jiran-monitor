@@ -285,6 +285,24 @@ class WidgetBitmaps(private val context: Context) {
     return bitmap
   }
 
+  /**
+   * Renders a client/provider vector drawable into a widget-scaled bitmap.
+   * Monochrome marks receive [tintColor] so black paths stay legible on dark
+   * widgets; multicolor marks pass null to preserve their authored palette.
+   */
+  fun clientIcon(drawableRes: Int, sizeDp: Float, tintColor: Int?): Bitmap? {
+    val drawable = context.getDrawable(drawableRes)?.mutate() ?: return null
+    val size = px(sizeDp)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    if (tintColor != null) {
+      drawable.setTint(tintColor)
+    }
+    drawable.setBounds(0, 0, size, size)
+    drawable.draw(canvas)
+    return bitmap
+  }
+
   private fun drawCenteredText(
     canvas: Canvas,
     text: String,

@@ -427,8 +427,9 @@ a { color: inherit; }
 }
 /* The shipped monochrome SVGs use currentColor, which resolves to black when
    loaded through <img>. Lift those marks on dark surfaces and retain the
-   explicitly colored client logos as authored. */
-html[data-theme="dark"] .client-icon:not([src$="/antigravity.svg"]):not([src$="/doubao.svg"]):not([src$="/pi.svg"]):not([src$="/qoder.svg"]):not([src$="/qodercn.svg"]):not([src$="/volcengine.svg"]):not([src$="/xiaomi.svg"]):not([src$="/os-apple.svg"]):not([src$="/os-linux.svg"]):not([src$="/os-windows.svg"]) {
+   explicitly colored client logos (matching src/shared-ui/icons/manifest.json
+   colorIcons) as authored. */
+html[data-theme="dark"] .client-icon:not([src$="/antigravity.svg"]):not([src$="/doubao.svg"]):not([src$="/openclaw.svg"]):not([src$="/os-linux.svg"]):not([src$="/os-windows.svg"]):not([src$="/qoder.svg"]):not([src$="/unsloth.svg"]):not([src$="/volcengine.svg"]):not([src$="/xiaomi.svg"]):not([src$="/zed.svg"]) {
   filter: brightness(0) invert(1);
 }
 .meter {

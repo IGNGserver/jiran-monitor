@@ -112,6 +112,7 @@ export const CLIENT_COLORS = {
   zed: '#4173e7',
   kilocode: '#F8F676',
   micode: '#000000',
+  mimo: '#ff6700',
   zcode: '#000000',
   kiro: '#9046FF',
   codebuddy: '#6C4DFF',
@@ -158,6 +159,8 @@ export const CLIENT_COLORS = {
   lmstudio: '#5a67d8',
   unsloth: '#22d3ee',
   hindsight: '#a855f7',
+  sakana: '#dc2626',
+  thirdparty: '#6b57ff',
   default: '#6ab4f0'
 };
 
@@ -238,28 +241,23 @@ export function isBrowserLoginProvider(provider) {
 
 const FALLBACK_MODEL_COLORS = ['#6ab4f0', '#cc7c5e', '#a57df0', '#49a3b0', '#f0d66a', '#f06a7b'];
 
+// Mirrors `aliases` in src/shared-ui/icons/manifest.json (asserted by tests).
 const ICON_ALIASES = {
-  hermes: 'hermes-agent',
-  mimo: 'xiaomi',
-  micode: 'xiaomi',
-  grok: 'grok',
-  zai: 'zai',
-  zaiteam: 'zai',
-  thirdparty: 'openrouter',
-  // Without these the dashboard requested /icons/clients/<id>.svg for ids the
-  // server does not ship and the request 404s on every re-render (sendJson sets
-  // cache-control: no-store). The desktop client already aliases them the same way.
-  kimi: 'moonshot',
-  zcode: 'zai',
   'claude-desktop': 'claude',
-  // Clients that share a brand with an already-shipped mark. Keeping these as
-  // aliases avoids shipping duplicate artwork for one logo, and the icon test
-  // requires every alias target to exist.
-  mcode: 'minimax',
-  kilo: 'kilocode',
-  freebuff: 'codebuff',
+  'deepseek-harness': 'deepseek',
   'devin-cli': 'devin',
-  'devin-desktop': 'devin'
+  'devin-desktop': 'devin',
+  freebuff: 'codebuff',
+  hermes: 'hermes-agent',
+  kilo: 'kilocode',
+  kimi: 'moonshot',
+  mcode: 'minimax',
+  micode: 'xiaomi',
+  mimo: 'xiaomi',
+  qodercn: 'qoder',
+  thirdparty: 'openrouter',
+  zaiteam: 'zai',
+  zcode: 'zai'
 };
 
 export function clientLabel(id) {

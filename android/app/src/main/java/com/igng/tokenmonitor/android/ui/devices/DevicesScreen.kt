@@ -58,6 +58,7 @@ import com.igng.tokenmonitor.android.ui.components.FluentTabStrip
 import com.igng.tokenmonitor.android.ui.components.FluentTopBar
 import com.igng.tokenmonitor.android.ui.components.LimitsSection
 import com.igng.tokenmonitor.android.ui.components.MetricHeroCard
+import com.igng.tokenmonitor.android.ui.components.PlatformOsIcon
 import com.igng.tokenmonitor.android.ui.components.SectionHeader
 import com.igng.tokenmonitor.android.ui.components.ShareBarList
 import com.igng.tokenmonitor.android.ui.components.StatusDot
@@ -188,7 +189,15 @@ private fun DeviceRow(
       }
     },
     tertiary = "上次上报 ${formatRelativeTime(device.receivedAt)}",
-    leading = { StatusDot(active = !device.stale, size = 8.dp) },
+    leading = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(FluentSpacingDefaults.xs)
+      ) {
+        StatusDot(active = !device.stale, size = 8.dp)
+        PlatformOsIcon(platform = device.platform ?: device.osName, size = 16.dp)
+      }
+    },
     trailingPrimary = formatTokensShort(device.periods.today.totalTokens),
     trailingSecondary = formatUsd(device.periods.today.costUsd, compact = true),
     disclosure = onClick != null,
