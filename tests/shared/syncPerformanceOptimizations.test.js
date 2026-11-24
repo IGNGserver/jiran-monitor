@@ -290,6 +290,13 @@ test('postSyncPayload negotiates gzip ingest end-to-end with Hub, preserves omit
   };
 
   try {
+    const now = new Date();
+    const todayKey = now.toISOString().slice(0, 10);
+    const todayEndsAt = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+    ).toISOString();
+    const firstUpdatedAt = new Date(now.getTime() - 5_000).toISOString();
+    const secondUpdatedAt = now.toISOString();
     const daily = Array.from({ length: 60 }, (_, idx) => ({
       date: new Date(Date.UTC(2026, 8, 1 + idx)).toISOString().slice(0, 10),
       tokens: 10_000 + idx,
@@ -315,8 +322,8 @@ test('postSyncPayload negotiates gzip ingest end-to-end with Hub, preserves omit
       historyTracker: tracker,
       summary: {
         deviceId: 'dev-e2e',
-        updatedAt: '2026-11-16T01:00:00.000Z',
-        periodWindows: { timeZone: 'UTC', today: { key: '2026-11-16' } },
+        updatedAt: firstUpdatedAt,
+        periodWindows: { timeZone: 'UTC', today: { key: todayKey, endsAt: todayEndsAt } },
         today: { totalTokens: 10_000, costUsd: 0.2, clients: { codex: 10_000 }, sessions },
         month: { totalTokens: 10_000, costUsd: 0.2, clients: { codex: 10_000 }, sessions },
         allTime: { totalTokens: 600_000, costUsd: 3.0, clients: { codex: 600_000 } },
@@ -332,8 +339,8 @@ test('postSyncPayload negotiates gzip ingest end-to-end with Hub, preserves omit
       historyTracker: tracker,
       summary: {
         deviceId: 'dev-e2e',
-        updatedAt: '2026-11-16T01:00:05.000Z',
-        periodWindows: { timeZone: 'UTC', today: { key: '2026-11-16' } },
+        updatedAt: secondUpdatedAt,
+        periodWindows: { timeZone: 'UTC', today: { key: todayKey, endsAt: todayEndsAt } },
         today: { totalTokens: 12_500, costUsd: 0.25, clients: { codex: 12_500 }, sessions },
         month: { totalTokens: 12_500, costUsd: 0.25, clients: { codex: 12_500 }, sessions },
         allTime: { totalTokens: 602_500, costUsd: 3.05, clients: { codex: 602_500 } },
