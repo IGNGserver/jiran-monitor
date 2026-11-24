@@ -190,6 +190,7 @@ test('Android client marks cover every tracked client and limit provider with ze
 test('canonical client SVGs, Android drawables, website mirror, app.css and legacy assets stay normalized and synchronized', () => {
   const fs = require('node:fs');
   const path = require('node:path');
+  const { normalizeAndroidPathData } = require('../../scripts/sync-client-icons');
   const rootDir = path.join(__dirname, '..', '..');
   const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, 'src', 'shared-ui', 'icons', 'manifest.json'), 'utf8'));
   const clientsDir = path.join(rootDir, 'src', 'shared-ui', 'icons', 'clients');
@@ -228,6 +229,15 @@ test('canonical client SVGs, Android drawables, website mirror, app.css and lega
     if (/fill-opacity\s*[:=]/i.test(svgText)) {
       assert.match(xmlText, /android:fillAlpha=/, `${xmlName} lost fillAlpha`);
     }
+    const pathDatas = [...xmlText.matchAll(/android:pathData="([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(pathDatas.length > 0, `${xmlName} must contain at least one android:pathData`);
+    for (const rawPathData of pathDatas) {
+      assert.equal(
+        rawPathData,
+        normalizeAndroidPathData(rawPathData, xmlName),
+        `${xmlName} contains unexpanded SVG pathData (e.g. compact arc flags) that Jetpack Compose PathParser silently drops — run npm run sync:icons`
+      );
+    }
 
     // Website mirror byte parity
     const webPath = path.join(websiteDir, file);
@@ -265,4 +275,16 @@ test('canonical client SVGs, Android drawables, website mirror, app.css and lega
   // Legacy assets/icons/ holds only macOS tray templates, no retired client SVGs
   const legacySvgs = fs.readdirSync(legacyDir).filter((f) => f.endsWith('.svg'));
   assert.deepEqual(legacySvgs, [], `retired SVGs remain in assets/icons/: ${legacySvgs.join(', ')}`);
+});
+
+test('normalizeAndroidPathData expands compact SVG arc flags and consecutive decimals for Jetpack Compose PathParser', () => {
+  const { normalizeAndroidPathData } = require('../../scripts/sync-client-icons');
+  assert.equal(
+    normalizeAndroidPathData('M1 2a5.947 5.947 0 005.827-4.756A5.962 5.962 0 0110.205 0a1.273 1.273 0 100 2.547.503.503 0 11-.975 0z'),
+    'M 1 2 a 5.947 5.947 0 0 0 5.827 -4.756 A 5.962 5.962 0 0 1 10.205 0 a 1.273 1.273 0 1 0 0 2.547 a 0.503 0.503 0 1 1 -0.975 0 z'
+  );
+  assert.equal(
+    normalizeAndroidPathData('m1 2 3 4M5 6 7 8'),
+    'm 1 2 l 3 4 M 5 6 L 7 8'
+  );
 });
